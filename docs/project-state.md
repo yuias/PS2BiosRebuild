@@ -1,0 +1,87 @@
+# Project State and Working Method
+
+Read this first when picking the project up. It records where the work stands,
+how the work is done, and what is next. `README.md` is the front door; this is
+the working document and is kept current.
+
+> **Where the work is right now:** the analysis phase has just begun. The ROM's
+> file table is parsed and documented (`docs/analysis/01-rom-layout.md`),
+> `tools/romdir.py` lists, extracts and diffs images, and nothing is
+> implemented yet. There is no build system and no `docs/spec/` — both arrive
+> with the first implementation milestone.
+
+---
+
+## 1. Goal
+
+A 4 MiB image that an emulator (PCSX2 is the working target) accepts in place
+of a retail PS2 BIOS, produced the way the sibling PS1 project produced its
+512 KiB image: analysis of retail ROMs → behavioural specifications →
+implementation from the specifications. `docs/clean-room-policy.md` states the
+rules and their current limits.
+
+## 2. Reference images
+
+Analysis targets `SCPH-50000` primarily; `SCPH-70000` is the comparison image
+that keeps observations honest about what is model-specific.
+
+| File (in `assets/`, not committed) | ROMVER | Date | SHA-256 |
+| --- | --- | --- | --- |
+| `SCPH-50000.bin` | `0170JC20030206` (v1.70, J, consumer) | 2003-02-06 | `6c003a0ca1beb501fba2063b12573521c9b3ec8cdcfb7f5e6a310771ebf166da` |
+| `SCPH-70000.bin` | `0200JC20040614` (v2.00, J, consumer) | 2004-06-14 | `3b377ce5f7bb8d880260851867a5452b59149aeb8bb189c5df41e3bace7b8e09` |
+
+`tools/romdir.py <image> --romver` reproduces the identification.
+
+## 3. Working method
+
+Inherited from the PS1 project, one group of functionality at a time:
+
+1. **Analyse**: read the reference image with the tools in `tools/`, write
+   `docs/analysis/NN-*.md`. Every claim names the command that reproduces it.
+2. **Specify**: distil the observations into `docs/spec/NN-*.md` with numbered
+   requirement IDs. Deviations from the reference get their own requirement
+   saying what differs and why.
+3. **Implement** from the specification, with build-time and post-build checks
+   enforcing what the specs pin down.
+
+The PS2 changes the shape of the problem in one important way the analysis has
+already confirmed: the ROM is not a monolithic kernel image but a **file
+archive** (the ROMDIR table) holding a boot block, ~90 IOP kernel modules, the
+EE kernel, the OSD program and its resources. Analysis therefore proceeds
+per-file, and the eventual build will assemble the image the same way.
+
+## 4. Where it stands
+
+| Area | State |
+| --- | --- |
+| ROM file table (ROMDIR/EXTINFO/ROMVER) | analysed — `docs/analysis/01-rom-layout.md` |
+| Boot block (`RESET`), EE side | not started |
+| IOP kernel modules | not started |
+| EE kernel (`KERNEL`) | not started |
+| OSD (`OSDSYS` and resources) | not started |
+| Build system / implementation | not started |
+
+Notable early observations to keep in mind (details and repro commands in
+`01-rom-layout.md`):
+
+- `KERNEL` is byte-identical between the two reference images — the EE kernel
+  did not change between ROM v1.70 (2003) and v2.00 (2004).
+- Both images place the ROMDIR table at `0x2740` and end their contents around
+  `0x3ba000`, with the remainder of the 4 MiB zero-filled.
+
+## 5. Next steps
+
+In rough order; each becomes a `docs/analysis/` document:
+
+1. **Boot block** (`RESET`): both EE and IOP begin execution at the top of the
+   ROM. Disassemble the reset path, establish how each CPU finds its half, how
+   the ROMDIR table is located at run time, and what hands off to `IOPBOOT` /
+   the EE kernel. Needs the disassembly tool ported from the PS1 project
+   (MIPS-I for the IOP; the EE's R5900 needs its own handling).
+2. **Module format survey**: what the stored IOP modules actually are
+   (headers, relocation, import/export conventions) and how `IOPBTCONF` orders
+   their loading.
+3. **IOP kernel core**: `SYSMEM` and `LOADCORE` — the first modules the boot
+   list runs, and the base every other module links against.
+4. From there, module by module, the PS1 pattern: analysis → spec → (later)
+   implementation.
