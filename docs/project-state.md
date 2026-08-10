@@ -63,25 +63,35 @@ per-file, and the eventual build will assemble the image the same way.
 | `IOPBOOT` + `IOPBTCONF` boot list | analysed — `docs/analysis/03-iopboot-and-boot-list.md` |
 | IOP module (IRX) file format | analysed — `docs/analysis/04-iop-module-format.md` |
 | `SYSMEM`, `LOADCORE` + the link algorithm | analysed — `docs/analysis/05-sysmem-and-loadcore.md` |
+| `EXCEPMAN`, `INTRMANP`/`INTRMANI` | analysed — `docs/analysis/06-exceptions-and-interrupts.md` |
 | Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | Build system / implementation | not started |
 
-Notable early observations to keep in mind (details and repro commands in
-`01-rom-layout.md`):
+Notable observations to keep in mind (details and repro commands in the analysis
+document each cites):
 
 - `KERNEL` is byte-identical between the two reference images — the EE kernel
-  did not change between ROM v1.70 (2003) and v2.00 (2004).
+  did not change between ROM v1.70 (2003) and v2.00 (2004). (`01`)
 - Both images place the ROMDIR table at `0x2740` and end their contents around
-  `0x3ba000`, with the remainder of the 4 MiB zero-filled.
+  `0x3ba000`, with the remainder of the 4 MiB zero-filled. (`01`)
+- One discriminator, `PRId < 0x10 || (*(u32*)0xBF801450 & 8)`, runs from the
+  reset vector through the kernel modules: it picks the boot block's bus table
+  (`02`) and selects between the `P`/`I` module variant pairs (`06`).
+
+### Open questions
+
+- What convention makes a module entry's return of 1 leave it non-resident?
+  Belongs with `IOPBOOT`'s per-module load step. (`06`)
+- Which selector chooses `IOPBTCON2` over `IOPBTCONF`, and where it is read.
+  (`03`)
 
 ## 5. Next steps
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **Exceptions and interrupts**: `EXCEPMAN` and `INTRMANP`/`INTRMANI`, the next
-   modules in boot order and the base for everything event-driven.
+1. **Bus and DMA**: `SSBUSC` and `DMACMAN`, the next modules in boot order.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
