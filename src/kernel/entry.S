@@ -1,84 +1,58 @@
-// The EE kernel's entry point and vector page.
+// The EE kernel's entry point.
 //
-// docs/spec/04-ee-kernel.md EE-4: this file is copied to physical zero and
-// entered at 0x80001000, so its first 0x1000 bytes *are* the exception vector
-// page and the entry point is the first thing after it. The layout is not a
-// choice; it is what the reset path's copy makes true.
-//
-// What is here so far is the placement and the announcement. The vectors, the
-// dispatch tables and the 125 syscall slots of EE-5 to EE-8 come next.
+// docs/spec/04-ee-kernel.md EE-4: KERNEL is copied to physical zero and
+// entered at 0x80001000, so the vector page of `vectors.S` sits below this and
+// the entry point is the first thing after it. The layout is not a choice; it
+// is what the reset path's copy makes true.
 
     .set noreorder
     .set noat
 
-.macro sync_p
-    .word 0x0000040F
-.endm
-
-// Load a 32-bit constant. `%hi`/`%lo` are not used here: `%hi` compensates for
-// the sign extension of a following `addiu`, which is wrong when the low half
-// is applied with `ori`.
 .macro liw reg, value
     lui   \reg, ((\value) >> 16) & 0xFFFF
     ori   \reg, \reg, (\value) & 0xFFFF
 .endm
 
-// Load a symbol's address, where the `%hi`/`%lo` pairing with `addiu` is right.
 .macro la reg, symbol
     lui   \reg, %hi(\symbol)
     addiu \reg, \reg, %lo(\symbol)
 .endm
 
 // The EE's serial transmit register and its readiness flag. The ROM prints a
-// byte at a time through these, which is how the reference kernel's own boot
-// log is observable at all (docs/analysis/22-ee-execution.md).
+// byte at a time through these, which is how a boot log is observable at all
+// (docs/analysis/22-ee-execution.md).
+    .set SIO_ISR, 0xB000F130
+    .set SIO_TX,  0xB000F180
     .set SIO_TX_READY, 0x8000
 
-// ---------------------------------------------------------------- vectors
-// EE-5 populates 0x000, 0x080, 0x100, 0x180 and 0x200. Until the dispatcher
-// exists, every vector stops where it can be seen rather than running on.
-    .section .vectors, "ax"
-    .globl _vectors
-_vectors:
-_vector_tlb_refill:                 // 0x000
-    b     _vector_tlb_refill
-    nop
-
-    .org 0x080
-_vector_counter:
-    b     _vector_counter
-    nop
-
-    .org 0x100
-_vector_debug:
-    b     _vector_debug
-    nop
-
-    .org 0x180
-_vector_common:                     // EE-5a: the same code as 0x000
-    b     _vector_common
-    nop
-
-    .org 0x200
-_vector_interrupt:
-    b     _vector_interrupt
-    nop
-
-// ---------------------------------------------------------------- 0x1000
-    .section .text, "ax"
     .globl _kernel_entry
+    .globl _print
+    .globl _print_hex8
+
+    .section .text, "ax"
 _kernel_entry:
     // EE-4a: the boot's result is in the scratchpad word the reset path left
-    // it in, not in a register. Nothing consumes it yet; read it where the
-    // specification says it is so the dependency is recorded in code.
+    // it in, not in a register. Nothing consumes it yet; reading it where the
+    // specification says it is keeps the dependency recorded in code.
     liw   $k0, 0x70003FF0
     lw    $s0, 0($k0)
 
-    liw   $sp, 0x70003FE0
+    la    $sp, _kernel_stack_top
 
     la    $a0, _banner
     jal   _print
     nop
+
+    // The vector page and the dispatch tables came with us -- they are part of
+    // this file's image -- so there is nothing to install. What does have to
+    // change is `Status`: EE-1 leaves BEV *set*, which sends exceptions to the
+    // ROM's vectors at 0xBFC00200. Clearing it is what points them at the page
+    // this kernel just brought with it.
+    mfc0  $k0, $12
+    liw   $k1, 0xFFBFFFFF               // ~BEV
+    and   $k0, $k0, $k1
+    mtc0  $k0, $12
+    .word 0x0000040F                    // sync.p
 
 _kernel_idle:
     b     _kernel_idle
@@ -93,12 +67,12 @@ _print_byte:
     beq   $t1, $zero, _print_done
     nop
 _print_wait:
-    liw   $t2, 0xB000F130
+    liw   $t2, SIO_ISR
     lw    $t3, 0($t2)
     andi  $t3, $t3, SIO_TX_READY
     bne   $t3, $zero, _print_wait
     nop
-    liw   $t2, 0xB000F180
+    liw   $t2, SIO_TX
     sb    $t1, 0($t2)
     addiu $t0, $t0, 1
     b     _print_byte
@@ -107,6 +81,50 @@ _print_done:
     jr    $ra
     nop
 
-    .align 4
+// _print_hex8(value): two hexadecimal digits, most significant first.
+_print_hex8:
+    addiu $sp, $sp, -16
+    sw    $ra, 0($sp)
+    sw    $s1, 4($sp)
+    move  $s1, $a0
+    srl   $a0, $s1, 4
+    jal   _print_nibble
+    nop
+    andi  $a0, $s1, 0xF
+    jal   _print_nibble
+    nop
+    lw    $ra, 0($sp)
+    lw    $s1, 4($sp)
+    jr    $ra
+    addiu $sp, $sp, 16
+
+_print_nibble:
+    andi  $a0, $a0, 0xF
+    sltiu $t0, $a0, 10
+    beq   $t0, $zero, _print_nibble_letter
+    nop
+    addiu $t1, $a0, 0x30                // '0'
+    b     _print_nibble_emit
+    nop
+_print_nibble_letter:
+    addiu $t1, $a0, 0x57                // 'a' - 10
+_print_nibble_emit:
+    liw   $t2, SIO_ISR
+    lw    $t3, 0($t2)
+    andi  $t3, $t3, SIO_TX_READY
+    bne   $t3, $zero, _print_nibble_emit
+    nop
+    liw   $t2, SIO_TX
+    sb    $t1, 0($t2)
+    jr    $ra
+    nop
+
+    .section .rodata, "a"
 _banner:
     .asciz "# PS2BiosRebuild EE kernel: entered at 0x80001000.\n"
+
+    .section .bss, "aw", @nobits
+    .align 4
+_kernel_stack:
+    .space 0x1000
+_kernel_stack_top:

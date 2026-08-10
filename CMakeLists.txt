@@ -41,6 +41,8 @@ function(ps2AddComponent name)
   add_custom_command(TARGET ${name}.elf POST_BUILD
       COMMAND "${PS2_OBJCOPY}" -O binary
               --only-section=.vectors --only-section=.text
+              --only-section=.rodata --only-section=.syscalls
+              --only-section=.exctable --only-section=.inttable
               "$<TARGET_FILE:${name}.elf>"
               "${CMAKE_CURRENT_BINARY_DIR}/${name}.bin"
       BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/${name}.bin"
@@ -49,7 +51,11 @@ endfunction()
 
 ps2AddComponent(reset  SCRIPT reset.ld  SOURCES src/boot/reset.S)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
-ps2AddComponent(kernel SCRIPT kernel.ld SOURCES src/kernel/entry.S)
+ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
+    src/kernel/vectors.S
+    src/kernel/entry.S
+    src/kernel/syscall.S
+    src/kernel/tables.S)
 
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")
 add_custom_command(
