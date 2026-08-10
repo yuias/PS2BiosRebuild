@@ -65,6 +65,7 @@ per-file, and the eventual build will assemble the image the same way.
 | `SYSMEM`, `LOADCORE` + the link algorithm | analysed — `docs/analysis/05-sysmem-and-loadcore.md` |
 | `EXCEPMAN`, `INTRMANP`/`INTRMANI` | analysed — `docs/analysis/06-exceptions-and-interrupts.md` |
 | `SSBUSC`, `DMACMAN` | analysed — `docs/analysis/07-bus-and-dma.md` |
+| `SYSCLIB`, `STDIO`, `HEAPLIB` | analysed — `docs/analysis/08-c-library-and-heap.md` |
 | Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -82,7 +83,11 @@ document each cites):
   (`02`) and selects between the `P`/`I` module variant pairs (`06`).
 - Ordinals identified so far, from how importers call them: `loadcore` 6 is
   export-library registration, `intrman` 17/18 are the critical-section pair
-  (aliased at 19/20). (`05`, `07`)
+  (aliased at 19/20), `sysmem` 4 is the allocator. (`05`, `07`, `08`)
+- A library is identified by **tag + major version**; the minor version is a
+  generation counter and a higher one supersedes, inheriting the old library's
+  unpinned clients. Modules rewrite their own table versions in RAM to arrange
+  this, so a stored table's version is not what gets registered. (`08`)
 
 ### Open questions
 
@@ -95,8 +100,8 @@ document each cites):
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **C library and heap**: `SYSCLIB` and `HEAPLIB`, the next modules in boot
-   order and the base later modules are written against.
+1. **`EECONF` and `THREADMAN`**, the next modules in boot order — the thread
+   manager being the largest module in the IOP kernel.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
