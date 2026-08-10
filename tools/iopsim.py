@@ -48,6 +48,12 @@ IOP_PRID = 0x1F
 # CP0 Status bit 16: with the cache isolated, stores go to the data cache
 # rather than to memory. The boot chain relies on it to invalidate lines.
 STATUS_ISC = 0x00010000
+STATUS_BEV = 0x00400000          # boot exception vectors, in ROM
+STATUS_MODE_MASK = 0x3F          # the KU/IE three-deep stack
+
+COP0_SR, COP0_CAUSE, COP0_EPC = 12, 13, 14
+EXC_SYSCALL, EXC_BREAK = 8, 9
+VECTOR_NORMAL, VECTOR_BEV = 0x80000080, 0xBFC00180
 
 SIGN32 = 0xFFFFFFFF
 
@@ -112,6 +118,9 @@ class Cpu:
         self.cop0[15] = IOP_PRID
         self.steps = 0
         self.stop_reason: str | None = None
+        self.branched = False        # did the last instruction take a branch?
+        self.in_delay = False        # is the current one a delay slot?
+        self.exceptions = 0
 
     def _set(self, i: int, v: int) -> None:
         if i:
@@ -119,14 +128,39 @@ class Cpu:
 
     def _branch(self, target: int) -> None:
         self.next_pc = target & SIGN32
+        self.branched = True
 
     def step(self) -> None:
         pc = self.pc
         instr = self.bus.read(pc, 4)
         self.pc = self.next_pc
         self.next_pc = (self.pc + 4) & SIGN32
+        self.in_delay, self.branched = self.branched, False
         self.steps += 1
         self._execute(instr, pc)
+
+    def _raise(self, code: int, pc: int) -> None:
+        """Enter the R3000 exception path.
+
+        EPC points at the branch, not the delay slot, when the faulting
+        instruction is in one -- the handler restarts the branch so the delay
+        slot is not executed twice.
+        """
+        sr = self.cop0[COP0_SR]
+        cause = self.cop0[COP0_CAUSE] & ~0x7C
+        cause |= (code << 2)
+        if self.in_delay:
+            cause |= 0x80000000
+        self.cop0[COP0_CAUSE] = cause & SIGN32
+        self.cop0[COP0_EPC] = (pc - 4 if self.in_delay else pc) & SIGN32
+        # Push the KU/IE stack two places, entering kernel mode with
+        # interrupts disabled.
+        self.cop0[COP0_SR] = (sr & ~STATUS_MODE_MASK) | ((sr << 2) & STATUS_MODE_MASK)
+        target = VECTOR_BEV if sr & STATUS_BEV else VECTOR_NORMAL
+        self.pc = target
+        self.next_pc = (target + 4) & SIGN32
+        self.branched = False
+        self.exceptions += 1
 
     def _execute(self, instr: int, pc: int) -> None:
         op = instr >> 26
@@ -149,8 +183,8 @@ class Cpu:
                 target = r[rs]
                 self._set(rd if rd else 31, (pc + 8) & SIGN32)
                 self._branch(target)
-            elif fn == 0x0C: self.stop_reason = f"syscall at {pc:#x}"
-            elif fn == 0x0D: self.stop_reason = f"break at {pc:#x}"
+            elif fn == 0x0C: self._raise(EXC_SYSCALL, pc)
+            elif fn == 0x0D: self._raise(EXC_BREAK, pc)
             elif fn == 0x10: self._set(rd, self.hi)
             elif fn == 0x11: self.hi = r[rs]
             elif fn == 0x12: self._set(rd, self.lo)
@@ -213,7 +247,9 @@ class Cpu:
         elif op == 0x10:
             if rs == 0: self._set(rt, self.cop0[rd])
             elif rs == 4: self.cop0[rd] = r[rt]
-            elif rs == 0x10: pass                    # rfe: no exceptions modelled
+            elif rs == 0x10:                         # rfe: pop the KU/IE stack
+                sr = self.cop0[COP0_SR]
+                self.cop0[COP0_SR] = (sr & ~0xF) | ((sr >> 2) & 0xF)
             else: self.stop_reason = f"unknown COP0 rs {rs:#x} at {pc:#x}"
         elif op in (0x11, 0x12, 0x13):
             pass                                     # no coprocessors on this path
@@ -283,6 +319,58 @@ class Cpu:
         self._store(base, 4, merged & SIGN32, pc)
 
 
+def reportLibraries(bus: "Bus") -> None:
+    """Report the library tables the boot left in RAM.
+
+    Registration links a table into LOADCORE's registry in place, so every
+    resident library is an export header sitting in RAM. Import headers are
+    there too, and their stubs record whether the binder reached them: an
+    unbound stub still starts with `jr $ra`, a bound one with a `j`
+    (`docs/spec/02-module-abi.md` IRX-9).
+    """
+    ram = bus.ram
+    exports, imports = [], []
+    for at in range(0, len(ram) - 24, 4):
+        magic = int.from_bytes(ram[at:at + 4], "little")
+        version = int.from_bytes(ram[at + 8:at + 10], "little")
+        flags = int.from_bytes(ram[at + 10:at + 12], "little")
+        raw = ram[at + 12:at + 20]
+        tag = raw.split(b"\0")[0].decode("ascii", "replace")
+        # Library tags are short lowercase identifiers; insisting on that keeps
+        # ordinary string data from matching the header shape below.
+        if len(tag) < 4 or not all(
+                c.islower() or c.isdigit() or c == "_" for c in tag):
+            continue
+        if magic == 0x41E00000:
+            first = int.from_bytes(ram[at + 0x14:at + 0x18], "little")
+            bound = first != 0 and (first >> 26) == 2      # a `j`
+            imports.append((at, tag, version, flags, bound))
+            continue
+        # A registered export table has had its magic overwritten by the
+        # registry link, so recognise it by shape: a plausible link, a BCD
+        # version, and a first entry pointing into RAM.
+        entry = int.from_bytes(ram[at + 0x14:at + 0x18], "little")
+        plausible_link = magic == 0 or magic < len(ram)
+        # Every library in the reference is 1.xx or 2.xx, BCD.
+        plausible_ver = (0 < version >> 8 <= 9
+                         and (version & 0xF) <= 9 and (version >> 4 & 0xF) <= 9)
+        if (plausible_link and plausible_ver and flags < 0x10
+                and 0 < entry < len(ram)):
+            exports.append((at, tag, version, flags))
+
+    print(f"\nlibraries registered in RAM: {len(exports)}")
+    for at, tag, version, flags in exports:
+        print(f"   {at:#08x}  {tag:<10} v{version >> 8:x}.{version & 0xFF:02x}"
+              f"  flags {flags:#x}{'  (pinned)' if flags & 1 else ''}")
+    if imports:
+        bound = sum(1 for i in imports if i[4])
+        print(f"import tables in RAM: {len(imports)}, of which bound: {bound}")
+        for at, tag, version, flags, ok in imports:
+            if not ok:
+                print(f"   UNBOUND {at:#08x}  {tag} "
+                      f"v{version >> 8:x}.{version & 0xFF:02x}")
+
+
 def run(image: pathlib.Path, max_steps: int, trace: int) -> int:
     bus = Bus(image.read_bytes())
     cpu = Cpu(bus)
@@ -310,6 +398,7 @@ def run(image: pathlib.Path, max_steps: int, trace: int) -> int:
         addrs = sorted(bus.unmapped)[:8]
         print(f"unmapped access at: {[hex(a) for a in addrs]}"
               f"{' ...' if len(bus.unmapped) > 8 else ''}")
+    reportLibraries(bus)
     return 0
 
 

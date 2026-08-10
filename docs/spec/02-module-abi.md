@@ -76,14 +76,21 @@ fixup.
 
 Export and import tables share a 20-byte header:
 
-| Offset | Size | Field |
-| --- | --- | --- |
-| 0 | 4 | magic — `0x41C00000` export, `0x41E00000` import |
-| 4 | 4 | registry link, 0 in the stored file |
-| 8 | 2 | version, BCD |
-| 10 | 2 | flags |
-| 12 | 8 | library tag, ASCII, NUL-padded |
-| 20 | … | entries |
+| Offset | Size | Stored file | After registration |
+| --- | --- | --- | --- |
+| 0 | 4 | magic — `0x41C00000` export, `0x41E00000` import | registry `next` link |
+| 4 | 4 | 0 | head of the bound-client list |
+| 8 | 2 | version, BCD | unchanged |
+| 10 | 2 | flags | flags, possibly with bit 0 set (IRX-10b) |
+| 12 | 8 | library tag, ASCII, NUL-padded | unchanged |
+| 20 | … | entries | unchanged |
+
+**IRX-4c:** The magic is a **validation token consumed at registration**, not a
+persistent field: `loadcore` writes the previous registry head over offset 0 when
+it links a table in. A tool inspecting RAM after boot therefore cannot find
+registered export tables by their magic — it must walk the registry, or match on
+the header's shape. Import tables keep theirs, because binding rewrites only
+stubs.
 
 **IRX-4a:** The tag field is a fixed 8 bytes with no terminator when the tag
 fills it (`loadcore` does).
@@ -276,10 +283,37 @@ established in the first place.
 `SCPH-70000` passes too, at 56 IRX modules and 0 failures, so nothing here is
 specific to the primary reference image.
 
-What this does **not** check is the dynamic half — IRX-9 through IRX-12 describe
-run-time behaviour and need a loader to exercise. Those arrive with the
-implementation; IRX-11a in particular has no static signature and is the single
-most likely thing to get silently wrong.
+### The dynamic half
+
+IRX-9 through IRX-12 describe run-time behaviour, and `tools/iopsim.py` now
+exercises them by booting the reference image and reporting what the boot left
+in RAM:
+
+```sh
+python3 tools/iopsim.py assets/SCPH-50000.bin
+```
+
+The IOP boot reaches `SIFMAN` and then waits on the SIF for an EE that an
+IOP-only simulator does not provide — the correct place for it to stop. By then:
+
+| Observation | Confirms |
+| --- | --- |
+| 55 import tables in RAM, **all 55 bound** | IRX-9 |
+| 23 libraries registered, in `IOPBTCONF` order | IRX-10a |
+| `thrdman` alone carries `flags 0x1` | IRX-10b — the pin is set at run time |
+| **both `stdio` 1.01 and `stdio` 1.02 are present** | IRX-11a |
+| `intrman` and `timrman` each appear once | the `P`/`I` selection of `06` |
+| `romdrv` registers 2.01 while its module is 1.03 | IRX-2b |
+
+The `stdio` row is the one that matters most. IRX-11a was flagged above as
+having no static signature and being the likeliest thing to break silently;
+seeing `SYSCLIB`'s deliberately lowered 1.01 sitting alongside `STDIO`'s 1.02
+is direct evidence that the supersession this specification describes is what
+the hardware actually does.
+
+**IRX-4c came out of the same run.** Scanning RAM for the export magic found
+exactly one table where there should have been twenty-three, because
+registration overwrites the magic with the registry link.
 
 **IRX-7 exists because this sweep contradicted an earlier document.**
 `docs/analysis/05` had generalised "slot 0 is the module entry" from two
