@@ -82,7 +82,8 @@ per-file, and the eventual build will assemble the image the same way.
 | **IOP boot list** | **complete — all 29 modules surveyed** |
 | EE kernel: vectors, exceptions, syscall table | analysed — `docs/analysis/14-ee-kernel-syscalls.md` |
 | EE kernel: syscall groups, boot tail | analysed — `docs/analysis/15-ee-syscall-groups.md` |
-| EE kernel: individual syscall behaviour | not started |
+| EE syscalls: exceptions and interrupts | analysed — `docs/analysis/16-ee-interrupt-syscalls.md` |
+| EE syscalls: the remaining groups | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
@@ -170,8 +171,12 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **`OSDSYS`**, the last unexamined major component, and the boot flow that
-   reaches it now that the tail is understood.
+4. **The remaining EE syscall groups**, continuing from `16`: the dense run at
+   slots `0x21`–`0x44` that the diagnostics suggest is the thread scheduler,
+   then the `0x60`–`0x6A` band with its KSEG1 members.
+5. **`OSDSYS`** last: it is the largest component but mostly a consumer of the
+   syscalls above, and much of its bulk is material `docs/clean-room-policy.md`
+   §3 puts out of bounds anyway.
 5. **The EE has no simulator**, so `spec/04`'s dynamic requirements are
    described and statically checked but never executed — the main asymmetry
    with the IOP side, and worth stating in any release material. An R5900

@@ -114,6 +114,17 @@ ld    $t9, 0x5378($t9)      # restored in the delay slot
 
 **EE-6a:** The table is at `0x80015340`, fourteen entries for `ExcCode` 0–13.
 
+**EE-6d:** There is a **second** dispatch table at `0x80015380`, eight entries,
+read by the interrupt vector at `0x80000200` and indexed by interrupt number.
+Indexes 2, 3 and 7 are populated — the interrupt controller, the DMA controller
+and the counter. (`docs/analysis/16`)
+
+**EE-6e:** Both tables are **installable at run time**, not static: syscalls
+`0x0D` and `0x0E` write the exception table over `ExcCode` 1–3 and 4–13, and
+`0x0F` writes the interrupt table over indexes 0–7. So `ExcCode 0` cannot be
+replaced through a syscall and `ExcCode 8` — the syscall handler itself — can.
+They must live in writable memory.
+
 **EE-6b:** Only `ExcCode 8` (`Sys`) has its own handler. All thirteen others
 point at one common routine. A rebuild must not assume a handler per cause.
 
@@ -172,6 +183,13 @@ change their behaviour around device memory.
 
 **EE-8f:** The handlers for slots `0x0D`–`0x1F` live inside the vector page and
 must stay there (EE-5b).
+
+**EE-8g:** Slots `0x14`–`0x17` (with their `0x1A`–`0x1D` aliases) toggle one
+bit of a hardware mask: `0x1000F010` bit `n` for the INTC pair, `0x1000E010`
+bit **`16 + n`** for the DMAC pair. Each reads the register first and writes
+only when the write would change the bit, returning `1` when it acted and `0`
+when the bit was already in the wanted state. The registers are
+write-to-toggle, so an unconditional write is wrong on the second call.
 
 ## EE-9: The boot tail
 
