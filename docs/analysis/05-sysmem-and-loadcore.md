@@ -75,12 +75,19 @@ PY
 `SYSMEM` exports 16 functions, `LOADCORE` 25, and in both the terminating word
 that follows is zero.
 
-**Slot 0 is the module entry point**, matching the `.iopmod` entry field: `0x60`
-for `SYSMEM`, `0x0` for `LOADCORE`. `LOADCORE`'s stored slot 0 therefore reads
-as the word `0`, which is *not* a terminator — it is a relocated pointer to
-vaddr 0 that becomes the load base at run time. A parser that scans the stored
-file for the first zero word will get this wrong; a scan is only valid after
-relocation. The relocation table is the reliable source.
+In both modules here, slot 0 holds the `.iopmod` entry address — `0x60` for
+`SYSMEM`, `0x0` for `LOADCORE`. `LOADCORE`'s stored slot 0 therefore reads as
+the word `0`, which is *not* a terminator: it is a relocated pointer to vaddr 0
+that becomes the load base at run time. A parser that scans the stored file for
+the first zero word will get this wrong; a scan is only valid after relocation.
+The relocation table is the reliable source.
+
+> **Corrected by a later sweep.** "Slot 0 is the module entry" holds for these
+> two but is *not* a general rule — it fails for 2 of the 41 single-library
+> modules, and for every secondary library of a multi-library module, where
+> slot 0 is a `jr $ra` stub instead. Slots 0 and 1 are reserved hooks that
+> nothing ever imports; the lowest ordinal any module binds is 2. See
+> `docs/spec/02-module-abi.md` §IRX-7 for the rule that actually holds.
 
 ### Reserved slots share a return stub
 
