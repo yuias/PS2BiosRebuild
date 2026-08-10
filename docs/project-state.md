@@ -4,11 +4,14 @@ Read this first when picking the project up. It records where the work stands,
 how the work is done, and what is next. `README.md` is the front door; this is
 the working document and is kept current.
 
-> **Where the work is right now:** the analysis phase has just begun. The ROM's
-> file table is parsed and documented (`docs/analysis/01-rom-layout.md`),
-> `tools/romdir.py` lists, extracts and diffs images, and nothing is
-> implemented yet. There is no build system and no `docs/spec/` — both arrive
-> with the first implementation milestone.
+> **Where the work is right now:** the analysis phase is under way. The ROM's
+> file table is parsed and documented (`docs/analysis/01-rom-layout.md`), and
+> the `RESET` boot block is disassembled and documented
+> (`docs/analysis/02-boot-block.md`): the CPU dispatch, the IOP reset path and
+> the self-locating ROMDIR search that enters `IOPBOOT`. Tooling is
+> `tools/romdir.py` (archive) and `tools/romdis.py` (IOP/EE disassembly).
+> Nothing is implemented yet; there is no build system and no `docs/spec/` —
+> both arrive with the first implementation milestone.
 
 ---
 
@@ -55,7 +58,8 @@ per-file, and the eventual build will assemble the image the same way.
 | Area | State |
 | --- | --- |
 | ROM file table (ROMDIR/EXTINFO/ROMVER) | analysed — `docs/analysis/01-rom-layout.md` |
-| Boot block (`RESET`), EE side | not started |
+| Boot block (`RESET`): dispatch + IOP path | analysed — `docs/analysis/02-boot-block.md` |
+| Boot block: EE path detail | outlined only (`02` §"EE reset path") |
 | IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -73,15 +77,16 @@ Notable early observations to keep in mind (details and repro commands in
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **Boot block** (`RESET`): both EE and IOP begin execution at the top of the
-   ROM. Disassemble the reset path, establish how each CPU finds its half, how
-   the ROMDIR table is located at run time, and what hands off to `IOPBOOT` /
-   the EE kernel. Needs the disassembly tool ported from the PS1 project
-   (MIPS-I for the IOP; the EE's R5900 needs its own handling).
-2. **Module format survey**: what the stored IOP modules actually are
-   (headers, relocation, import/export conventions) and how `IOPBTCONF` orders
-   their loading.
+1. **`IOPBOOT` and the boot list**: what the module the boot block enters
+   actually is, and how it consumes `IOPBTCONF` (the ordered module-name list
+   from `01`) to load the rest of the IOP kernel.
+2. **Module format survey**: the stored IOP modules are ELF (`01`); establish
+   their loader-relevant structure — the IRX conventions, relocation, and the
+   import/export stub tables LOADCORE resolves between modules.
 3. **IOP kernel core**: `SYSMEM` and `LOADCORE` — the first modules the boot
    list runs, and the base every other module links against.
 4. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
+5. **EE boot path detail**: promote `02` §"EE reset path" to a full document
+   once the EE kernel is under analysis (how `EELOAD` is staged to RAM at
+   `0x8000_1000`).
