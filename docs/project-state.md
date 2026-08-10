@@ -67,6 +67,7 @@ per-file, and the eventual build will assemble the image the same way.
 | `SSBUSC`, `DMACMAN` | analysed — `docs/analysis/07-bus-and-dma.md` |
 | `SYSCLIB`, `STDIO`, `HEAPLIB` | analysed — `docs/analysis/08-c-library-and-heap.md` |
 | `EECONF`, `THREADMAN` | analysed — `docs/analysis/09-threads-and-eeconf.md` |
+| `VBLANK`, `IOMAN`, `MODLOAD` | analysed — `docs/analysis/10-module-loading-and-boot-configs.md` |
 | Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -85,8 +86,8 @@ document each cites):
 - Ordinals identified so far, from how importers call them: `loadcore` 6 is
   versioned export registration and `loadcore` 10 the pinned variant,
   `loadcore` 12 looks up a boot record, `intrman` 17/18 are the
-  critical-section pair (aliased at 19/20), `sysmem` 4 is the allocator.
-  (`05`, `07`, `08`, `09`)
+  critical-section pair (aliased at 19/20), `sysmem` 4 and 5 are the allocator
+  and deallocator. (`05`, `07`, `08`, `09`, `10`)
 - Fixed absolute addresses are part of the ABI: the exception vector at `0`
   (`06`) and the boot-parameter table anchored at `0x3F0` (`09`).
 - A library is identified by **tag + major version**; the minor version is a
@@ -94,21 +95,24 @@ document each cites):
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
   this, so a stored table's version is not what gets registered. (`08`)
 
+- Module entries are called as `entry(argc, argv, 0, module_record)` with the
+  module's own `$gp` installed, and **`return & 3` decides residency** — clear
+  keeps the module, set frees it. (`10`)
+- Alternative IOP configurations are nested ROMDIR archives (`EELOADCNF`,
+  `OSDCNF`) carrying their own `IOPBTCONF`, so the archive format must nest and
+  the `X`-variant modules are chosen by which list is booted. (`10`)
+
 ### Open questions
 
-- What convention makes a module entry's return of 1 leave it non-resident?
-  Belongs with `IOPBOOT`'s per-module load step. Now seen from two independent
-  causes — a hardware probe (`06`) and a boot-record flag (`09`) — which makes
-  the convention itself more likely than a coincidence.
-- Which selector chooses `IOPBTCON2` over `IOPBTCONF`, and where it is read.
-  (`03`)
+None outstanding. Both questions carried since `03` and `06` were settled in
+`10`.
 
 ## 5. Next steps
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **`VBLANK`, `IOMAN`, `MODLOAD`**, the next modules in boot order. `MODLOAD`
-   is the one most likely to settle both open questions below.
+1. **`ROMDRV`, `SIFMAN`, `SIFCMD`**, the next modules in boot order — the ROM
+   file driver and the EE/IOP interface.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
