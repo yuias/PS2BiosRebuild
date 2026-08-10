@@ -341,6 +341,15 @@ distinguish it. That is exactly the silent failure IRX-11a warns about, now
 demonstrated rather than predicted — and the reason this requirement needs a
 gate and not a code review.
 
+**IRX-12 is executed, not only described.** `tools/iopsim.py --check` watches
+`sysmem` ordinal 5 during the boot and requires the four module images the
+reference releases, each on the `0x100` boundary IRX-12b specifies; two of them
+are the rejected halves of the `P`/`I` variant pairs. The fifth release —
+`SIFINIT`, the module `docs/analysis/12` named as unreachable — happens only
+after the EE handshake, and `tools/ps2sim.py --check` requires that one
+(`docs/analysis/23-joining-the-two-cpus.md`). What is still not observed is
+IRX-12's `intrman` 17/18 critical section around the teardown.
+
 **IRX-7 exists because this sweep contradicted an earlier document.**
 `docs/analysis/05` had generalised "slot 0 is the module entry" from two
 examples; running it across every module produced nine counterexamples, and the

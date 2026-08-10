@@ -208,6 +208,44 @@ EE-facing services — and a phase-three module may not be moved before `SIFMAN`
 (`ARC-8`) carrying their own `IOPBTCONF`, not as a flag. `IOPBTCON2` exists in
 the reference archive but is named by nothing in the image.
 
+## BOOT-10: The two CPUs meet
+
+The IOP boot of BOOT-4 to BOOT-9 does not end at the last module of the boot
+list. It ends **waiting for the EE**, and the EE is waiting for it. Six shared
+registers carry that meeting; a rebuild of either side must take part in it.
+Derived from `docs/analysis/23-joining-the-two-cpus.md`.
+
+| Register | EE address | IOP address |
+| --- | --- | --- |
+| `MSCOM` | `0x1000F200` | `0x1D000000` |
+| `SMCOM` | `0x1000F210` | `0x1D000010` |
+| `MSFLG` | `0x1000F220` | `0x1D000020` |
+| `SMFLG` | `0x1000F230` | `0x1D000030` |
+| control | `0x1000F240` | `0x1D000040` |
+| identification | — | `0x1D000060` |
+
+**BOOT-10a:** The EE publishes an address in its own RAM in `MSCOM` and then
+raises a bit in `MSFLG`. The IOP's boot polls `MSFLG` and proceeds only when
+that bit appears.
+
+**BOOT-10b:** The IOP answers with an address in *its* RAM in `SMCOM` and a bit
+in `SMFLG`, which the EE is polling for. Neither side may proceed on its own.
+
+**BOOT-10c:** The flag registers are **asymmetric**, and this is the part a
+rebuild is most likely to get wrong: a write from the EE *sets* bits in `MSFLG`
+and *clears* them in `SMFLG`; a write from the IOP does the reverse. Registers
+that merely stored what was written would let each side's acknowledgement erase
+the other's request, and the handshake would livelock rather than fail.
+
+**BOOT-10d:** After the handshake the IOP finishes its boot list and reaches an
+idle loop — a jump to itself — rather than returning anywhere. Reaching it is
+what allows the last one-shot modules, `SIFINIT` among them, to be torn down
+per `spec/02` IRX-12.
+
+**BOOT-10e:** The identification register at `0x1D000060` must read back its own
+address, or read with its top twenty bits clear; `SIFMAN` refuses the bus
+otherwise (`docs/analysis/11`).
+
 ## Verification
 
 Everything in BOOT-1, BOOT-3, BOOT-5 and BOOT-6 is a statement about specific
