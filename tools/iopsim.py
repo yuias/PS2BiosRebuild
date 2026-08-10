@@ -319,8 +319,8 @@ class Cpu:
         self._store(base, 4, merged & SIGN32, pc)
 
 
-def reportLibraries(bus: "Bus") -> None:
-    """Report the library tables the boot left in RAM.
+def scanLibraries(bus: "Bus") -> tuple[list, list]:
+    """Find the library tables the boot left in RAM.
 
     Registration links a table into LOADCORE's registry in place, so every
     resident library is an export header sitting in RAM. Import headers are
@@ -357,7 +357,10 @@ def reportLibraries(bus: "Bus") -> None:
         if (plausible_link and plausible_ver and flags < 0x10
                 and 0 < entry < len(ram)):
             exports.append((at, tag, version, flags))
+    return exports, imports
 
+
+def reportLibraries(exports: list, imports: list) -> None:
     print(f"\nlibraries registered in RAM: {len(exports)}")
     for at, tag, version, flags in exports:
         print(f"   {at:#08x}  {tag:<10} v{version >> 8:x}.{version & 0xFF:02x}"
@@ -371,7 +374,64 @@ def reportLibraries(bus: "Bus") -> None:
                       f"v{version >> 8:x}.{version & 0xFF:02x}")
 
 
-def run(image: pathlib.Path, max_steps: int, trace: int) -> int:
+# What a correct IOP boot must achieve, per docs/spec/02 and docs/spec/03.
+EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
+EXPECTED_LIBRARIES = [
+    "sysmem", "loadcore", "excepman", "intrman", "ssbusc", "dmacman",
+    "timrman", "sysclib", "stdio", "heaplib", "thbase", "thevent", "thsemap",
+    "thmsgbx", "thfpool", "thvpool", "thrdman", "vblank", "ioman", "modload",
+    "romdrv", "stdio", "sifman",
+]
+PINNED_LIBRARIES = {"thrdman"}
+SINGLE_VARIANT_LIBRARIES = {"intrman", "timrman"}
+
+
+def checkBoot(bus: "Bus", exports: list, imports: list) -> list[str]:
+    """Judge a boot against the specifications. Returns the failures."""
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    post = [v for _, v in bus.post]
+    require(post == EXPECTED_POST, "BOOT-5a",
+            f"POST sequence {[hex(v) for v in post]} != "
+            f"{[hex(v) for v in EXPECTED_POST]}")
+
+    tags = [tag for _, tag, _, _ in exports]
+    require(tags == EXPECTED_LIBRARIES, "IRX-10a",
+            f"registered libraries {tags} != {EXPECTED_LIBRARIES}")
+
+    # IRX-11a: SYSCLIB publishes stdio 1.01 and STDIO supersedes it with 1.02.
+    stdio = [v for _, tag, v, _ in exports if tag == "stdio"]
+    require(stdio == [0x0101, 0x0102], "IRX-11a",
+            f"stdio versions {[hex(v) for v in stdio]} != ['0x101', '0x102'] "
+            f"-- the provisional stdio was not superseded")
+
+    # IRX-10b: the pin is set at run time, and only where it belongs.
+    pinned = {tag for _, tag, _, flags in exports if flags & 1}
+    require(pinned == PINNED_LIBRARIES, "IRX-10b",
+            f"pinned libraries {sorted(pinned)} != {sorted(PINNED_LIBRARIES)}")
+
+    # A P/I pair must resolve to exactly one resident variant (analysis 06).
+    for tag in SINGLE_VARIANT_LIBRARIES:
+        require(tags.count(tag) == 1, "variant selection",
+                f"{tag} registered {tags.count(tag)} times, want 1")
+
+    unbound = [(at, tag) for at, tag, _, _, ok in imports if not ok]
+    require(not unbound, "IRX-9",
+            f"{len(unbound)} unbound import tables, e.g. "
+            f"{[(hex(a), t) for a, t in unbound[:3]]}")
+    require(bool(imports), "IRX-9", "no import tables found at all")
+
+    require(not bus.unmapped - {0x1D000020, 0x1D000060}, "hardware",
+            f"unexpected unmapped access: "
+            f"{[hex(a) for a in sorted(bus.unmapped)][:6]}")
+    return problems
+
+
+def run(image: pathlib.Path, max_steps: int, trace: int, check: bool) -> int:
     bus = Bus(image.read_bytes())
     cpu = Cpu(bus)
 
@@ -383,9 +443,23 @@ def run(image: pathlib.Path, max_steps: int, trace: int) -> int:
         if len(bus.post) > seen_post:
             pc, value = bus.post[-1]
             seen_post = len(bus.post)
-            print(f"POST {value:#04x}   at {pc:#010x}   step {cpu.steps}")
+            if not check:
+                print(f"POST {value:#04x}   at {pc:#010x}   step {cpu.steps}")
             if value == 0xFA:
                 cpu.stop_reason = "POST 0xfa: boot block could not find its module"
+
+    exports, imports = scanLibraries(bus)
+
+    if check:
+        problems = checkBoot(bus, exports, imports)
+        for p in problems:
+            print(f"{image}: {p}", file=sys.stderr)
+        if problems:
+            print(f"\n{image}: {len(problems)} failure(s)", file=sys.stderr)
+            return 1
+        print(f"{image}: ok -- POST {[hex(v) for _, v in bus.post]}, "
+              f"{len(exports)} libraries, {len(imports)} import tables all bound")
+        return 0
 
     print(f"\nsteps executed: {cpu.steps}")
     print(f"POST sequence:  {[hex(v) for _, v in bus.post]}")
@@ -398,7 +472,7 @@ def run(image: pathlib.Path, max_steps: int, trace: int) -> int:
         addrs = sorted(bus.unmapped)[:8]
         print(f"unmapped access at: {[hex(a) for a in addrs]}"
               f"{' ...' if len(bus.unmapped) > 8 else ''}")
-    reportLibraries(bus)
+    reportLibraries(exports, imports)
     return 0
 
 
@@ -410,8 +484,11 @@ def main() -> int:
     parser.add_argument("--max-steps", type=lambda s: int(s, 0), default=20_000_000)
     parser.add_argument("--trace", type=int, default=0,
                         help="print the pc of the first N steps")
+    parser.add_argument("--check", action="store_true",
+                        help="judge the boot against docs/spec; exit 1 on any "
+                             "failure")
     args = parser.parse_args()
-    return run(args.image, args.max_steps, args.trace)
+    return run(args.image, args.max_steps, args.trace, args.check)
 
 
 if __name__ == "__main__":
