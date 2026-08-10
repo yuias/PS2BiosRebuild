@@ -23,7 +23,9 @@
 //
 //   +0  how many names resolved
 //   +4  the base load address the `@` token set
-//   +8  (address, size) pairs, in load order
+//   +8    (address, size) pairs, in load order
+//   +0x1F0 where each was loaded, once it has been
+//   +0x1FC where the next one would go
 //
 // Nothing outside this file reads it yet -- the loader that will is the next
 // piece of work -- so the layout is ours to choose, unlike the boot-parameter
@@ -33,6 +35,14 @@
 // Where a name is assembled before it is looked up. It has to be RAM: the
 // only writable memory this early, since the code itself is running from ROM.
     .set NAME_SCRATCH,    0x00001F00
+// The head of the library registry (IRX-10). Every registered export table's
+// first word holds the previous head, which is what IRX-4c means by the magic
+// being consumed at registration.
+    .set REGISTRY_HEAD,   0x00001F80
+
+    .set EXPORT_MAGIC,    0x41C00000
+    .set IMPORT_MAGIC,    0x41E00000
+    .set TABLE_HEADER,    0x14
 
     .set RAM_2MB_STACK,   0x001FFFF0
     .set RAM_8MB_STACK,   0x007FFFF0
@@ -213,6 +223,9 @@ _iopboot_load_next:
     sll   $t1, $s6, 3
     addu  $t1, $s4, $t1
     lw    $a0, 8($t1)                    // this module's ROM address
+    sll   $t2, $s6, 2
+    addu  $t2, $s4, $t2
+    sw    $s7, 0x1F0($t2)                // where this one is going
     bal   _iopboot_load
     move  $a1, $s7                       // and where to put it
     beq   $v0, $zero, _iopboot_stop      // a module that will not load is fatal
@@ -353,6 +366,20 @@ _iopboot_load_relocate:
     lw    $t4, L_END($sp)
     subu  $t4, $t4, $t3
     sw    $t4, 0x04($t0)                 // and how much of memory it holds
+
+    // IRX-9 then IRX-10: bind what this module imports, so its entry can call
+    // it, and register what it exports, so the modules after it can bind to
+    // this one. The reference has a module register itself by calling
+    // `loadcore` ordinal 6 from its entry; doing it in the loader instead
+    // means the first module needs no loader to already exist.
+    lw    $a0, L_BASE($sp)
+    lw    $a1, L_END($sp)
+    bal   _iopboot_bind
+    nop
+    lw    $a0, L_BASE($sp)
+    lw    $a1, L_END($sp)
+    bal   _iopboot_register
+    nop
 
     // IRX-12: entry(argc, argv, 0, record), with the module's own $gp
     // installed. `return & 3` decides residency; with no allocator there is
@@ -572,3 +599,173 @@ _iopboot_find_end:
 _name_iopbtconf:
     .ascii "IOPBTCONF"
     .byte 0
+
+
+// The name above is ten bytes, so what follows it needs realigning before it
+// can be code again.
+    .align 2
+
+// _iopboot_register(start, end): link every export table in the segment into
+// the registry, per IRX-10a. The comparison is on tag and major version --
+// a library's identity -- with a strictly greater minor superseding.
+_iopboot_register:
+    addiu $sp, $sp, -32
+    sw    $ra, 0($sp)
+    move  $t0, $a0
+_iopboot_register_scan:
+    sltu  $at, $t0, $a1
+    beq   $at, $zero, _iopboot_register_done
+    nop
+    lw    $t1, 0($t0)
+    lui   $t2, (EXPORT_MAGIC >> 16) & 0xFFFF
+    bne   $t1, $t2, _iopboot_register_step
+    nop
+
+    // IRX-10a: walk the registry for the same tag and major version.
+    lui   $t3, (REGISTRY_HEAD >> 16) & 0xFFFF
+    ori   $t3, $t3, REGISTRY_HEAD & 0xFFFF
+    lw    $t4, 0($t3)                     // the current head
+_iopboot_register_walk:
+    beq   $t4, $zero, _iopboot_register_link
+    nop
+    lw    $t5, 12($t0)                    // our tag, first word
+    lw    $t6, 12($t4)
+    bne   $t5, $t6, _iopboot_register_walk_next
+    nop
+    lw    $t5, 16($t0)                    // and its second
+    lw    $t6, 16($t4)
+    bne   $t5, $t6, _iopboot_register_walk_next
+    nop
+    lhu   $t5, 8($t0)                     // versions
+    lhu   $t6, 8($t4)
+    srl   $t7, $t5, 8
+    srl   $t8, $t6, 8
+    bne   $t7, $t8, _iopboot_register_walk_next   // a different library
+    nop
+    andi  $t7, $t5, 0xFF
+    andi  $t8, $t6, 0xFF
+    sltu  $at, $t8, $t7                   // strictly greater supersedes
+    beq   $at, $zero, _iopboot_register_step
+    nop
+    b     _iopboot_register_link
+    nop
+_iopboot_register_walk_next:
+    lw    $t4, 0($t4)
+    b     _iopboot_register_walk
+    nop
+
+_iopboot_register_link:
+    lui   $t3, (REGISTRY_HEAD >> 16) & 0xFFFF
+    ori   $t3, $t3, REGISTRY_HEAD & 0xFFFF
+    lw    $t4, 0($t3)
+    sw    $t4, 0($t0)                     // IRX-4c: the magic becomes the link
+    sw    $t0, 0($t3)
+_iopboot_register_step:
+    addiu $t0, $t0, 4
+    b     _iopboot_register_scan
+    nop
+_iopboot_register_done:
+    lw    $ra, 0($sp)
+    addiu $sp, $sp, 32
+    jr    $ra
+    nop
+
+// _iopboot_bind(start, end): bind every import table in the segment, per
+// IRX-9. An unresolved import is left as it is: IRX-8a makes an unbound stub
+// return harmlessly rather than fail the boot.
+_iopboot_bind:
+    addiu $sp, $sp, -32
+    sw    $ra, 0($sp)
+    move  $t0, $a0
+_iopboot_bind_scan:
+    sltu  $at, $t0, $a1
+    beq   $at, $zero, _iopboot_bind_done
+    nop
+    lw    $t1, 0($t0)
+    lui   $t2, (IMPORT_MAGIC >> 16) & 0xFFFF
+    bne   $t1, $t2, _iopboot_bind_step
+    nop
+    lhu   $t1, 10($t0)                    // flags
+    andi  $t1, $t1, 7
+    bne   $t1, $zero, _iopboot_bind_step  // IRX-9b: these are not ours to bind
+    nop
+
+    // Find the exporter: the same tag, at the registry head-most entry.
+    lui   $t3, (REGISTRY_HEAD >> 16) & 0xFFFF
+    ori   $t3, $t3, REGISTRY_HEAD & 0xFFFF
+    lw    $t4, 0($t3)
+_iopboot_bind_find:
+    beq   $t4, $zero, _iopboot_bind_step  // nothing exports it yet
+    nop
+    lw    $t5, 12($t0)
+    lw    $t6, 12($t4)
+    bne   $t5, $t6, _iopboot_bind_find_next
+    nop
+    lw    $t5, 16($t0)
+    lw    $t6, 16($t4)
+    beq   $t5, $t6, _iopboot_bind_table
+    nop
+_iopboot_bind_find_next:
+    lw    $t4, 0($t4)
+    b     _iopboot_bind_find
+    nop
+
+_iopboot_bind_table:
+    // IRX-9 step 1: count the exporter's entries to the zero terminator.
+    addiu $t5, $t4, TABLE_HEADER
+    move  $t6, $zero
+_iopboot_bind_count:
+    sll   $at, $t6, 2
+    addu  $at, $t5, $at
+    lw    $at, 0($at)
+    beq   $at, $zero, _iopboot_bind_stubs
+    nop
+    addiu $t6, $t6, 1
+    b     _iopboot_bind_count
+    nop
+
+_iopboot_bind_stubs:
+    addiu $t7, $t0, TABLE_HEADER
+_iopboot_bind_stub:
+    lw    $at, 0($t7)
+    beq   $at, $zero, _iopboot_bind_step  // the terminator
+    nop
+    lw    $t8, 4($t7)                     // IRX-9 step 2: the second word
+    srl   $t9, $t8, 26
+    addiu $at, $zero, 9                   // addiu
+    bne   $t9, $at, _iopboot_bind_stub_next
+    nop
+    andi  $t9, $t8, 0xFFFF                // the ordinal
+    sltu  $at, $t9, $t6
+    beq   $at, $zero, _iopboot_bind_over  // IRX-9 step 4: out of range
+    nop
+    sll   $at, $t9, 2
+    addu  $at, $t5, $at
+    lw    $at, 0($at)                     // export[ordinal]
+    srl   $at, $at, 2
+    lui   $t9, 0x03FF
+    ori   $t9, $t9, 0xFFFF
+    and   $at, $at, $t9
+    lui   $t9, 0x0800                     // IRX-9 step 3: a `j` to it
+    or    $at, $at, $t9
+    b     _iopboot_bind_stub_write
+    nop
+_iopboot_bind_over:
+    lui   $at, 0x03E0
+    ori   $at, $at, 0x0008                // `jr $ra`: degrade to a return
+_iopboot_bind_stub_write:
+    sw    $at, 0($t7)                     // IRX-9a: only the first word
+_iopboot_bind_stub_next:
+    addiu $t7, $t7, 8
+    b     _iopboot_bind_stub
+    nop
+
+_iopboot_bind_step:
+    addiu $t0, $t0, 4
+    b     _iopboot_bind_scan
+    nop
+_iopboot_bind_done:
+    lw    $ra, 0($sp)
+    addiu $sp, $sp, 32
+    jr    $ra
+    nop

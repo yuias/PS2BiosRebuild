@@ -32,15 +32,17 @@ EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
 # base load address the `@` token set (spec/03 BOOT-9).
 BOOT_LIST = 0x2000
 EXPECTED_BASE = 0x800
-EXPECTED_MODULES = 1             # SYSMEM; the rest of the boot list follows
+EXPECTED_MODULES = 2             # SYSMEM and LOADCORE; the rest follows
+MODULES = ("SYSMEM", "LOADCORE")
+EXPECTED_LIBRARIES = ["sysmem", "loadcore"]
 
-# Scaffolding inside the module: where its entry records that it ran, and what
-# it writes there (src/iop/sysmem.S).
-MODULE_MARKER = 0x3000
-MODULE_MARK = 0x5359534D
-# spec/02 IRX-5: the export table's entries are absolute pointers, so after
-# loading every one of them must have moved by the load base.
-EXPORT_TABLE = 0x40
+# LOADCORE's entry calls sysmem's allocator through the stub the loader
+# rewrote, and records what came back (src/iop/loadcore.S). It is the first
+# cross-module call in the image, so the value is the end-to-end evidence that
+# IRX-9's binding worked -- and that SYSMEM's own entry ran, since an
+# uninitialised heap cursor could not answer with its start.
+CROSS_CALL_RESULT = 0x3010
+HEAP_START = 0x00100000
 
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
@@ -48,9 +50,9 @@ RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
 KERNEL_BANNER = "PS2BiosRebuild EE kernel"
 
 NOT_YET = (
-    "binding imports between modules, and registering libraries (spec/02 "
-    "IRX-9, IRX-10)",
-    "the rest of the boot list: SYSMEM is the only module built",
+    "the rest of the boot list: two of its twenty-nine modules are built",
+    "supersession (spec/02 IRX-11): registration compares versions, but "
+    "nothing yet inherits a superseded library's clients",
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
@@ -91,10 +93,13 @@ def moduleFromImage(image: pathlib.Path, name: str) -> irxinfo.Irx:
         data[entry.offset:entry.offset + entry.size], name)
 
 
-def checkModule(image: pathlib.Path) -> list[str]:
-    """The built module against the conformance checker the reference passes."""
-    return [f"IRX: {problem}"
-            for problem in irxinfo.checkModule(moduleFromImage(image, "SYSMEM"))]
+def checkModules(image: pathlib.Path) -> list[str]:
+    """Each built module against the checker the reference's modules pass."""
+    problems = []
+    for name in MODULES:
+        problems += [f"{name}: {problem}" for problem
+                     in irxinfo.checkModule(moduleFromImage(image, name))]
+    return problems
 
 
 def checkIop(image: pathlib.Path) -> list[str]:
@@ -122,31 +127,43 @@ def checkIop(image: pathlib.Path) -> list[str]:
                         f"{EXPECTED_MODULES}")
         return problems
 
-    # IRX-12: the module was copied, relocated and entered.
-    if bus.read(MODULE_MARKER, 4) != MODULE_MARK:
-        problems.append(f"IRX-12: the module's entry left "
-                        f"{bus.read(MODULE_MARKER, 4):#010x} at "
-                        f"{MODULE_MARKER:#x}, not {MODULE_MARK:#010x} -- it "
-                        f"was not entered")
-    record = bus.read(MODULE_MARKER + 4, 4)
-    if not base <= record < len(bus.ram):
-        problems.append(f"IRX-12c: the entry was given {record:#x} as its "
-                        f"module record, which is not in RAM")
-    elif bus.read(record + 0x10, 4) == 0 or bus.read(record + 0x14, 4) is None:
-        problems.append("IRX-12c: the module record's +0x10 entry is empty")
+    # IRX-10: both modules' export tables were linked into the registry, and
+    # IRX-9: every import table found its exporter.
+    exports, imports = iopsim.scanLibraries(bus)
+    tags = [tag for _, tag, _, _ in exports]
+    if sorted(tags) != sorted(EXPECTED_LIBRARIES):
+        problems.append(f"IRX-10: libraries {tags} registered, want "
+                        f"{EXPECTED_LIBRARIES}")
+    unbound = [tag for _, tag, _, _, ok in imports if not ok]
+    if unbound:
+        problems.append(f"IRX-9: import tables {unbound} were never bound")
+    if not imports:
+        problems.append("IRX-9: no import table was found at all, so binding "
+                        "is untested")
+
+    # IRX-12 and IRX-9 together: LOADCORE's entry ran, called across the
+    # binding into SYSMEM, and got the heap back.
+    allocated = bus.read(CROSS_CALL_RESULT, 4)
+    if allocated != HEAP_START:
+        problems.append(f"IRX-9: the cross-module call returned "
+                        f"{allocated:#x}, want {HEAP_START:#x} -- either the "
+                        f"stub was not bound or the exporter never ran")
 
     # IRX-3: every export entry is an R_MIPS_32, so each must have moved by the
-    # base. Comparing against the stored file is what makes this a test of the
-    # relocation rather than of the table.
-    entries = moduleFromImage(image, "SYSMEM").exportEntries(EXPORT_TABLE)
-    for index, value in enumerate(entries):
-        at = base + EXPORT_TABLE + 0x14 + index * 4
-        loaded = bus.read(at, 4)
-        if loaded != value + base:
-            problems.append(f"IRX-3: export {index} loaded as {loaded:#x}, "
-                            f"want {value + base:#x} -- the R_MIPS_32 fixup "
-                            f"was not applied")
-            break
+    # module's own base. Comparing against the stored file is what makes this a
+    # test of the relocation rather than of the table.
+    for index, name in enumerate(MODULES):
+        module = moduleFromImage(image, name)
+        table = next(t["vaddr"] for t in module.tables() if t["kind"] == "export")
+        module_base = bus.read(BOOT_LIST + 0x1F0 + index * 4, 4)
+        for slot, value in enumerate(module.exportEntries(table)):
+            loaded = bus.read(module_base + table + 0x14 + slot * 4, 4)
+            if loaded != value + module_base:
+                problems.append(
+                    f"IRX-3: {name} export {slot} loaded as {loaded:#x}, want "
+                    f"{value + module_base:#x} -- the R_MIPS_32 fixup was not "
+                    f"applied")
+                break
     return problems
 
 
@@ -251,7 +268,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     problems, names = checkArchive(arguments.image)
-    problems += checkModule(arguments.image)
+    problems += checkModules(arguments.image)
     problems += checkIop(arguments.image)
     problems += checkEe(arguments.image)
 
@@ -262,7 +279,8 @@ def main() -> int:
         return 1
 
     print(f"{arguments.image}: ok -- {len(names)} archive entries; the IOP path "
-          f"loads and enters its first module; the EE path reaches "
+          f"loads its modules, binds and registers them; the EE path "
+          f"reaches "
           f"its kernel, which "
           f"announces itself and serves its syscalls")
     print("\nnot required of the image yet:")

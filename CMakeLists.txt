@@ -77,6 +77,8 @@ ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
 ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
     SOURCES src/iop/sysmem.S)
+ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
+    SOURCES src/iop/loadcore.S)
 
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
@@ -106,6 +108,7 @@ add_custom_command(
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" "${PS2_ROMVER}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
+            loadcore.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

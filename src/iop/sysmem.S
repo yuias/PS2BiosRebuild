@@ -1,50 +1,99 @@
 // SYSMEM: the IOP's memory manager -- the first module the boot list names.
 //
-// This is the module's *shape* so far: the container of
-// docs/spec/02-module-abi.md IRX-1, the library table of IRX-4, the ordinals of
-// IRX-6 and the entry convention of IRX-12. The allocator behind ordinals 4
-// and 5 is not written yet, and its stubs say so by failing rather than
-// pretending to succeed.
+// The container is docs/spec/02-module-abi.md IRX-1, the library table IRX-4,
+// the ordinals IRX-6 and the entry convention IRX-12. Ordinals 4 and 5 are the
+// allocator and its deallocator, which `docs/analysis/05-sysmem-and-loadcore.md`
+// identified from how every other module calls them.
 //
 // The IOP is an R3000A: MIPS I only.
 
     .set noreorder
     .set noat
 
-// Scaffolding: somewhere the loader test can see that the entry really ran.
-// It goes when the module has behaviour worth observing instead.
-    .set RAN_MARKER, 0x00003000
+// Load a symbol's address. The pair is `lui`/`addiu` so the linker's %hi carry
+// compensation is the right one, and the loader's HI16/LO16 fixups (IRX-3a)
+// are what make it work once the module has been rebased.
+.macro la reg, symbol
+    lui   \reg, %hi(\symbol)
+    addiu \reg, \reg, %lo(\symbol)
+.endm
+
+// Provisional extent. The reference takes the machine's memory size from the
+// boot parameters the reset path latched (spec/03 BOOT-4 step 5); until that
+// is plumbed through, a retail 2 MiB machine's spare middle is the heap, kept
+// clear of the stack the boot block put at the top.
+    .set HEAP_START, 0x00100000
+    .set HEAP_END,   0x001F0000
+    .set ALIGNMENT,  16
 
     .section .text, "ax"
     .globl _module_start
 
 // IRX-12: entry(argc, argv, 0, module_record), with the module's own $gp
-// installed. `return & 3` decides residency -- clear keeps the module, set
-// frees it -- and a memory manager stays.
+// installed. `return & 3` decides residency -- clear keeps the module -- and a
+// memory manager stays.
 _module_start:
-    lui   $t0, (RAN_MARKER >> 16) & 0xFFFF
-    ori   $t0, $t0, RAN_MARKER & 0xFFFF
-    lui   $t1, 0x5359                    // "SY"
-    ori   $t1, $t1, 0x534D               // "SM"
-    sw    $t1, 0($t0)
-    sw    $a3, 4($t0)                    // the module record we were given
+    lui   $t0, (HEAP_START >> 16) & 0xFFFF
+    ori   $t0, $t0, HEAP_START & 0xFFFF
+    la    $t1, _heap_cursor
+    sw    $t0, 0($t1)
+    sw    $zero, 4($t1)
     jr    $ra
     move  $v0, $zero                     // resident
 
-// IRX-7: slots 0 and 1 are reserved hooks that nothing imports. They are kept
-// occupied rather than removed (IRX-6a), so they need somewhere to point.
+// IRX-7: slots 0 and 1 are reserved hooks that nothing imports, kept occupied
+// rather than removed (IRX-6a), so they need somewhere to point.
 _reserved_hook:
     jr    $ra
     move  $v0, $zero
 
-// Ordinals 4 and 5 are the allocator and its deallocator (docs/analysis/05).
-// Until there is a heap to allocate from, a caller must be told it failed.
+// Ordinal 4: allocate(size) -> address, or 0.
+//
+// A bump allocator, which is all the boot needs: every allocation the module
+// list makes lives as long as the machine does. Anything with a real lifetime
+// arrives with the heap of `HEAPLIB`.
 _allocate:
+    beq   $a0, $zero, _allocate_fail
+    nop
+    addiu $a0, $a0, ALIGNMENT - 1
+    srl   $a0, $a0, 4
+    sll   $a0, $a0, 4                    // rounded up to 16
+    la    $t3, _heap_cursor
+    lw    $t0, 0($t3)
+    addu  $t1, $t0, $a0
+    lui   $t2, (HEAP_END >> 16) & 0xFFFF
+    ori   $t2, $t2, HEAP_END & 0xFFFF
+    sltu  $at, $t2, $t1
+    bne   $at, $zero, _allocate_fail     // past the end of the heap
+    nop
+    sw    $t1, 0($t3)
+    sw    $t0, 4($t3)
     jr    $ra
-    move  $v0, $zero                     // no memory
+    move  $v0, $t0
+_allocate_fail:
+    jr    $ra
+    move  $v0, $zero
+
+// Ordinal 5: release(address) -> 0, or -1.
+//
+// A bump allocator can give back only what it handed out last. Saying so is
+// better than accepting every address and leaking: a caller that frees out of
+// order finds out at once rather than exhausting the heap later.
 _deallocate:
+    la    $t3, _heap_cursor
+    lw    $t0, 4($t3)
+    beq   $t0, $zero, _deallocate_fail
+    nop
+    bne   $a0, $t0, _deallocate_fail
+    nop
+    la    $t1, _heap_cursor
+    sw    $t0, 0($t1)
+    sw    $zero, 4($t1)
     jr    $ra
-    addiu $v0, $zero, -1                 // nothing to release
+    move  $v0, $zero
+_deallocate_fail:
+    jr    $ra
+    addiu $v0, $zero, -1
 
 _unimplemented:
     jr    $ra
@@ -75,6 +124,6 @@ _sysmem_exports:
     .word 0                              // IRX-5b: the terminator
 
     .section .bss, "aw", @nobits
-    .align 4
-_heap_anchor:
-    .space 64
+    .align 2
+_heap_cursor:
+    .space 4                             // and _heap_last at +4
