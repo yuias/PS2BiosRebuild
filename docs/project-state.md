@@ -111,7 +111,8 @@ per-file, and the eventual build will assemble the image the same way.
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | Build system | **CMake + Ninja + LLVM** — `docs/implementation.md` |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP reaches its handoff |
-| `RDRAM`, `ROMVER`, `KERNEL` entry | **built** — minimal, spec-derived |
+| `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
+| EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
 | Everything else in the image | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis

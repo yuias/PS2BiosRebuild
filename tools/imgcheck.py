@@ -36,10 +36,20 @@ KERNEL_BANNER = "PS2BiosRebuild EE kernel"
 
 NOT_YET = (
     "IOPBOOT and the IOP kernel modules (spec/03 BOOT-7, spec/02)",
-    "the EE vector page and exception dispatch (spec/04 EE-5, EE-6)",
-    "the 125 syscall slots (spec/04 EE-8, spec/05)",
+    "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
+    "rather than to their own handlers (spec/05 SYS-1)",
+    "EE-7e's 128-bit context save, and the scheduler that needs it",
     "the EE handshake and everything past it (spec/03 BOOT-10)",
 )
+
+# The interface the kernel publishes, exercised through eesim's harness. Every
+# one of these was a requirement read out of the reference first.
+INTC_SOURCE = 3
+INTC_ALIAS_SOURCE = 4
+DMAC_CHANNEL = 2
+INSTALLED_SLOT, INSTALLED_HANDLER = 0x40, 0xDEADBEEF
+EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
+UNDEFINED_SLOT = 0x21
 
 
 def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
@@ -101,6 +111,66 @@ def checkEe(image: pathlib.Path) -> list[str]:
     elif KERNEL_BANNER not in machine.kernel_console:
         problems.append(f"EE-4: the kernel did not announce itself; its "
                         f"console held {machine.kernel_console!r}")
+    else:
+        problems += checkSyscalls(machine)
+    return problems
+
+
+def checkSyscalls(machine: eesim.Machine) -> list[str]:
+    """The syscall interface, called rather than read.
+
+    Reaching the harness's return address at all requires EE-7c: the handler
+    must have advanced EPC past the `syscall`, or control would come back to
+    the same instruction forever.
+    """
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    acted = machine.syscall(0x14, INTC_SOURCE)
+    again = machine.syscall(0x14, INTC_SOURCE)
+    require((acted, again) == (1, 0), "EE-8g",
+            f"enabling an INTC source twice returned {acted} then {again}, "
+            f"want 1 then 0")
+    require(bool(machine.bus.io.get(eesim.INTC_MASK, 0) & (1 << INTC_SOURCE)),
+            "EE-8g", "the INTC mask bit is not set after enabling")
+    require((machine.syscall(0x15, INTC_SOURCE),
+             machine.syscall(0x15, INTC_SOURCE)) == (1, 0), "EE-8g",
+            "disabling an INTC source did not report acting exactly once")
+
+    machine.syscall(0x16, DMAC_CHANNEL)
+    require(bool(machine.bus.io.get(eesim.DMAC_STATUS, 0)
+                 & (1 << (16 + DMAC_CHANNEL))), "EE-8g",
+            "the DMAC bit must start at 16, not 0")
+
+    require(machine.syscall(0x1A, INTC_ALIAS_SOURCE) == 1, "EE-8c",
+            "slot 0x1a does not reach the same handler as 0x14")
+    require(machine.syscall(-0x14 & eesim.MASK64, INTC_ALIAS_SOURCE + 1) == 1,
+            "EE-7b", "a negative syscall number did not reach the same slot")
+
+    machine.syscall(0x74, INSTALLED_SLOT, INSTALLED_HANDLER)
+    require(machine.word(0x80014F40 + INSTALLED_SLOT * 4) == INSTALLED_HANDLER,
+            "SYS-5a", "slot 0x74 did not install into the syscall table")
+
+    installed = machine.syscall(0x0D, EXCEPTION_CODE, EXCEPTION_HANDLER)
+    require((installed & eesim.MASK32) == EXCEPTION_HANDLER, "EE-6e",
+            f"installing an exception handler returned {installed}")
+    require(machine.word(0x80015340 + EXCEPTION_CODE * 4) == EXCEPTION_HANDLER,
+            "EE-6e", "the exception table was not written")
+    require(machine.syscall(0x0D, 9, EXCEPTION_HANDLER) == 0, "EE-6e",
+            "an out-of-range exception code was accepted")
+
+    require(machine.syscall(0x75) is not None, "SYS-3b",
+            "the empty syscall 0x75 did not return")
+
+    before = len(machine.bus.console)
+    machine.syscall(UNDEFINED_SLOT)
+    reported = machine.bus.console[before:].decode("ascii", "replace")
+    require(f"{UNDEFINED_SLOT:02x}" in reported, "EE-8d",
+            f"an unimplemented slot reported {reported!r}, which does not name "
+            f"the number")
     return problems
 
 
@@ -122,8 +192,8 @@ def main() -> int:
         return 1
 
     print(f"{arguments.image}: ok -- {len(names)} archive entries; the IOP path "
-          f"reaches its handoff; the EE path reaches its kernel and the kernel "
-          f"announces itself")
+          f"reaches its handoff; the EE path reaches its kernel, which "
+          f"announces itself and serves its syscalls")
     print("\nnot required of the image yet:")
     for item in NOT_YET:
         print(f"   {item}")
