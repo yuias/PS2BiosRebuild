@@ -315,6 +315,32 @@ the hardware actually does.
 exactly one table where there should have been twenty-three, because
 registration overwrites the magic with the registry link.
 
+### The gate, and proof that it bites
+
+`--check` turns the run into a judgement rather than a report, and exits
+non-zero naming the requirement that failed:
+
+```sh
+python3 tools/iopsim.py assets/SCPH-50000.bin --check
+# assets/SCPH-50000.bin: ok -- POST [...], 23 libraries, 55 import tables all bound
+```
+
+A gate is only worth having if it fails when it should, so it is tested against
+deliberately broken images. Removing the single `addiu $v0, $v0, -1` at
+`SYSCLIB` module offset `0x40` — the version-lowering of IRX-11a — produces:
+
+```
+IRX-10a: registered libraries [... 'romdrv', 'sifman'] != [... 'romdrv', 'stdio', 'sifman']
+IRX-11a: stdio versions ['0x102'] != ['0x101', '0x102']
+         -- the provisional stdio was not superseded
+```
+
+**The mutated boot does not crash.** It runs to the same place as a correct one
+and leaves twenty-two libraries instead of twenty-three, with nothing else to
+distinguish it. That is exactly the silent failure IRX-11a warns about, now
+demonstrated rather than predicted — and the reason this requirement needs a
+gate and not a code review.
+
 **IRX-7 exists because this sweep contradicted an earlier document.**
 `docs/analysis/05` had generalised "slot 0 is the module entry" from two
 examples; running it across every module produced nine counterexamples, and the

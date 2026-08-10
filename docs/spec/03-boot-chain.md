@@ -246,6 +246,10 @@ python3 tools/iopsim.py assets/SCPH-50000.bin
 # POST sequence: ['0xfc', '0x2', '0x3', '0x4', '0x5', '0x8', '0x9']
 ```
 
+`--check` makes that a gate: it fails, naming BOOT-5a, if the sequence differs —
+verified by altering the POST value inside the bus table, which yields
+`POST sequence ['0xab', ...] != ['0xfc', ...]`.
+
 So BOOT-1 and BOOT-3 through BOOT-7 are verified rather than merely described.
 BOOT-8 and BOOT-9 are exercised on the way (the boot reaches `IOPBTCONF` and
 loads modules from it) but not yet asserted; that needs the simulator to model
