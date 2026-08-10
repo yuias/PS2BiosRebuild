@@ -65,8 +65,16 @@ def buildWrapperElf(blob: pathlib.Path, vma: int,
 
     # An explicit output-section address keeps lld from reserving space for
     # the ELF headers ahead of the contents, which would shift every address.
+    # The assembler's own MIPS metadata sections are discarded: they default to
+    # address 0 and would otherwise collide with a --vma 0 image, which is
+    # exactly the VMA a relocatable IOP module is linked at.
     script = workdir / "wrap.ld"
-    script.write_text(f"SECTIONS {{ .image {vma:#x} : {{ *(.image) }} }}\n")
+    script.write_text(
+        "SECTIONS {\n"
+        "  /DISCARD/ : { *(.MIPS.abiflags) *(.reginfo) }\n"
+        f"  .image {vma:#x} : {{ *(.image) }}\n"
+        "}\n"
+    )
 
     obj = workdir / "wrap.o"
     elf = workdir / "wrap.elf"
