@@ -95,11 +95,15 @@ step 3, since the memory controller decides what RAM responds at all.
 
 ## BOOT-5: POST codes
 
-A one-byte progress code is written to `0xBF802070` throughout. Ten writes occur
-in the reset path:
+A one-byte progress code is written to `0xBF802070` throughout. Eleven writes
+occur in the reset path, and the **first is not in the code at all**: the
+bus-configuration tables of BOOT-4 step 1 each contain an entry targeting the
+POST register, so applying the table emits a code as a side effect.
 
 | Code | Written at | Meaning |
 | --- | --- | --- |
+| `0xFE` | table `0xBFC024A8` entry | bus table being applied (BOOT-3 true) |
+| `0xFC` | table `0xBFC02560` entry | bus table being applied (BOOT-3 false) |
 | `0x01` | `0xBFC020A0` | bus table `0xBFC024A8` applied (BOOT-3 true) |
 | `0x02` | `0xBFC020FC` | bus table `0xBFC02560` applied (BOOT-3 false) |
 | `0x03` | `0xBFC02204` | low RAM cleared |
@@ -111,19 +115,25 @@ in the reset path:
 | `0x09` | `0xBFC02418` | `IOPBOOT` RAM size latched |
 | `0xFA` | `0xBFC02464` | module not found — stop |
 
-**BOOT-5a:** A retail boot therefore emits `2, 3, 4, 5, 8, 9`. Codes `1`, `6`
-and `7` belong to the BOOT-3-true configuration.
+**BOOT-5a:** A retail boot therefore emits `0xFC, 2, 3, 4, 5, 8, 9`. Codes
+`0xFE`, `1`, `6` and `7` belong to the BOOT-3-true configuration.
 
 **BOOT-5b:** `0xFA` is a terminal stop: the code loops rather than continuing.
 Any unrecoverable boot failure must be observable this way rather than by
 running on into undefined behaviour.
 
-The table above is reproducible mechanically rather than by reading:
+The code-driven writes are reproducible by disassembly, but the table-driven
+one is only visible by running the boot:
 
 ```sh
 python3 tools/romdis.py assets/SCPH-50000.bin --cpu iop \
-    --range 0xbfc02000 0xbfc02740 | grep -B4 '0x2070(\$1)'
+    --range 0xbfc02000 0xbfc02740 | grep -B4 '0x2070(\$1)'   # the ten in code
+python3 tools/iopsim.py assets/SCPH-50000.bin                 # all eleven
 ```
+
+**`0xFC` was found by execution, not by reading.** A static sweep of the reset
+path cannot see a POST write whose address and value both live in a data table,
+which is a fair warning about how far disassembly alone can be trusted.
 
 ## BOOT-6: Handoff by name
 
@@ -226,11 +236,20 @@ python3 tools/romdir.py <outdir>/EELOADCNF --extract <outdir>/eeloadcnf
 head -1 <outdir>/IOPBTCONF <outdir>/eeloadcnf/IOPBTCONF   # both '@800'
 ```
 
-What cannot be checked statically is the *sequence* — that the steps of BOOT-4
-happen in that order and produce the POST trace of BOOT-5. That needs a machine.
-The PS1 project gated exactly this with an emulator harness that asserted a POST
-trace, and this project will need the equivalent (PCSX2) before BOOT-4 can be
-called verified rather than described.
+The *sequence* — that BOOT-4's steps happen in that order and produce BOOT-5's
+trace — needs a machine, and `tools/iopsim.py` is it. Booting the reference
+image on it emits exactly BOOT-5a's retail sequence and carries on through
+BOOT-6 and BOOT-7 into the loaded modules:
+
+```sh
+python3 tools/iopsim.py assets/SCPH-50000.bin
+# POST sequence: ['0xfc', '0x2', '0x3', '0x4', '0x5', '0x8', '0x9']
+```
+
+So BOOT-1 and BOOT-3 through BOOT-7 are verified rather than merely described.
+BOOT-8 and BOOT-9 are exercised on the way (the boot reaches `IOPBTCONF` and
+loads modules from it) but not yet asserted; that needs the simulator to model
+exceptions, which is where it currently stops.
 
 **BOOT-5 corrected `docs/analysis/02`.** Extracting the POST writes mechanically
 rather than reading them off a listing found a code the prose had missed
