@@ -8,9 +8,11 @@ the working document and is kept current.
 > all twenty-nine modules, in twelve documents covering the ROM archive format,
 > the boot block, `IOPBOOT` and the boot list, the IRX module format, and every
 > module from `SYSMEM` to `EESYNC`, with no questions outstanding. The EE side
-> is next and is untouched apart from an outline. **The first specification is
-> written and proven**: `docs/spec/01-rom-archive.md`, verified by a round-trip
-> that rebuilds both reference images and a nested archive byte for byte.
+> is next and is untouched apart from an outline. **Two specifications are
+> written and mechanically checked**: `01-rom-archive.md`, verified by a
+> round-trip that rebuilds both reference images and a nested archive byte for
+> byte, and `02-module-abi.md`, verified by a conformance checker that passes on
+> every IRX module of both images.
 > Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
 > `tools/irxinfo.py` (modules) and `tools/romdis.py` (IOP/EE disassembly).
 > There is still no build system for the image's *contents*.
@@ -76,6 +78,7 @@ per-file, and the eventual build will assemble the image the same way.
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
+| IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -116,6 +119,12 @@ document each cites):
 - Four module shapes exist: library, multi-library, export-free resident
   service, and one-shot action (never resident, distinguished only by
   `return & 3`). (`12`)
+- The archive holds two kinds of ELF: 57 IOP relocatable modules
+  (`e_type 0xFF80`) and 4 EE executables (`ET_EXEC`, MIPS-III) — `OSDSYS`,
+  `PS1DRV`, `PS2LOGO`, `TESTMODE`. (`spec/02`)
+- Export slots 0 and 1 are reserved hooks that nothing imports; the lowest
+  ordinal bound anywhere is 2. Slot 0 is *not* reliably the module entry.
+  (`spec/02` IRX-7, correcting `05`)
 
 ### Open questions
 
@@ -131,7 +140,6 @@ In rough order; each becomes a `docs/analysis/` document:
    — byte-identical across both reference ROMs — contains. This needs the R5900
    caveats in `tools/romdis.py` kept in mind.
 2. **`OSDSYS`** and the boot flow that reaches it.
-3. **`docs/spec/02`: the module and link ABI** — the IRX format, the library
-   table layout, versioned vs pinned registration, supersession, and the
-   `return & 3` residency rule. The settled half of the IOP work, and the
-   natural companion to the archive spec.
+3. **`docs/spec/03`: the boot chain** — the reset vector's CPU dispatch, the
+   IOP reset path and its POST codes, `IOPBOOT` and the `IOPBTCONF` grammar.
+   The last part of the IOP side that is settled enough to specify.
