@@ -114,6 +114,19 @@ ld    $t9, 0x5378($t9)      # restored in the delay slot
 
 **EE-6a:** The table is at `0x80015340`, fourteen entries for `ExcCode` 0–13.
 
+**EE-6f:** The kernel publishes **four** tables in total, all of which a
+rebuild must provide:
+
+| Address | Purpose | Entries |
+| --- | --- | --- |
+| `0x80014F40` | syscall dispatch | 125 |
+| `0x80015340` | exception dispatch | 14 |
+| `0x80015380` | interrupt dispatch | 8 |
+| `0x800154A8` | per-CP0-register read stubs | 8 |
+
+The last exists because `mfc0`'s register number is an instruction field and
+cannot be supplied at run time, so "read CP0 register *n*" needs a stub each.
+
 **EE-6d:** There is a **second** dispatch table at `0x80015380`, eight entries,
 read by the interrupt vector at `0x80000200` and indexed by interrupt number.
 Indexes 2, 3 and 7 are populated — the interrupt controller, the DMA controller
@@ -182,9 +195,14 @@ code. A rebuild keeps them occupied so an old caller is diagnosed instead of
 jumping into nothing.
 
 **EE-8e:** Slots `0x60`, `0x61` and `0x62` are published through **KSEG1**
-(`0xA0002C00`, `0xA00028C0`, `0xA0002980`) while the other 122 use KSEG0. The
-alias is part of each slot's contract: publishing the cached address would
-change their behaviour around device memory.
+(`0xA0002C00`, `0xA00028C0`, `0xA0002980`) while the other 122 use KSEG0.
+
+This is a hardware constraint, not a convention (`docs/analysis/18`): `0x60`
+rewrites the cache mode in the low bits of `Config`, and `0x61`/`0x62` walk the
+whole cache with the `cache` instruction. Code doing either cannot be fetched
+through the cache it is changing. Publishing them at their KSEG0 addresses
+would fail intermittently rather than cleanly, which is why a rebuild must not
+normalise the alias away.
 
 **EE-8f:** The handlers for slots `0x0D`–`0x1F` live inside the vector page and
 must stay there (EE-5b).

@@ -84,7 +84,8 @@ per-file, and the eventual build will assemble the image the same way.
 | EE kernel: syscall groups, boot tail | analysed — `docs/analysis/15-ee-syscall-groups.md` |
 | EE syscalls: exceptions and interrupts | analysed — `docs/analysis/16-ee-interrupt-syscalls.md` |
 | EE syscalls: the scheduler group | analysed — `docs/analysis/17-ee-scheduler-syscalls.md` |
-| EE syscalls: the remaining groups | not started |
+| EE syscalls: cache and CP0 control | analysed — `docs/analysis/18-ee-cache-syscalls.md` |
+| EE syscalls: the far-end slots | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
@@ -172,9 +173,8 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **The remaining EE syscall groups**, continuing from `16` and `17`: the
-   `0x60`–`0x6A` band with its KSEG1 members, then the scattered far-end slots
-   (`0x01`, `0x4A`–`0x4F`, `0x6E`, `0x6F`).
+4. **The far-end EE syscall slots** — `0x01`, `0x4A`–`0x4F`, `0x6E`, `0x6F` —
+   the last unexamined group, sitting past `0x8000CD18` in the image.
 5. **`OSDSYS`** last: it is the largest component but mostly a consumer of the
    syscalls above, and much of its bulk is material `docs/clean-room-policy.md`
    §3 puts out of bounds anyway.
