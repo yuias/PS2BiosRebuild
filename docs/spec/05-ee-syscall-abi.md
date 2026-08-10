@@ -216,11 +216,24 @@ tested against mutated kernels — each fails naming its requirement:
 | a retired slot given a live handler | `SYS-3: undefined slot 0x54 is ($a0) -> $v0, want (-) -> -` |
 | cache slot `0x60` given a value-returning handler | `SYS-4: cache slot 0x60 is ($a0) -> $v0, want ($a0) -> -` |
 
-**What is not verified.** The same asymmetry `spec/04` records applies here,
-and is if anything sharper. These signatures are recovered by *static*
-analysis. It is a `may` pass, so an argument read only on an error path counts
-as an argument; and it establishes that a register is read, never what the
-value means. No EE code is executed anywhere in this project, so the semantic
-requirements of SYS-6 and SYS-7 — what the alarm does when it fires, what the
-SIF channel then transfers — are read off the code rather than observed.
-Confirming them needs an R5900 simulator the project does not have.
+Several requirements here are additionally **executed** by `tools/eesim.py`,
+which boots the kernel on a simulated R5900 and then calls its syscalls
+(`docs/analysis/22-ee-execution.md`):
+
+```sh
+python3 tools/eesim.py assets/SCPH-50000.bin --check
+python3 tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 3
+```
+
+SYS-3b, SYS-5a, SYS-7a, SYS-7b and SYS-7c are confirmed that way, as is the
+`$v1` convention every call depends on. SYS-7b's open question is closed from
+the other direction too: the kernel announces its own TLB layout at boot, and
+the scratchpad mapping of `spec/04` EE-1a is entry 0 while the allocatable
+range starts at 13.
+
+**What is still not verified.** SYS-1 remains a *static* result. Liveness is a
+`may` pass, so an argument read only on an error path counts as an argument,
+and it establishes that a register is read, never what the value means —
+executing a syscall confirms it returns, not that it consumed every argument
+listed. SYS-7d's SIF channels are not exercised, because that traffic ends at
+an IOP the EE simulator does not have.

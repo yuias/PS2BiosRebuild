@@ -290,11 +290,27 @@ requirement:
 | slot `0x60` republished as KSEG0 | `EE-8e: kseg1 slots ['0x61', '0x62'] != ['0x60', '0x61', '0x62']` |
 | slot `0x1A` pointed elsewhere | `EE-8c: slot 0x14 and 0x1a differ` |
 
-**What is not verified.** Everything dynamic — EE-1's register values taking
-effect, EE-3's copy, EE-7's ABI in motion, EE-9's boot tail — needs an R5900 to
-execute it. `tools/iopsim.py` does that job for the IOP side and has no EE
-counterpart: an R5900 simulator is a much larger undertaking (128-bit
-registers, `lq`/`sq`, the coprocessors of EE-10), and the honest position is
-that the EE requirements here are *described and statically checked*, not
-executed. That gap is the main reason the EE side is riskier than the IOP side,
-and it should be stated in any release material.
+The dynamic requirements are executed by `tools/eesim.py`, which boots an
+image's EE on a simulated R5900 and judges what happens
+(`docs/analysis/22-ee-execution.md`):
+
+```sh
+python3 tools/eesim.py assets/SCPH-50000.bin --check
+```
+
+EE-1, EE-1a, EE-1b, EE-2, EE-3b, EE-3d, EE-7a, EE-7b, EE-7c, EE-8g and EE-10
+are all confirmed by execution, on both reference images, and the gate is
+tested against mutated images the same way the static one is.
+
+**EE-10b:** Executing also settles the announcement *order*, which this
+document had left open: for a full mask it is GS, INTC, TIMER, DMAC, VU1,
+VIF1, GIF, VU0, VIF0, IPU, FPU, user memory, scratchpad — **not** the order the
+messages are stored in. A rebuild driven by the stored order would bring the
+subsystems up in the wrong sequence.
+
+**What is still not verified.** Three things, all recorded in `analysis/22`:
+the memory controller's serial protocol, which `eesim.py` stubs because no
+requirement concerns it; EE-9's boot tail, which crosses the SIF to an IOP that
+the EE simulator does not have; and the scheduler resuming a *different* thread
+(EE-7g), which is executed but never observed switching. The EE side remains
+the riskier half, but no longer for want of any execution at all.
