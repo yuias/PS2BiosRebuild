@@ -41,6 +41,16 @@ class Irx:
             sys.exit(f"irxinfo: {path} is not an ELF file")
         self.load_off, self.load_size, self.iopmod_off = self._segments()
 
+    @classmethod
+    def fromBytes(cls, data: bytes, what: str = "<module>") -> "Irx":
+        """A module read from inside an archive rather than from a file."""
+        irx = cls.__new__(cls)
+        irx.data = data
+        if data[:4] != b"\x7fELF":
+            sys.exit(f"irxinfo: {what} is not an ELF file")
+        irx.load_off, irx.load_size, irx.iopmod_off = irx._segments()
+        return irx
+
     def _segments(self) -> tuple[int, int, int | None]:
         d = self.data
         (phoff,) = struct.unpack_from("<I", d, 28)

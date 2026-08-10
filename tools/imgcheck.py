@@ -21,6 +21,7 @@ import sys
 
 import eesim
 import iopsim
+import irxinfo
 import romdir
 
 # spec/03 BOOT-5a: what a retail boot emits, now that the handoff to IOPBOOT
@@ -31,7 +32,15 @@ EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
 # base load address the `@` token set (spec/03 BOOT-9).
 BOOT_LIST = 0x2000
 EXPECTED_BASE = 0x800
-EXPECTED_MODULES = 0             # none are built yet, so the list names none
+EXPECTED_MODULES = 1             # SYSMEM; the rest of the boot list follows
+
+# Scaffolding inside the module: where its entry records that it ran, and what
+# it writes there (src/iop/sysmem.S).
+MODULE_MARKER = 0x3000
+MODULE_MARK = 0x5359534D
+# spec/02 IRX-5: the export table's entries are absolute pointers, so after
+# loading every one of them must have moved by the load base.
+EXPORT_TABLE = 0x40
 
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
@@ -39,8 +48,9 @@ RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
 KERNEL_BANNER = "PS2BiosRebuild EE kernel"
 
 NOT_YET = (
-    "loading an IRX module: IOPBOOT locates them but cannot yet relocate, "
-    "link or enter one (spec/02)",
+    "binding imports between modules, and registering libraries (spec/02 "
+    "IRX-9, IRX-10)",
+    "the rest of the boot list: SYSMEM is the only module built",
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
@@ -72,6 +82,21 @@ def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
     return problems, names
 
 
+def moduleFromImage(image: pathlib.Path, name: str) -> irxinfo.Irx:
+    """A module as the archive stores it, which is what the loader reads."""
+    data = image.read_bytes()
+    entries = romdir.parseEntries(data, romdir.findTable(data))
+    entry = next(e for e in entries if e.name == name)
+    return irxinfo.Irx.fromBytes(
+        data[entry.offset:entry.offset + entry.size], name)
+
+
+def checkModule(image: pathlib.Path) -> list[str]:
+    """The built module against the conformance checker the reference passes."""
+    return [f"IRX: {problem}"
+            for problem in irxinfo.checkModule(moduleFromImage(image, "SYSMEM"))]
+
+
 def checkIop(image: pathlib.Path) -> list[str]:
     """The boot block's IOP path, to where it runs out of image."""
     problems: list[str] = []
@@ -95,6 +120,33 @@ def checkIop(image: pathlib.Path) -> list[str]:
     if count != EXPECTED_MODULES:
         problems.append(f"BOOT-9: {count} module names resolved, want "
                         f"{EXPECTED_MODULES}")
+        return problems
+
+    # IRX-12: the module was copied, relocated and entered.
+    if bus.read(MODULE_MARKER, 4) != MODULE_MARK:
+        problems.append(f"IRX-12: the module's entry left "
+                        f"{bus.read(MODULE_MARKER, 4):#010x} at "
+                        f"{MODULE_MARKER:#x}, not {MODULE_MARK:#010x} -- it "
+                        f"was not entered")
+    record = bus.read(MODULE_MARKER + 4, 4)
+    if not base <= record < len(bus.ram):
+        problems.append(f"IRX-12c: the entry was given {record:#x} as its "
+                        f"module record, which is not in RAM")
+    elif bus.read(record + 0x10, 4) == 0 or bus.read(record + 0x14, 4) is None:
+        problems.append("IRX-12c: the module record's +0x10 entry is empty")
+
+    # IRX-3: every export entry is an R_MIPS_32, so each must have moved by the
+    # base. Comparing against the stored file is what makes this a test of the
+    # relocation rather than of the table.
+    entries = moduleFromImage(image, "SYSMEM").exportEntries(EXPORT_TABLE)
+    for index, value in enumerate(entries):
+        at = base + EXPORT_TABLE + 0x14 + index * 4
+        loaded = bus.read(at, 4)
+        if loaded != value + base:
+            problems.append(f"IRX-3: export {index} loaded as {loaded:#x}, "
+                            f"want {value + base:#x} -- the R_MIPS_32 fixup "
+                            f"was not applied")
+            break
     return problems
 
 
@@ -199,6 +251,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     problems, names = checkArchive(arguments.image)
+    problems += checkModule(arguments.image)
     problems += checkIop(arguments.image)
     problems += checkEe(arguments.image)
 
@@ -209,7 +262,7 @@ def main() -> int:
         return 1
 
     print(f"{arguments.image}: ok -- {len(names)} archive entries; the IOP path "
-          f"reaches IOPBOOT and reads its boot list; the EE path reaches "
+          f"loads and enters its first module; the EE path reaches "
           f"its kernel, which "
           f"announces itself and serves its syscalls")
     print("\nnot required of the image yet:")

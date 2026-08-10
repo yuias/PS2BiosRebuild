@@ -62,6 +62,7 @@ must also stay outside the repository.
 | `tools/eesim.py` | Boot an image's EE side on a simulated R5900, call its syscalls, and judge both against `docs/spec/`. |
 | `tools/ps2sim.py` | Boot both CPUs together across a modelled SIF, so each stops waiting for the other. |
 | `tools/mkromver.py` | Write the archive's ROMVER file. |
+| `tools/mkirx.py` | Turn a linked ELF into an IOP module, per `docs/spec/02-module-abi.md`. |
 | `tools/imgcheck.py` | Judge our own built image at the depth the build has reached. |
 
 ```sh

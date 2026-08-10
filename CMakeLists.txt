@@ -49,9 +49,35 @@ function(ps2AddComponent name)
       COMMENT "Extracting ${name}.bin")
 endfunction()
 
+# An IOP module goes through one more step than a raw component: it is linked
+# at zero with its fixups kept, and `tools/mkirx.py` rewrites that into the
+# container of spec/02 IRX-1, emitting the matching EXTINFO as it goes so the
+# two carry the same name and version (IRX-2a).
+function(ps2AddModule name)
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "" "MODULE;VERSION" "SOURCES")
+  add_executable(${name}.elf ${ARG_SOURCES})
+  set(script "${CMAKE_CURRENT_SOURCE_DIR}/src/link/irx.ld")
+  target_link_options(${name}.elf PRIVATE "-T${script}" --emit-relocs)
+  set_target_properties(${name}.elf PROPERTIES LINK_DEPENDS "${script}")
+  add_custom_command(TARGET ${name}.elf POST_BUILD
+      COMMAND "${Python3_EXECUTABLE}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkirx.py"
+              "$<TARGET_FILE:${name}.elf>"
+              -o "${CMAKE_CURRENT_BINARY_DIR}/${name}.irx"
+              --name "${ARG_MODULE}" --version "${ARG_VERSION}"
+              --date "${PS2_ROMVER_DATE}"
+              --extinfo "${CMAKE_CURRENT_BINARY_DIR}/${name}.extinfo"
+      BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/${name}.irx"
+                 "${CMAKE_CURRENT_BINARY_DIR}/${name}.extinfo"
+      COMMENT "Building the ${ARG_MODULE} module")
+endfunction()
+
 ps2AddComponent(reset  SCRIPT reset.ld  SOURCES src/boot/reset.S)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
 ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
+ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
+    SOURCES src/iop/sysmem.S)
+
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
     src/kernel/entry.S
@@ -79,7 +105,7 @@ add_custom_command(
             "${PS2_MANIFEST}" -o "${PS2_IMAGE}" --size ${PS2_IMAGE_SIZE}
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" "${PS2_ROMVER}"
-            reset.elf rdram.elf iopboot.elf kernel.elf
+            reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

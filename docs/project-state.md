@@ -111,7 +111,8 @@ per-file, and the eventual build will assemble the image the same way.
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | Build system | **CMake + Ninja + LLVM** — `docs/implementation.md` |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
-| `IOPBOOT` + `IOPBTCONF` | **built** — resolves and parses the boot list; loading is next |
+| `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list and loads modules from it |
+| IRX producer + loader | **built** — `tools/mkirx.py`; `SYSMEM` passes `irxinfo --check` and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
 | Everything else in the image | not started |
