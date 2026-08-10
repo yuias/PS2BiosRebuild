@@ -360,6 +360,40 @@ def scanLibraries(bus: "Bus") -> tuple[list, list]:
     return exports, imports
 
 
+class FreeWatcher:
+    """Records the module teardowns of `docs/spec/02-module-abi.md` IRX-12b.
+
+    A module whose entry asks not to stay is released through `sysmem`
+    ordinal 5. That ordinal's address is not known until `SYSMEM` has been
+    loaded *and relocated*, so it is resolved lazily: before relocation the
+    table holds small file offsets, after it they are RAM addresses above the
+    table itself, which is the test used here.
+    """
+
+    SYSMEM_TABLE = 0x830             # where the boot leaves it (analysis 05)
+    FREE_ORDINAL = 5
+
+    def __init__(self, bus: "Bus") -> None:
+        self.bus = bus
+        self.free_entry: int | None = None
+        self.frees: list[tuple[int, int]] = []      # (address, step)
+
+    def resolve(self) -> None:
+        table = self.SYSMEM_TABLE
+        first = self.bus.read(table + 0x14, 4)
+        if first > table:                            # relocated, so usable
+            self.free_entry = self.bus.read(
+                table + 0x14 + self.FREE_ORDINAL * 4, 4)
+
+    def observe(self, cpu: "Cpu") -> None:
+        if self.free_entry is None:
+            if cpu.steps % 4096 == 0:
+                self.resolve()
+            return
+        if cpu.pc == self.free_entry:
+            self.frees.append((cpu.r[4], cpu.steps))
+
+
 def reportLibraries(exports: list, imports: list) -> None:
     print(f"\nlibraries registered in RAM: {len(exports)}")
     for at, tag, version, flags in exports:
@@ -383,10 +417,12 @@ EXPECTED_LIBRARIES = [
     "romdrv", "stdio", "sifman",
 ]
 PINNED_LIBRARIES = {"thrdman"}
+EXPECTED_FREES = 4               # IRX-12a, observed: two variant halves and two more
 SINGLE_VARIANT_LIBRARIES = {"intrman", "timrman"}
 
 
-def checkBoot(bus: "Bus", exports: list, imports: list) -> list[str]:
+def checkBoot(bus: "Bus", exports: list, imports: list,
+              watcher: "FreeWatcher") -> list[str]:
     """Judge a boot against the specifications. Returns the failures."""
     problems: list[str] = []
 
@@ -425,6 +461,17 @@ def checkBoot(bus: "Bus", exports: list, imports: list) -> list[str]:
             f"{[(hex(a), t) for a, t in unbound[:3]]}")
     require(bool(imports), "IRX-9", "no import tables found at all")
 
+    # IRX-12: modules that ask not to stay really are torn down, and the
+    # release is on a 0x100 boundary. The reference frees four during the boot
+    # -- the rejected halves of the two P/I variant pairs among them.
+    require(len(watcher.frees) >= EXPECTED_FREES, "IRX-12a",
+            f"{len(watcher.frees)} module images were released, want at least "
+            f"{EXPECTED_FREES}: no module was observed asking to be freed")
+    misaligned = [address for address, _ in watcher.frees if address % 0x100]
+    require(not misaligned, "IRX-12b",
+            f"released bases {[hex(a) for a in misaligned]} are not rounded "
+            f"down to a 0x100 boundary")
+
     require(not bus.unmapped - {0x1D000020, 0x1D000060}, "hardware",
             f"unexpected unmapped access: "
             f"{[hex(a) for a in sorted(bus.unmapped)][:6]}")
@@ -435,10 +482,12 @@ def run(image: pathlib.Path, max_steps: int, trace: int, check: bool) -> int:
     bus = Bus(image.read_bytes())
     cpu = Cpu(bus)
 
+    watcher = FreeWatcher(bus)
     seen_post = 0
     while cpu.steps < max_steps and cpu.stop_reason is None:
         if trace and cpu.steps < trace:
             print(f"  {cpu.steps:6d} pc={cpu.pc:#010x}")
+        watcher.observe(cpu)
         cpu.step()
         if len(bus.post) > seen_post:
             pc, value = bus.post[-1]
@@ -451,7 +500,7 @@ def run(image: pathlib.Path, max_steps: int, trace: int, check: bool) -> int:
     exports, imports = scanLibraries(bus)
 
     if check:
-        problems = checkBoot(bus, exports, imports)
+        problems = checkBoot(bus, exports, imports, watcher)
         for p in problems:
             print(f"{image}: {p}", file=sys.stderr)
         if problems:
@@ -468,6 +517,10 @@ def run(image: pathlib.Path, max_steps: int, trace: int, check: bool) -> int:
         print(f"stopped:        {cpu.stop_reason}")
     elif cpu.steps >= max_steps:
         print("stopped:        step limit reached")
+    if watcher.frees:
+        print(f"module images released (IRX-12): {len(watcher.frees)}")
+        for address, step in watcher.frees:
+            print(f"   {address:#08x}  at step {step}")
     if bus.unmapped:
         addrs = sorted(bus.unmapped)[:8]
         print(f"unmapped access at: {[hex(a) for a in addrs]}"
