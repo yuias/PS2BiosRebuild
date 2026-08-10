@@ -81,7 +81,8 @@ per-file, and the eventual build will assemble the image the same way.
 | `IGREETING`, `REBOOT`, `LOADFILE`, CDVD, `FILEIO`, `SECRMAN`, `EESYNC` | analysed — `docs/analysis/12-ee-facing-services.md` |
 | **IOP boot list** | **complete — all 29 modules surveyed** |
 | EE kernel: vectors, exceptions, syscall table | analysed — `docs/analysis/14-ee-kernel-syscalls.md` |
-| EE kernel: what each syscall does | not started |
+| EE kernel: syscall groups, boot tail | analysed — `docs/analysis/15-ee-syscall-groups.md` |
+| EE kernel: individual syscall behaviour | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
@@ -119,6 +120,13 @@ document each cites):
   targets, number passed in `$v1` with negatives negated. Thirteen slots share
   a handler that reports the undefined number; three are published through
   KSEG1 so they run uncached. (`14`)
+- Syscall aliasing comes in consecutive blocks duplicated at a fixed offset
+  (`0x14`–`0x19` → `0x1A`–`0x1F`, `0x63`–`0x66` → `0x67`–`0x6A`). Slots `0x03`
+  and `0x3F` are *retired*, kept occupied so an old caller is diagnosed. (`15`)
+- The boot tail: syscall `0x06` is the program loader and uses `EELOAD` as its
+  stub; syscall `0x7B` is `0x06` with the path pinned to `rom0:OSDSYS`; the
+  default boot passes `argv = { "BootBrowser" }`. `rom0:` is served by the
+  IOP's `ROMDRV` across the SIF. (`15`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -161,9 +169,9 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **What the defined EE syscalls do**, group by group, the way the IOP
-   libraries were taken: 112 of the 125 slots have real implementations, and
-   the aliasing already hints at the grouping. `tools/eeksys.py --all` lists
-   them.
-5. **`EELOAD`** — loaded by something later, and finding out what loads it is
-   the remaining gap in the EE boot picture.
+4. **`OSDSYS`**, the last unexamined major component, and the boot flow that
+   reaches it now that the tail is understood.
+5. **The first EE specification.** The vector page, exception dispatch and
+   syscall entry are settled enough to write as `docs/spec/04`, with the
+   syscall table's slot-by-slot contract following as the behaviour of each
+   group is established.
