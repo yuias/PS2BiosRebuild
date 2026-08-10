@@ -142,6 +142,11 @@ as a flag and both forms reach the same slot.
 **EE-7c:** The handler advances `EPC` by 4 before dispatching, so the eventual
 return resumes after the `syscall` instruction rather than re-executing it.
 
+**EE-7g:** That advance is a *default*, not a guarantee. The scheduler group
+(`docs/analysis/17`) overwrites `EPC` with its operation's return value and
+installs a different stack before `eret`, so a scheduling syscall may resume a
+different thread entirely. A rebuild must support both.
+
 **EE-7d:** It switches to a kernel stack near `0x80018E80` before anything that
 can nest.
 
@@ -183,6 +188,14 @@ change their behaviour around device memory.
 
 **EE-8f:** The handlers for slots `0x0D`–`0x1F` live inside the vector page and
 must stay there (EE-5b).
+
+**EE-8h:** Eight operations are published at **two slot numbers with two
+distinct handlers** — one that reschedules and one that returns to the caller:
+`0x25`/`0x26`, `0x29`/`0x2A`, `0x2B`/`0x2C`, `0x2D`/`0x2E`, `0x33`/`0x34`,
+`0x39`/`0x3A`, `0x41`/`0x49`, `0x42`/`0x43`. These are **not** EE-8c aliases:
+the table entries differ, and collapsing them onto one handler would silently
+make every direct call reschedule or every scheduling call return locally.
+(`docs/analysis/17`)
 
 **EE-8g:** Slots `0x14`–`0x17` (with their `0x1A`–`0x1D` aliases) toggle one
 bit of a hardware mask: `0x1000F010` bit `n` for the INTC pair, `0x1000E010`
