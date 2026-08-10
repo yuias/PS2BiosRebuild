@@ -22,8 +22,11 @@ the working document and is kept current.
 > `tools/iopsim.py` (IOP execution), `tools/eeksys.py`/`tools/eeabi.py` (EE
 > kernel, statically) and `tools/eesim.py`, which **boots the EE on a simulated
 > R5900**, reaches the kernel, and calls its syscalls — so the EE's dynamic
-> requirements are executed rather than described. **What remains is
-> implementation**: there is still no build system for the image's contents.
+> requirements are executed rather than described, and `tools/ps2sim.py`, which
+> **runs both CPUs against each other** across a modelled SIF — completing the
+> handshake that each was blocked on and finishing the IOP boot. **What remains
+> is implementation**: there is still no build system for the image's
+> contents.
 
 ---
 
@@ -101,6 +104,9 @@ per-file, and the eventual build will assemble the image the same way.
 | EE static gates | `tools/eeksys.py --check`, `tools/eeabi.py --check`, both tested in both directions |
 | EE simulator | **a gate** — `tools/eesim.py --check`, boots both reference images and calls their syscalls |
 | EE execution | analysed — `docs/analysis/22-ee-execution.md` |
+| Joining the two CPUs (SIF handshake) | analysed — `docs/analysis/23-joining-the-two-cpus.md` |
+| Joint simulator | **a gate** — `tools/ps2sim.py --check`, tested with `--no-bridge` |
+| **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -182,6 +188,13 @@ document each cites):
 - The kernel prints its own TLB layout — scratchpad at entry 0, its own
   mappings at 1–12, allocatable from 13 — which settles what `spec/05` SYS-7b
   had to leave open about syscall `0x09` choosing a `Random` index. (`22`)
+- The IOP frees **four** module images during its own boot and a fifth,
+  `SIFINIT`, only after the EE handshake. Two of the four are the rejected
+  halves of the `P`/`I` variant pairs, which `06` predicted from the code.
+  (`23`)
+- `MSFLG`/`SMFLG` are **asymmetric**: each is set by one CPU and cleared by the
+  other. Modelled as plain storage the handshake livelocks. (`23`, `spec/03`
+  BOOT-10c)
 - The two images' EE reset paths are **not** the same code: v2.00 clears the
   upper 64 bits of four registers with `padduw` first. `tools/romdis.py` cannot
   show this, since LLVM has no R5900 target; it surfaced only under execution.
@@ -202,12 +215,12 @@ and three loose ends.
    the image from per-file inputs the way `tools/mkromdir.py` already can, and
    the first contents written from `docs/spec/`. Nothing in the analysis is
    blocking it.
-2. **Join the two simulators.** `tools/iopsim.py` stops where the IOP waits for
-   the EE and `tools/eesim.py` stops where the EE waits for the IOP. Running
-   them against each other across a modelled SIF would execute `spec/04` EE-9's
-   boot tail *and* settle **residency (IRX-12)**, unverified since
-   `docs/analysis/12` because the one-shot modules that would demonstrate it
-   sit past the handshake. One capability, two long-standing gaps.
+2. **SIF as a data path, not just registers.** `tools/ps2sim.py` shares the six
+   handshake registers, which is enough to finish the IOP boot and tear down
+   `SIFINIT`. It does not move data: after the handshake the EE waits on a SIF1
+   DMA that nothing drains. Modelling SIF0/SIF1 as real channels on both sides,
+   with their packet headers and an interrupt to wake the IOP's driver, is what
+   `spec/04` EE-9's boot tail — `rom0:OSDSYS` across the bus — needs.
 3. **Nine EE slots have an inferred rather than observed return.** `0x63` and
    `0x67` leave through the CP0 jump table, and seven others take their result
    from a callee (`spec/05` SYS-1c). Following those by hand would replace an

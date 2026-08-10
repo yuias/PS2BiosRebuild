@@ -12,7 +12,9 @@ archive built from `docs/spec/01-rom-archive.md` reproduces both reference
 images byte for byte, every IRX module passes `tools/irxinfo.py --check`,
 `tools/iopsim.py --check` boots the IOP side and judges the result, and
 `tools/eesim.py --check` boots the EE side on a simulated R5900, reaching the
-kernel and calling its syscalls. The image's actual contents are not started.
+kernel and calling its syscalls. Run together by `tools/ps2sim.py`, the two
+sides complete their handshake and the IOP boot finishes. The image's actual
+contents are not started.
 [`docs/project-state.md`](docs/project-state.md) is the working document and
 records exactly where things stand.
 
@@ -49,6 +51,7 @@ must also stay outside the repository.
 | `tools/eeksys.py` | Report or check the EE kernel's exception and syscall tables. |
 | `tools/eeabi.py` | Infer each EE syscall's arguments and return value, and check them against `docs/spec/05-ee-syscall-abi.md`. |
 | `tools/eesim.py` | Boot an image's EE side on a simulated R5900, call its syscalls, and judge both against `docs/spec/`. |
+| `tools/ps2sim.py` | Boot both CPUs together across a modelled SIF, so each stops waiting for the other. |
 
 ```sh
 # what the archive holds, with computed offsets
@@ -101,6 +104,15 @@ kernel, prints what the kernel prints, and can call individual syscalls:
 python3 tools/eesim.py assets/SCPH-50000.bin            # report the boot
 python3 tools/eesim.py assets/SCPH-50000.bin --check    # judge it, exit 1 on failure
 python3 tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 3
+```
+
+Run against each other, the two simulators unblock one another: the IOP boot
+runs to completion and tears down its last one-shot module.
+
+```sh
+python3 tools/ps2sim.py assets/SCPH-50000.bin            # report the joint boot
+python3 tools/ps2sim.py assets/SCPH-50000.bin --check    # judge it
+python3 tools/ps2sim.py assets/SCPH-50000.bin --traffic  # the SIF conversation
 ```
 
 ## Layout
