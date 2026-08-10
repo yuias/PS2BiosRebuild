@@ -164,9 +164,14 @@ EE kernel is under analysis. It sets R5900 `Config` (`0x0007_3003`) and
 sets up a stack in scratchpad (`0x7000_3FF0`), calls a ROM routine at
 `0x9FC4_1000` and another near `0x9FC0_0BF0`, invalidates the instruction and
 data caches over a `0x2000`-line range, and finally jumps to `0x8000_1000` in
-main RAM — the entry point of the code it has staged there (the EE loader,
-`EELOAD` in the archive, is the expected source). The specifics of that staging
-are deferred.
+main RAM — the entry point of the code it has staged there.
+
+> **Corrected by `docs/analysis/13-ee-boot-path.md`.** The guess that the staged
+> file is `EELOAD` is wrong: the routine at `0x9FC0_0BF0` resolves the name
+> **`KERNEL`**, copies it to physical 0, and the entry at `0x8000_1000` is
+> `0x1000` bytes into that file — everything before it being the EE exception
+> vectors. The call to `0x9FC4_1000` is the archive's `RDRAM` file. `13` has the
+> full path.
 
 ## What this pins for the rebuild
 
