@@ -23,11 +23,15 @@ import eesim
 import iopsim
 import romdir
 
-# The IOP path stops here for now: `IOPBOOT` is not in the image, so the boot
-# block's name lookup fails and reports it (spec/03 BOOT-6d, BOOT-5b). That is
-# the specified behaviour for a missing module, and the POST prefix before it
-# is BOOT-5a's retail sequence.
-EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0xFA]
+# spec/03 BOOT-5a: what a retail boot emits, now that the handoff to IOPBOOT
+# succeeds.
+EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
+
+# Where IOPBOOT leaves what it parsed out of the boot list: a count, then the
+# base load address the `@` token set (spec/03 BOOT-9).
+BOOT_LIST = 0x2000
+EXPECTED_BASE = 0x800
+EXPECTED_MODULES = 0             # none are built yet, so the list names none
 
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
@@ -35,7 +39,8 @@ RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
 KERNEL_BANNER = "PS2BiosRebuild EE kernel"
 
 NOT_YET = (
-    "IOPBOOT and the IOP kernel modules (spec/03 BOOT-7, spec/02)",
+    "loading an IRX module: IOPBOOT locates them but cannot yet relocate, "
+    "link or enter one (spec/02)",
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
@@ -76,8 +81,20 @@ def checkIop(image: pathlib.Path) -> list[str]:
         cpu.step()
     post = [value for _, value in bus.post]
     if post != EXPECTED_POST:
-        problems.append(f"BOOT-5: POST {[hex(v) for v in post]} != "
+        problems.append(f"BOOT-5a: POST {[hex(v) for v in post]} != "
                         f"{[hex(v) for v in EXPECTED_POST]}")
+
+    # BOOT-7 and BOOT-9: IOPBOOT resolved IOPBTCONF by name -- which exercises
+    # the whole ARC-4 scan -- and parsed its tokens.
+    count = bus.read(BOOT_LIST, 4)
+    base = bus.read(BOOT_LIST + 4, 4)
+    if base != EXPECTED_BASE:
+        problems.append(f"BOOT-9: the boot list's base address parsed as "
+                        f"{base:#x}, want {EXPECTED_BASE:#x} -- IOPBOOT did "
+                        f"not reach or read IOPBTCONF")
+    if count != EXPECTED_MODULES:
+        problems.append(f"BOOT-9: {count} module names resolved, want "
+                        f"{EXPECTED_MODULES}")
     return problems
 
 
@@ -192,7 +209,8 @@ def main() -> int:
         return 1
 
     print(f"{arguments.image}: ok -- {len(names)} archive entries; the IOP path "
-          f"reaches its handoff; the EE path reaches its kernel, which "
+          f"reaches IOPBOOT and reads its boot list; the EE path reaches "
+          f"its kernel, which "
           f"announces itself and serves its syscalls")
     print("\nnot required of the image yet:")
     for item in NOT_YET:

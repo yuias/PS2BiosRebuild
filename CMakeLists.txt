@@ -51,6 +51,7 @@ endfunction()
 
 ps2AddComponent(reset  SCRIPT reset.ld  SOURCES src/boot/reset.S)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
+ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
     src/kernel/entry.S
@@ -78,7 +79,7 @@ add_custom_command(
             "${PS2_MANIFEST}" -o "${PS2_IMAGE}" --size ${PS2_IMAGE_SIZE}
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" "${PS2_ROMVER}"
-            reset.elf rdram.elf kernel.elf
+            reset.elf rdram.elf iopboot.elf kernel.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

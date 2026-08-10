@@ -110,7 +110,8 @@ per-file, and the eventual build will assemble the image the same way.
 | Joint simulator | **a gate** — `tools/ps2sim.py --check`, tested with `--no-bridge` |
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | Build system | **CMake + Ninja + LLVM** — `docs/implementation.md` |
-| Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP reaches its handoff |
+| Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
+| `IOPBOOT` + `IOPBTCONF` | **built** — resolves and parses the boot list; loading is next |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
 | Everything else in the image | not started |

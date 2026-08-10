@@ -94,17 +94,22 @@ The vector page, EE-5a's identical `0x000`/`0x180`, EE-6b's single common
 handler, and EE-8a to EE-8c's slot count, absence of nulls and alias blocks all
 pass already.
 
-**The IOP reaches its handoff and stops as specified.**
+**The IOP reaches `IOPBOOT` and reads its boot list.**
 
 ```sh
 python3 tools/iopsim.py build/rom.bin
-# POST sequence: ['0xfc', '0x2', '0x3', '0x4', '0x5', '0x8', '0xfa']
+# POST sequence: ['0xfc', '0x2', '0x3', '0x4', '0x5', '0x8', '0x9']
 ```
 
-`0xFC, 2, 3, 4, 5, 8` is `spec/03` BOOT-5a's retail sequence. The `0xFA` that
-follows is not a bug: `IOPBOOT` is not in the image yet, so the boot block's
-name lookup fails and reports it, which is exactly BOOT-6d and BOOT-5b. A
-missing module is supposed to be visible.
+That is `spec/03` BOOT-5a's retail sequence, complete: the handoff of BOOT-6
+resolved `IOPBOOT` by name and entered it with the RAM-size byte, and `IOPBOOT`
+sized its stack from that byte (BOOT-7), resolved `IOPBTCONF` with its own copy
+of the scan, and parsed the list (BOOT-9) — leaving the base address `0x800`
+and a count of resolved names in low RAM where `tools/imgcheck.py` reads them.
+
+The count is zero because no IOP module is built yet. Locating them is done;
+turning an IRX file into a running module is `spec/02`'s subject and the next
+piece of work.
 
 ## Deviations from the reference, and why
 
@@ -120,6 +125,13 @@ from the image's own archive rather than assuming the reference's offset.
 sixteen bytes an iteration. Four word loads and stores move the same bytes to
 the same place; the R5900-only encodings are not required for the result, and
 the assembler does not know them.
+
+**`IOPBOOT` is position-independent.** The reference is linked at the address
+its archive offset gives it, and the archive keeps a padding entry to hold it
+there (`spec/03` BOOT-7a). Ours computes its own base with a `bal` and uses
+`bal` for every internal call, because `jal` encodes a *link-time* absolute
+target and would jump into nothing once the file moves. No padding entry then
+has to be kept in step with the layout.
 
 **The exception dispatcher restores `$t9` through a stable base.** EE-6 quotes
 the reference restoring it through a register the table lookup has already
@@ -145,7 +157,8 @@ first-pair bit preservation and the POST side effect are all implemented.
 `ninja -C build check` prints this list at the end of every successful run, so
 it cannot quietly go stale:
 
-- `IOPBOOT` and the IOP kernel modules (`spec/03` BOOT-7, `spec/02`)
+- loading an IRX module: `IOPBOOT` locates them but cannot yet relocate, link
+  or enter one (`spec/02`)
 - 111 of the 125 syscall slots, which resolve to the reporter rather than to
   their own handlers (`spec/05` SYS-1)
 - EE-7e's context save, and the scheduler that needs it
