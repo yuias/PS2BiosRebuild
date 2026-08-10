@@ -87,6 +87,7 @@ per-file, and the eventual build will assemble the image the same way.
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
+| EE reset path + kernel interface | **specified and checked** — `docs/spec/04-ee-kernel.md` |
 | IOP simulator | **a gate** — `tools/iopsim.py --check`, tested in both directions |
 | Build system / implementation | not started |
 
@@ -171,7 +172,7 @@ In rough order; each becomes a `docs/analysis/` document:
    handshake or a targeted harness that loads a single module.
 4. **`OSDSYS`**, the last unexamined major component, and the boot flow that
    reaches it now that the tail is understood.
-5. **The first EE specification.** The vector page, exception dispatch and
-   syscall entry are settled enough to write as `docs/spec/04`, with the
-   syscall table's slot-by-slot contract following as the behaviour of each
-   group is established.
+5. **The EE has no simulator**, so `spec/04`'s dynamic requirements are
+   described and statically checked but never executed — the main asymmetry
+   with the IOP side, and worth stating in any release material. An R5900
+   simulator is a much larger undertaking than the R3000 one.

@@ -1,0 +1,230 @@
+# Specification: The EE Reset Path and Kernel Interface
+
+Derived from `docs/analysis/13-ee-boot-path.md`,
+`14-ee-kernel-syscalls.md` and `15-ee-syscall-groups.md`.
+
+`docs/spec/03-boot-chain.md` covers the IOP half of the reset vector. This
+covers the other half and the interface the EE kernel publishes: the vector
+page, exception dispatch, and the syscall table that everything running on the
+EE calls through.
+
+What each individual syscall *does* is not specified here. That is the largest
+remaining body of analysis, and it will arrive as its own document once the
+groups of `15` are worked through; this fixes the frame those slots live in.
+
+## EE-1: Reset entry
+
+The EE enters at `0xBFC00800` (`spec/03` BOOT-1) and, before anything else:
+
+| Register | Value |
+| --- | --- |
+| `Config` (CP0 `$16`) | `0x00073003` |
+| `Status` (CP0 `$12`) | `0x70400000` |
+| `Count` (CP0 `$9`) | `0` |
+| `Compare` (CP0 `$11`) | `1` |
+
+then writes `0xFFFFFFFF` to `0xB000F500` before touching the TLB. Every CP0
+write is followed by `sync.p`.
+
+**EE-1a:** One TLB entry is written, at index 0, with `EntryHi = 0x70000000`,
+`EntryLo0 = 0x80000007`, `EntryLo1 = 0x00000007` and `PageMask = 0`, committed
+with `tlbwi`. This maps the **scratchpad**, and it must exist before the next
+step because the reset path has no other usable memory.
+
+**EE-1b:** The stack is set to `0x70003FF0` — inside that scratchpad mapping.
+Main RAM is not usable until EE-2 has run.
+
+## EE-2: RDRAM is called by address
+
+The reset path calls `0x9FC41000` — ROM offset `0x41000`, which is where the
+archive stores the `RDRAM` file. It is reached by **hard-coded address, not by
+name**.
+
+**EE-2a:** `RDRAM`'s offset within the archive is therefore load-bearing in a
+way no other file's is. A build that lays the archive out differently must
+either place `RDRAM` at `0x41000` or change this constant to match; the two
+cannot drift.
+
+## EE-3: Locating and loading the kernel
+
+The routine at `0xBFC00BF0`, called through its KSEG0 alias `0x9FC00BF0`,
+carries its own copy of the self-locating ROMDIR scan (`ARC-4`) — the fifth
+independent implementation in the image and the only one in R5900 code.
+
+**EE-3a:** The table search range is `0x9FC00000..0x9FC10000`. That bounds
+where the *table* may be found, not where files may live.
+
+**EE-3b:** It resolves the name **`KERNEL`** and copies that file to
+`0xA0000000` — physical address 0 — using `lq`/`sq`, sixteen bytes per
+iteration, for a length of the file's size rounded up to 16.
+
+**EE-3c:** Both called routines are entered through KSEG0 (the reset vector
+masks the target with `0x9FFFFFFF`) so they run cached, while the reset vector
+itself runs uncached.
+
+**EE-3d:** After the copy the instruction and data caches are invalidated, and
+control transfers with `jr` to `0x80001000`.
+
+## EE-4: The kernel's placement is its layout
+
+Because `KERNEL` lands at physical 0 and is entered at `0x80001000`, its first
+`0x1000` bytes are **the EE exception vector page**, and the entry point is the
+first thing after it.
+
+**EE-4a:** The boot's result is passed to the kernel in the scratchpad word at
+`0x70003FF0`, not in a register. The kernel entry reads it immediately.
+
+## EE-5: The vector page
+
+Populated offsets, and what must be at each:
+
+| Offset | Architectural vector | Content |
+| --- | --- | --- |
+| `0x000` | TLB refill | the dispatcher of EE-6 |
+| `0x080` | counter | `j` to a common handler |
+| `0x100` | debug | `j` to the same handler as `0x080` |
+| `0x180` | common exception | the dispatcher of EE-6, byte-identical to `0x000` |
+| `0x200` | interrupt | its own entry sequence |
+
+**EE-5a:** `0x000` and `0x180` hold the same instructions. A rebuild may share
+one implementation but must populate both offsets.
+
+**EE-5b:** The remainder of the page, from about `0x800`, holds leaf routines
+that manipulate `Status` and the interrupt-controller registers, reached
+through a jump table at `0x80000AA0`. They are inside the vector page
+deliberately — they must remain reachable regardless of what else is mapped —
+and a rebuild must keep them there.
+
+## EE-6: Exception dispatch
+
+The common entry does not branch on the cause. It saves `$t9` to a fixed slot,
+reads `Cause`, masks it with `0x7C`, and uses the result **directly** as a byte
+index into a word table:
+
+```
+lui   $k0, 0x8001
+sd    $t9, 0x5378($k0)
+mfc0  $t9, $13
+andi  $t9, $t9, 0x7c        # ExcCode, already scaled by 4
+addu  $k0, $k0, $t9
+lw    $k0, 0x5340($k0)      # table at 0x80015340
+jr    $k0
+ld    $t9, 0x5378($t9)      # restored in the delay slot
+```
+
+**EE-6a:** The table is at `0x80015340`, fourteen entries for `ExcCode` 0–13.
+
+**EE-6b:** Only `ExcCode 8` (`Sys`) has its own handler. All thirteen others
+point at one common routine. A rebuild must not assume a handler per cause.
+
+**EE-6c:** There is no shift between the mask and the index. Masking with
+`0x7C` rather than `0x7C >> 2` is what makes that work, and a rebuild that
+masks differently must compensate.
+
+## EE-7: The syscall ABI
+
+**EE-7a:** The syscall number is passed in **`$v1`**, not `$v0`.
+
+**EE-7b:** A **negative number is negated**, not rejected: callers use the sign
+as a flag and both forms reach the same slot.
+
+**EE-7c:** The handler advances `EPC` by 4 before dispatching, so the eventual
+return resumes after the `syscall` instruction rather than re-executing it.
+
+**EE-7d:** It switches to a kernel stack near `0x80018E80` before anything that
+can nest.
+
+**EE-7e:** Context is saved with `sq` — 128-bit stores — because the R5900's
+registers are 128 bits wide and the upper halves must survive the call.
+
+**EE-7f:** Number `0x7C` is special-cased before the table lookup and takes its
+own path.
+
+## EE-8: The syscall table
+
+**EE-8a:** The table is at `0x80014F40` and has **125 slots**, numbered `0x00`
+to `0x7C`, indexed by the absolute syscall number.
+
+**EE-8b:** **No slot is null.** Every number in range resolves to code.
+
+**EE-8c:** Slots are shared: 125 slots resolve to 98 distinct targets. The
+sharing is structured, not incidental, and must be reproduced:
+
+| Block | Duplicate |
+| --- | --- |
+| `0x14`–`0x19` | `0x1A`–`0x1F` |
+| `0x63`–`0x66` | `0x67`–`0x6A` |
+
+plus isolated pairs at `0x30`/`0x31`, `0x35`/`0x36`, `0x37`/`0x38`,
+`0x45`/`0x46`, `0x47`/`0x48`.
+
+**EE-8d:** Thirteen slots — `0x00`, `0x03`, `0x08`, `0x3F`, `0x54`–`0x5B`,
+`0x7C` — are bound to a handler that **reports the undefined number** rather
+than returning quietly. Slots `0x03` and `0x3F` are retired rather than never
+defined: the kernel carries a message for each blaming the caller's startup
+code. A rebuild keeps them occupied so an old caller is diagnosed instead of
+jumping into nothing.
+
+**EE-8e:** Slots `0x60`, `0x61` and `0x62` are published through **KSEG1**
+(`0xA0002C00`, `0xA00028C0`, `0xA0002980`) while the other 122 use KSEG0. The
+alias is part of each slot's contract: publishing the cached address would
+change their behaviour around device memory.
+
+**EE-8f:** The handlers for slots `0x0D`–`0x1F` live inside the vector page and
+must stay there (EE-5b).
+
+## EE-9: The boot tail
+
+**EE-9a:** Slot `0x06` is the program loader. It uses the archive file
+`EELOAD` as the stub that replaces the running program — `EELOAD` is not staged
+by the reset vector and is not named in any boot list.
+
+**EE-9b:** Slot `0x7B` is slot `0x06` with the first argument pinned to
+`rom0:OSDSYS`, implemented as a four-instruction wrapper that shifts the
+remaining arguments along and tail-calls it.
+
+**EE-9c:** The default boot invokes that path with `argc = 1` and
+`argv = { "BootBrowser" }`.
+
+**EE-9d:** `rom0:` is the device the IOP's `ROMDRV` registers with `ioman`
+(`docs/analysis/11`), so this call crosses the SIF and is served by the IOP —
+which means the IOP boot of `spec/03` must have completed before EE-9c can
+succeed.
+
+## EE-10: Hardware the kernel brings up
+
+Before the boot tail runs, the kernel initialises DMAC, VU0, VU1, VIF0, VIF1,
+GIF, GS, IPU, INTC, TIMER, FPU, user memory and the scratchpad. The kernel
+announces each step, which is how the list is known; the message text is
+original expression and a rebuild supplies its own (`docs/clean-room-policy.md`
+§3).
+
+## Verification
+
+`tools/eeksys.py --check` asserts the statically checkable requirements of
+EE-5, EE-6 and EE-8 against a `KERNEL` file and exits non-zero naming any that
+fail:
+
+```sh
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>   # outside the repo
+python3 tools/eeksys.py <outdir>/KERNEL --check
+```
+
+The reference passes. As with `spec/02`, the gate is only worth having if it
+bites, so it is tested against mutated kernels — each fails naming its
+requirement:
+
+| Mutation | Result |
+| --- | --- |
+| null slot `0x20` | `EE-8b: null slots: ['0x20']` |
+| slot `0x60` republished as KSEG0 | `EE-8e: kseg1 slots ['0x61', '0x62'] != ['0x60', '0x61', '0x62']` |
+| slot `0x1A` pointed elsewhere | `EE-8c: slot 0x14 and 0x1a differ` |
+
+**What is not verified.** Everything dynamic — EE-1's register values taking
+effect, EE-3's copy, EE-7's ABI in motion, EE-9's boot tail — needs an R5900 to
+execute it. `tools/iopsim.py` does that job for the IOP side and has no EE
+counterpart: an R5900 simulator is a much larger undertaking (128-bit
+registers, `lq`/`sq`, the coprocessors of EE-10), and the honest position is
+that the EE requirements here are *described and statically checked*, not
+executed. That gap is the main reason the EE side is riskier than the IOP side,
+and it should be stated in any release material.

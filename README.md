@@ -44,7 +44,7 @@ must also stay outside the repository.
 | `tools/irxinfo.py` | Inspect an extracted IOP module: `.iopmod` metadata, library tables, export ordinals. |
 | `tools/romdis.py` | Disassemble a raw image or module, for either CPU, at a chosen address. |
 | `tools/iopsim.py` | Boot an image's IOP side on a simulated R3000 and judge it against `docs/spec/`. |
-| `tools/eeksys.py` | Report the EE kernel's exception and syscall tables. |
+| `tools/eeksys.py` | Report or check the EE kernel's exception and syscall tables. |
 
 ```sh
 # what the archive holds, with computed offsets
