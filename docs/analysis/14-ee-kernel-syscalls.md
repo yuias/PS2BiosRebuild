@@ -66,12 +66,7 @@ Masking `Cause` with `0x7C` yields the exception code *already multiplied by
 four*, so it indexes the word table directly — there is no shift. The table:
 
 ```sh
-python3 - <<'PY'
-import struct
-d = open('<outdir>/KERNEL', 'rb').read()
-for i in range(14):
-    print(i, hex(struct.unpack_from('<I', d, 0x15340 + i * 4)[0]))
-PY
+python3 tools/eeksys.py <outdir>/KERNEL
 ```
 
 | `ExcCode` | Handler |
@@ -134,22 +129,18 @@ Four things a rebuild must match exactly:
 ```
 
 ```sh
-python3 - <<'PY'
-import struct, collections
-d = open('<outdir>/KERNEL', 'rb').read()
-e = [struct.unpack_from('<I', d, 0x14f40 + i * 4)[0] for i in range(0x7d)]
-c = collections.Counter(e)
-print('slots', len(e), 'distinct', len(c), 'null', e.count(0))
-print(c.most_common(1))
-PY
-# slots 125 distinct 98 null 0
-# [(0x80001564, 13)]
+python3 tools/eeksys.py <outdir>/KERNEL
+# syscall table at 0x80014f40: 125 slots, 98 distinct targets, 0 null
 ```
 
 - **125 slots, none null.** Every syscall number in range resolves to code.
-- **98 distinct targets**, so slots are shared — several pairs alias one
-  another, the same publishing convention `spec/02` IRX-6b records for the IOP
-  libraries.
+- **98 distinct targets**, so slots are shared. `tools/eeksys.py` groups them:
+  sixteen targets are reached from more than one slot, and the aliasing is
+  systematic rather than incidental — **slots `0x14`–`0x19` duplicate
+  `0x1A`–`0x1F` one for one**, six consecutive pairs, alongside isolated pairs
+  at `0x30`/`0x31`, `0x35`/`0x36`, `0x37`/`0x38`, `0x45`/`0x46`, `0x47`/`0x48`
+  and `0x63`/`0x67`. This is the same publishing convention `spec/02` IRX-6b
+  records for the IOP libraries: two published numbers, one implementation.
 - **Thirteen slots share `0x80001564`**, which is not a silent stub but a
   reporter: it recovers the number and prints a diagnostic naming it. Slots
   `0x00`, `0x03`, `0x08`, `0x3F`, `0x54`–`0x5B` and `0x7C` are undefined this
@@ -169,14 +160,8 @@ reached through **KSEG1, the uncached window**, while the other 122 use the
 cached KSEG0 alias.
 
 ```sh
-python3 - <<'PY'
-import struct
-d = open('<outdir>/KERNEL', 'rb').read()
-for i in range(0x7d):
-    v = struct.unpack_from('<I', d, 0x14f40 + i * 4)[0]
-    if v >> 28 == 0xA:
-        print(hex(i), hex(v), 'offset', hex(v & 0x1FFFFFFF), 'in image', (v & 0x1FFFFFFF) < len(d))
-PY
+python3 tools/eeksys.py <outdir>/KERNEL --slot 0x60
+# syscall 0x60 -> 0xa0002c00 (kseg1), file offset 0x2c00
 ```
 
 The choice of alias is part of each slot's contract, not a formatting detail: a
