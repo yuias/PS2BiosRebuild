@@ -25,8 +25,10 @@ the working document and is kept current.
 > requirements are executed rather than described, and `tools/ps2sim.py`, which
 > **runs both CPUs against each other** across a modelled SIF — completing the
 > handshake that each was blocked on and finishing the IOP boot. **What remains
-> is implementation**: there is still no build system for the image's
-> contents.
+> is implementation**, and it has begun: `cmake -B build -G Ninja` produces a
+> 4 MiB image whose **EE boots into our own kernel**, with `ninja -C build
+> check` judging it at the depth it has reached
+> (`docs/implementation.md`).
 
 ---
 
@@ -107,7 +109,10 @@ per-file, and the eventual build will assemble the image the same way.
 | Joining the two CPUs (SIF handshake) | analysed — `docs/analysis/23-joining-the-two-cpus.md` |
 | Joint simulator | **a gate** — `tools/ps2sim.py --check`, tested with `--no-bridge` |
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
-| Build system / implementation | not started |
+| Build system | **CMake + Ninja + LLVM** — `docs/implementation.md` |
+| Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP reaches its handoff |
+| `RDRAM`, `ROMVER`, `KERNEL` entry | **built** — minimal, spec-derived |
+| Everything else in the image | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
 document each cites):
@@ -211,10 +216,12 @@ The survey phase is finished: every major component has a document and every
 component that can be gated has a gate. What is left is one large piece of work
 and three loose ends.
 
-1. **Implementation.** This is now the main line: a build system that assembles
-   the image from per-file inputs the way `tools/mkromdir.py` already can, and
-   the first contents written from `docs/spec/`. Nothing in the analysis is
-   blocking it.
+1. **Implementation**, continuing in this order, because each step is what the
+   next one needs: `IOPBOOT` and enough of the IOP kernel to load modules
+   (`spec/03` BOOT-7, `spec/02`); the EE vector page, exception dispatch and
+   syscall table (`spec/04` EE-5 to EE-8, `spec/05`); then the handshake of
+   BOOT-10, at which point `tools/ps2sim.py` can judge our image the way it
+   judges the reference.
 2. **SIF as a data path, not just registers.** `tools/ps2sim.py` shares the six
    handshake registers, which is enough to finish the IOP boot and tear down
    `SIFINIT`. It does not move data: after the handshake the EE waits on a SIF1

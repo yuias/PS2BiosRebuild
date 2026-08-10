@@ -4,7 +4,9 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS.
 
-Status: **analysis complete, implementation not started.** Both CPUs are
+Status: **analysis complete; implementation started.** The image builds, its
+EE boots into our own kernel, and the IOP path reaches its handoff — see
+[`docs/implementation.md`](docs/implementation.md). Both CPUs are
 surveyed — the ROM archive format, the boot block, all twenty-nine modules of
 the IOP boot list, and the EE kernel down to the arguments of each of its 125
 syscalls — and five specifications are written and mechanically gated: an
@@ -30,10 +32,17 @@ the rules — and their current limits — honestly.
 | Tool | Version used |
 | --- | --- |
 | Python | 3.11+ |
+| CMake | 3.28+ |
+| Ninja | any |
+| LLVM (clang, ld.lld, llvm-objcopy) | 22 |
 
-That is all, for now: the project is analysis tooling and documentation until
-the first implementation milestone, which will bring a cross-compiling
-toolchain the way the PS1 project's did.
+No cross-gcc is needed: clang assembles MIPS for both processors.
+
+```sh
+cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mipsel-ps2.cmake
+ninja -C build          # build/rom.bin
+ninja -C build check    # judge it against docs/spec/
+```
 
 ## Tooling
 
@@ -52,6 +61,8 @@ must also stay outside the repository.
 | `tools/eeabi.py` | Infer each EE syscall's arguments and return value, and check them against `docs/spec/05-ee-syscall-abi.md`. |
 | `tools/eesim.py` | Boot an image's EE side on a simulated R5900, call its syscalls, and judge both against `docs/spec/`. |
 | `tools/ps2sim.py` | Boot both CPUs together across a modelled SIF, so each stops waiting for the other. |
+| `tools/mkromver.py` | Write the archive's ROMVER file. |
+| `tools/imgcheck.py` | Judge our own built image at the depth the build has reached. |
 
 ```sh
 # what the archive holds, with computed offsets
@@ -126,7 +137,13 @@ docs/clean-room-policy.md
 tools/                  host-side analysis tooling
 ```
 
-`src/` and the build system arrive with the first implementation milestone.
+```
+src/boot/               the boot block and the memory-controller bring-up
+src/kernel/             the EE kernel
+src/link/               one link script per component
+src/rom/                the archive manifest and its EXTINFO sources
+cmake/                  the LLVM toolchain file
+```
 
 ## Target notes
 
@@ -151,6 +168,8 @@ the archive format itself.
   claim naming the command that reproduces it.
 - `docs/spec/NN-*.md` — behavioural specifications with numbered requirement
   IDs (`ARC-1`, `ARC-6b`, …), the input to the implementation.
+- [`docs/implementation.md`](docs/implementation.md) — how the image is built,
+  what it does so far, and every deviation from the reference with its reason.
 - [`docs/clean-room-policy.md`](docs/clean-room-policy.md) — what is and is
   not enforced, and why the "clean room" label is not yet accurate.
 
