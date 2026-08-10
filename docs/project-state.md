@@ -80,7 +80,8 @@ per-file, and the eventual build will assemble the image the same way.
 | `ROMDRV`, `SIFMAN`, `SIFCMD`, `SIFINIT` | analysed — `docs/analysis/11-sif-and-rom-driver.md` |
 | `IGREETING`, `REBOOT`, `LOADFILE`, CDVD, `FILEIO`, `SECRMAN`, `EESYNC` | analysed — `docs/analysis/12-ee-facing-services.md` |
 | **IOP boot list** | **complete — all 29 modules surveyed** |
-| EE kernel (`KERNEL`) | not started |
+| EE kernel: vectors, exceptions, syscall table | analysed — `docs/analysis/14-ee-kernel-syscalls.md` |
+| EE kernel: what each syscall does | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
@@ -114,6 +115,10 @@ document each cites):
   is load-bearing where no other file's is. (`13`)
 - `KERNEL` is copied to physical 0 and entered at `0x80001000`: its first
   `0x1000` bytes are the EE exception vectors. (`13`)
+- The EE syscall table is at `0x80014F40`: 125 slots, none null, 98 distinct
+  targets, number passed in `$v1` with negatives negated. Thirteen slots share
+  a handler that reports the undefined number; three are published through
+  KSEG1 so they run uncached. (`14`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -156,7 +161,9 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **The `KERNEL` image.** Now known to be a vector table followed by kernel
-   code, byte-identical across both reference ROMs, and entered with the boot's
-   result waiting in the scratchpad at `0x70003FF0`. `EELOAD` is loaded by
-   something later — finding out what is part of the same work.
+4. **What the defined EE syscalls do**, group by group, the way the IOP
+   libraries were taken: 112 of the 125 slots have real implementations, and
+   the aliasing already hints at the grouping. `tools/eeksys.py --all` lists
+   them.
+5. **`EELOAD`** — loaded by something later, and finding out what loads it is
+   the remaining gap in the EE boot picture.
