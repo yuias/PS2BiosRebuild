@@ -62,8 +62,8 @@ per-file, and the eventual build will assemble the image the same way.
 | Boot block: EE path detail | outlined only (`02` §"EE reset path") |
 | `IOPBOOT` + `IOPBTCONF` boot list | analysed — `docs/analysis/03-iopboot-and-boot-list.md` |
 | IOP module (IRX) file format | analysed — `docs/analysis/04-iop-module-format.md` |
-| IOP module load/link algorithm (`LOADCORE`) | not started |
-| IOP kernel modules | not started |
+| `SYSMEM`, `LOADCORE` + the link algorithm | analysed — `docs/analysis/05-sysmem-and-loadcore.md` |
+| Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | Build system / implementation | not started |
@@ -80,10 +80,8 @@ Notable early observations to keep in mind (details and repro commands in
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **IOP kernel core**: `SYSMEM` and `LOADCORE` — the first modules the boot
-   list runs, and the base every other module links against. `LOADCORE` also
-   holds the load/relocate/link *algorithm* deferred from `04` (the stub-table
-   byte layout and how an importer's stubs bind to an exporter's entries).
+1. **Exceptions and interrupts**: `EXCEPMAN` and `INTRMANP`/`INTRMANI`, the next
+   modules in boot order and the base for everything event-driven.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
