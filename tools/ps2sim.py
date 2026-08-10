@@ -19,10 +19,12 @@ What that buys, concretely:
     tools/ps2sim.py assets/SCPH-50000.bin --check    # judge it, exit 1 on failure
     tools/ps2sim.py assets/SCPH-50000.bin --traffic  # every SIF register access
 
-Scope, again deliberately small: the **registers** are shared, not the data
-path. SIF DMA is not modelled, so after the handshake the EE waits for a SIF1
-transfer that never completes. Everything up to that point is really executed
-on both sides.
+Scope, again deliberately small. The registers are shared and the two SIF DMA
+channels move data in **normal mode** -- a channel transfers the quadwords it
+was given. The EE's *chain* mode, where a tag list at TADR describes the
+transfer, is not modelled: the reference's driver uses it, so the reference
+still stops after the handshake with its channel idle and nothing sent. Our own
+image uses normal mode and gets its data across.
 """
 
 from __future__ import annotations
@@ -48,6 +50,51 @@ BD6_IDENTITY = 0x1D000060
 
 STEPS_PER_TURN = 2000            # small enough that a poll loop makes progress
 MAX_TURNS = 4000
+
+# The two SIF DMA channels, as each side addresses them. Which IOP channels
+# they are was derived by running the reference and watching which registers
+# its driver touches after the handshake, not assumed:
+#
+#   python3 tools/ps2sim.py assets/SCPH-50000.bin --traffic
+#
+# SIF0 carries IOP -> EE and SIF1 EE -> IOP, and each side drives its own end.
+EE_SIF0, EE_SIF1 = 0x1000C000, 0x1000C400        # CHCR +0, MADR +0x10, QWC +0x20
+IOP_SIF0, IOP_SIF1 = 0x1F801520, 0x1F801530      # MADR +0, BCR +4, CHCR +8
+
+EE_START = 0x100                 # CHCR.STR, which the hardware clears when done
+IOP_START = 0x01000000           # the IOP's equivalent busy bit
+
+
+class SifDma:
+    """The two directions of the SIF, as a queue of bytes each.
+
+    Real hardware has a fixed FIFO and stalls a transfer that outruns it; a
+    queue that grows models the same *result* for a driver that waits for its
+    channel to finish, which is what both sides' drivers do. Nothing here
+    models the tag chains of the EE's chain mode: a transfer moves the
+    quadwords its channel was given, and a chain-mode caller would find its
+    channel idle with nothing sent.
+    """
+
+    def __init__(self) -> None:
+        self.to_ee = bytearray()         # SIF0
+        self.to_iop = bytearray()        # SIF1
+        # (what happened, bytes, address) -- both ends of one transfer are
+        # recorded, because a send that nobody receives is the interesting case.
+        self.transfers: list[tuple[str, int, int]] = []
+
+    def send(self, fifo: bytearray, memory, address: int, length: int,
+             name: str) -> None:
+        chunk = bytes(memory[address:address + length])
+        fifo += chunk + bytes(length - len(chunk))
+        self.transfers.append((name, length, address))
+
+    def receive(self, fifo: bytearray, memory, address: int, length: int,
+                name: str) -> None:
+        taken = bytes(fifo[:length])
+        del fifo[:len(taken)]
+        memory[address:address + len(taken)] = taken
+        self.transfers.append((name, len(taken), address))
 
 
 class Sif:
@@ -112,7 +159,7 @@ class Split(Sif):
             self.iop_registers[which] = value & 0xFFFFFFFF
 
 
-def eeBus(sif: Sif, rom: bytes) -> eesim.Bus:
+def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
     class SharedBus(eesim.Bus):
         def read(self, address: int, size: int) -> int:
             which = EE_REGISTERS.get(address & 0x1FFFFFFF)
@@ -121,16 +168,29 @@ def eeBus(sif: Sif, rom: bytes) -> eesim.Bus:
             return super().read(address, size)
 
         def write(self, address: int, size: int, value: int) -> None:
-            which = EE_REGISTERS.get(address & 0x1FFFFFFF)
+            offset = address & 0x1FFFFFFF
+            which = EE_REGISTERS.get(offset)
             if which is not None:
                 sif.write(which, value, True)
                 return
             super().write(address, size, value)
+            if offset in (EE_SIF0, EE_SIF1) and value & EE_START:
+                self.runChannel(offset, value)
+
+        def runChannel(self, channel: int, chcr: int) -> None:
+            """A channel started: move its quadwords, then report itself idle."""
+            address = self.read(channel + 0x10, 4) & 0x1FFFFFFF
+            length = self.read(channel + 0x20, 4) * 16
+            if channel == EE_SIF1:
+                dma.send(dma.to_iop, self.ram, address, length, "EE sent")
+            else:
+                dma.receive(dma.to_ee, self.ram, address, length, "EE received")
+            self.io[channel] = chcr & ~EE_START
 
     return SharedBus(rom)
 
 
-def iopBus(sif: Sif, rom: bytes) -> iopsim.Bus:
+def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
     class SharedBus(iopsim.Bus):
         def read(self, addr: int, size: int) -> int:
             which = IOP_REGISTERS.get(addr & 0x1FFFFFFF)
@@ -139,11 +199,24 @@ def iopBus(sif: Sif, rom: bytes) -> iopsim.Bus:
             return super().read(addr, size)
 
         def write(self, addr: int, size: int, value: int, pc: int) -> None:
-            which = IOP_REGISTERS.get(addr & 0x1FFFFFFF)
+            offset = addr & 0x1FFFFFFF
+            which = IOP_REGISTERS.get(offset)
             if which is not None:
                 sif.write(which, value, False)
                 return
             super().write(addr, size, value, pc)
+            if offset in (IOP_SIF0 + 8, IOP_SIF1 + 8) and value & IOP_START:
+                self.runChannel(offset - 8, value)
+
+        def runChannel(self, channel: int, chcr: int) -> None:
+            address = self.read(channel, 4) & 0x1FFFFFFF
+            blocks = self.read(channel + 4, 4)
+            length = (blocks & 0xFFFF) * ((blocks >> 16) or 1) * 4
+            if channel == IOP_SIF0:
+                dma.send(dma.to_ee, self.ram, address, length, "IOP sent")
+            else:
+                dma.receive(dma.to_iop, self.ram, address, length, "IOP received")
+            self.io[channel + 8] = chcr & ~IOP_START
 
     return SharedBus(rom)
 
@@ -153,10 +226,11 @@ class Console:
 
     def __init__(self, rom: bytes, bridge: bool = True) -> None:
         self.sif = Sif() if bridge else Split()
+        self.dma = SifDma()
         self.ee = eesim.Machine(rom)
-        self.ee.bus = eeBus(self.sif, rom)
+        self.ee.bus = eeBus(self.sif, self.dma, rom)
         self.ee.cpu = eesim.Cpu(self.ee.bus)
-        self.iop_bus = iopBus(self.sif, rom)
+        self.iop_bus = iopBus(self.sif, self.dma, rom)
         self.iop = iopsim.Cpu(self.iop_bus)
         self.watcher = iopsim.FreeWatcher(self.iop_bus)
         self.frees_before_handshake = 0
@@ -267,6 +341,11 @@ def report(console: Console) -> None:
     print(f"\nSIF after the handshake:")
     print(f"   MSCOM {mscom:#010x}   MSFLG {msflg:#010x}   (the EE's to write)")
     print(f"   SMCOM {smcom:#010x}   SMFLG {smflg:#010x}   (the IOP's to write)")
+
+    if console.dma.transfers:
+        print("\nSIF transfers:")
+        for what, length, address in console.dma.transfers:
+            print(f"   {what:<13} {length:5d} bytes at {address:#010x}")
 
     print(f"\nmodule images released (IRX-12): {len(console.watcher.frees)}")
     for index, (address, step) in enumerate(console.watcher.frees):

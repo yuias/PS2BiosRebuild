@@ -180,6 +180,33 @@ BOOT-10: the EE never got past its wait for the IOP
 Neither side crashes. They wait for each other forever, which is exactly the
 livelock BOOT-10c warns is the failure mode.
 
+**A file crosses the bus.** Once they have met, the EE asks the IOP for an
+archive entry by name and the IOP sends its bytes back. Neither processor can
+read the other's memory, so the request is one DMA transfer and its answer
+another:
+
+```sh
+python3 tools/ps2sim.py build/rom.bin
+```
+
+```
+SIF transfers:
+   EE sent          16 bytes at 0x000174c0
+   IOP received     16 bytes at 0x00000d50
+   IOP sent        256 bytes at 0x00000d60
+   EE received     256 bytes at 0x000173c0
+
+# ROMVER, fetched from the archive across the SIF: 0100XP20260810
+```
+
+That last line is our own `ROMVER`, read out of the archive on the IOP's side
+of the bus and printed by the EE. It is the shape every later `rom0:` read has.
+
+The gate says so directly: setting the outgoing transfer's quadword count to
+zero — one halfword — leaves the EE waiting with an empty console line, and the
+run fails with `SIF: the EE never received the archive file it asked the IOP
+for`.
+
 ## Deviations from the reference, and why
 
 **The scan resolves `RDRAM` by name.** `spec/04` EE-2 records that the
@@ -234,6 +261,18 @@ the most recent allocation, refusing anything else rather than leaking
 silently. The heap extent is a fixed range until the boot parameters of BOOT-4
 step 5 are plumbed through; a real free list arrives with `HEAPLIB`.
 
+**`EESYNC` does not return.** A module's entry is supposed to return so the
+loader can move on (IRX-12); ours ends in a loop serving the EE's requests,
+because there is no scheduler yet to run a service on a thread of its own. The
+IOP's boot therefore ends inside `EESYNC` rather than at an idle loop, which is
+the same property BOOT-10d is about — the boot ends there rather than running
+on — reached a different way. It must change when threads arrive.
+
+**Our SIF transfers are normal-mode.** The reference's driver builds tag lists
+and runs the EE's channels in chain mode. Ours moves a fixed quadword count,
+which is enough for a request and a reply and needs no tag interpreter on
+either side. `tools/ps2sim.py` models what ours uses, and says so.
+
 **The syscall entry does not save the full context.** EE-7e's 128-bit `sq`
 context save exists for the scheduler, which does not exist yet. The entry
 preserves `$ra`, `$sp` and `$at`, and handlers clobber the temporaries. This is
@@ -257,8 +296,9 @@ it cannot quietly go stale:
 - 111 of the 125 syscall slots, which resolve to the reporter rather than to
   their own handlers (`spec/05` SYS-1)
 - EE-7e's context save, and the scheduler that needs it
-- the SIF as a data path: the two meet, but move no data, so `spec/04` EE-9's
-  boot tail across it is out of reach
+- the EE's chain mode, which the reference's driver uses
+- `spec/04` EE-9's boot tail: a file crosses the SIF, but nothing loads and
+  runs a program from one yet
 
 ## How the image is judged
 

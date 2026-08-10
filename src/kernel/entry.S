@@ -62,6 +62,19 @@ _kernel_entry:
     jal   _print
     nop
 
+    // Ask the IOP for a file out of the archive. Only the IOP can read the
+    // ROM's file table on its side of the bus, so this is the shape every
+    // later `rom0:` read has: a name out, bytes back.
+    la    $a0, _wanted
+    jal   _sif_request
+    nop
+    move  $s1, $v0
+    la    $a0, _fetched
+    jal   _print
+    nop
+    jal   _print
+    move  $a0, $s1
+
 _kernel_idle:
     b     _kernel_idle
     nop
@@ -132,6 +145,12 @@ _banner:
     .asciz "# PS2BiosRebuild EE kernel: entered at 0x80001000.\n"
 _met_iop:
     .asciz "# The IOP answered; the SIF handshake is complete.\n"
+_fetched:
+    .asciz "# ROMVER, fetched from the archive across the SIF: "
+    .align 2
+_wanted:
+    .ascii "ROMVER"
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
     .section .bss, "aw", @nobits
     .align 4

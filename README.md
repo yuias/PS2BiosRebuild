@@ -119,7 +119,8 @@ python3 tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 3
 ```
 
 Run against each other, the two simulators unblock one another: the IOP boot
-runs to completion and tears down its last one-shot module.
+runs to completion, tears down its last one-shot module, and data moves between
+the two processors over the SIF.
 
 ```sh
 python3 tools/ps2sim.py assets/SCPH-50000.bin            # report the joint boot

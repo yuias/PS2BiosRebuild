@@ -50,6 +50,9 @@ RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
 RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
 KERNEL_BANNER = "PS2BiosRebuild EE kernel"
 HANDSHAKE_LINE = "the SIF handshake is complete"
+# What the EE asks the IOP for once they have met, and what must come back:
+# our own ROMVER, read out of the archive on the IOP's side of the bus.
+FETCHED_LINE = "0100XP20260810"
 
 NOT_YET = (
     "the rest of the boot list: three of its twenty-nine modules are built",
@@ -58,8 +61,10 @@ NOT_YET = (
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
-    "the SIF as a data path: the two meet (BOOT-10) but move no data, so "
-    "spec/04 EE-9's boot tail across it is out of reach",
+    "the EE's chain mode: our transfers are normal-mode, so the tag lists "
+    "the reference's driver builds have no counterpart here",
+    "spec/04 EE-9's boot tail: a file crosses the SIF, but nothing yet loads "
+    "and runs a program from one",
 )
 
 # The interface the kernel publishes, exercised through eesim's harness. Every
@@ -163,7 +168,7 @@ def checkIop(image: pathlib.Path) -> list[str]:
                       if t["kind"] == "export"), None)
         if table is None:
             continue
-        module_base = bus.read(BOOT_LIST + 0x1F0 + index * 4, 4)
+        module_base = bus.read(BOOT_LIST + 0x400 + index * 4, 4)
         for slot, value in enumerate(module.exportEntries(table)):
             loaded = bus.read(module_base + table + 0x14 + slot * 4, 4)
             if loaded != value + module_base:
@@ -286,14 +291,17 @@ def checkTogether(image: pathlib.Path) -> list[str]:
     if not (smcom and smflg):
         problems.append(f"BOOT-10b: the IOP answered with SMCOM {smcom:#x} "
                         f"and SMFLG {smflg:#x}; both must carry something")
-    if not console.idle():
-        problems.append(f"BOOT-10d: the IOP did not reach an idle loop; it "
-                        f"stopped at {console.iop.pc:#010x}"
-                        + (f" ({console.iop.stop_reason})"
-                           if console.iop.stop_reason else ""))
+    if console.iop.stop_reason:
+        problems.append(f"BOOT-10d: the IOP stopped at "
+                        f"{console.iop.pc:#010x}: {console.iop.stop_reason}")
     text = console.ee.bus.console.decode("ascii", "replace")
     if HANDSHAKE_LINE not in text:
         problems.append("BOOT-10: the EE never got past its wait for the IOP")
+    if FETCHED_LINE not in text:
+        problems.append(f"SIF: the EE never received the archive file it "
+                        f"asked the IOP for; its console held {text!r}")
+    if not console.dma.transfers:
+        problems.append("SIF: no DMA transfer happened at all")
     return problems
 
 
@@ -321,7 +329,7 @@ def main() -> int:
           f"reaches "
           f"its kernel, which "
           f"announces itself and serves its syscalls; and the two meet "
-          f"across the SIF")
+          f"across the SIF, where a file crosses it")
     print("\nnot required of the image yet:")
     for item in NOT_YET:
         print(f"   {item}")

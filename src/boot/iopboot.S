@@ -19,19 +19,26 @@
     .set noreorder
     .set noat
 
-// The result of the parse, in low RAM:
+// What the boot leaves in low RAM for anything that follows it:
 //
-//   +0  how many names resolved
-//   +4  the base load address the `@` token set
-//   +8    (address, size) pairs, in load order
-//   +0x1F0 where each was loaded, once it has been
-//   +0x1FC where the next one would go
+//   +0x000  how many names resolved
+//   +0x004  the base load address the `@` token set
+//   +0x008  the archive's table, so a module need not carry its own scan
+//   +0x00C  where the next module would go
+//   +0x010  (address, size) pairs in the archive, in load order
+//   +0x400  where each was loaded, once it has been
 //
 // Nothing outside this file reads it yet -- the loader that will is the next
 // piece of work -- so the layout is ours to choose, unlike the boot-parameter
 // table of BOOT-8 whose address is ABI.
     .set BOOT_LIST,       0x00002000
     .set BOOT_LIST_MAX,   64
+    .set BL_COUNT,        0x000
+    .set BL_BASE,         0x004
+    .set BL_TABLE,        0x008
+    .set BL_NEXT,         0x00C
+    .set BL_ENTRIES,      0x010
+    .set BL_LOADED,       0x400
 // Where a name is assembled before it is looked up. It has to be RAM: the
 // only writable memory this early, since the code itself is running from ROM.
     .set NAME_SCRATCH,    0x00001F00
@@ -201,15 +208,28 @@ _iopboot_module_find:
     nop
     sll   $t1, $s3, 3
     addu  $t1, $s4, $t1
-    sw    $v0, 8($t1)                    // the module's ROM address
-    sw    $v1, 12($t1)                   // and its size
+    sw    $v0, BL_ENTRIES($t1)           // the module's ROM address
+    sw    $v1, BL_ENTRIES+4($t1)         // and its size
     addiu $s3, $s3, 1
     b     _iopboot_token
     nop
 
 _iopboot_done:
-    sw    $s3, 0($s4)                    // how many names resolved
-    sw    $s5, 4($s4)                    // and the base they load at
+    sw    $s3, BL_COUNT($s4)             // how many names resolved
+    sw    $s5, BL_BASE($s4)              // and the base they load at
+
+    // Leave the archive's table where a module can find it. `ROMDIR` is the
+    // entry that describes the table, so resolving that name with the scan we
+    // already have yields the table's own address -- and a module then needs
+    // no further copy of the scan to read the archive.
+    lui   $a0, (ROM_SEARCH_START >> 16) & 0xFFFF
+    ori   $a0, $a0, ROM_SEARCH_START & 0xFFFF
+    lui   $a1, (ROM_SEARCH_END >> 16) & 0xFFFF
+    ori   $a1, $a1, ROM_SEARCH_END & 0xFFFF
+    addiu $a2, $s0, _name_romdir - _iopboot_anchor
+    bal   _iopboot_find
+    nop
+    sw    $v0, BL_TABLE($s4)
 
 // Load each module in turn, in the order the list gave them (BOOT-9c). The
 // base advances past each one, so a module's address depends on every module
@@ -222,10 +242,11 @@ _iopboot_load_next:
     nop
     sll   $t1, $s6, 3
     addu  $t1, $s4, $t1
-    lw    $a0, 8($t1)                    // this module's ROM address
+    lw    $a0, BL_ENTRIES($t1)           // this module's ROM address
     sll   $t2, $s6, 2
     addu  $t2, $s4, $t2
-    sw    $s7, 0x1F0($t2)                // where this one is going
+    sw    $s7, BL_LOADED($t2)            // where this one is going
+    sw    $s7, BL_NEXT($s4)              // and, so far, where the next goes
     bal   _iopboot_load
     move  $a1, $s7                       // and where to put it
     beq   $v0, $zero, _iopboot_stop      // a module that will not load is fatal
@@ -236,7 +257,7 @@ _iopboot_load_next:
     nop
 
 _iopboot_loaded:
-    sw    $s7, 0x1FC($s4)                // where the next module would go
+    sw    $s7, BL_NEXT($s4)              // where the next module would go
 _iopboot_stop:
     b     _iopboot_stop
     nop
@@ -599,6 +620,9 @@ _iopboot_find_end:
 _name_iopbtconf:
     .ascii "IOPBTCONF"
     .byte 0
+_name_romdir:
+    .ascii "ROMDIR"
+    .byte 0, 0, 0, 0
 
 
 // The name above is ten bytes, so what follows it needs realigning before it
