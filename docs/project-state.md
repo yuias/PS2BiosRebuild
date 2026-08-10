@@ -114,6 +114,7 @@ per-file, and the eventual build will assemble the image the same way.
 | `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list and loads modules from it |
 | IRX producer + loader | **built** — `tools/mkirx.py`; both modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
+| EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
 | Everything else in the image | not started |

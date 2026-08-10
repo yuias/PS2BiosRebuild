@@ -163,16 +163,25 @@ class Console:
         self.turns = 0
 
     def idle(self) -> bool:
-        """True when the IOP has run out of work: a `j` to itself.
+        """True when the IOP has run out of work: a jump to itself.
 
-        A turn can end on either half of that loop, so the delay slot counts
-        as being in it too.
+        BOOT-10d says a jump, not one encoding of one: `j` and the `beq
+        $zero, $zero` a `b` assembles to both spin in place, and a rebuild is
+        free to use either. A turn can end on either half of the loop, so the
+        delay slot counts as being in it too.
         """
         for address in (self.iop.pc, self.iop.pc - 4):
             instruction = self.iop_bus.read(address, 4)
-            if instruction >> 26 != 2:
+            opcode = instruction >> 26
+            if opcode == 2:                        # j
+                target = (address & 0xF0000000) | ((instruction & 0x3FFFFFF) << 2)
+            elif opcode == 4 and (instruction >> 16) & 0x3FF == 0:   # b
+                offset = instruction & 0xFFFF
+                if offset & 0x8000:
+                    offset -= 0x10000
+                target = address + 4 + offset * 4
+            else:
                 continue
-            target = (address & 0xF0000000) | ((instruction & 0x3FFFFFF) << 2)
             if target == address:
                 return True
         return False

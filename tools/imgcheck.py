@@ -22,6 +22,7 @@ import sys
 import eesim
 import iopsim
 import irxinfo
+import ps2sim
 import romdir
 
 # spec/03 BOOT-5a: what a retail boot emits, now that the handoff to IOPBOOT
@@ -32,8 +33,8 @@ EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
 # base load address the `@` token set (spec/03 BOOT-9).
 BOOT_LIST = 0x2000
 EXPECTED_BASE = 0x800
-EXPECTED_MODULES = 2             # SYSMEM and LOADCORE; the rest follows
-MODULES = ("SYSMEM", "LOADCORE")
+EXPECTED_MODULES = 3             # SYSMEM, LOADCORE and EESYNC; the rest follows
+MODULES = ("SYSMEM", "LOADCORE", "EESYNC")
 EXPECTED_LIBRARIES = ["sysmem", "loadcore"]
 
 # LOADCORE's entry calls sysmem's allocator through the stub the loader
@@ -48,15 +49,17 @@ RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
 RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
 KERNEL_BANNER = "PS2BiosRebuild EE kernel"
+HANDSHAKE_LINE = "the SIF handshake is complete"
 
 NOT_YET = (
-    "the rest of the boot list: two of its twenty-nine modules are built",
+    "the rest of the boot list: three of its twenty-nine modules are built",
     "supersession (spec/02 IRX-11): registration compares versions, but "
     "nothing yet inherits a superseded library's clients",
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
-    "the EE handshake and everything past it (spec/03 BOOT-10)",
+    "the SIF as a data path: the two meet (BOOT-10) but move no data, so "
+    "spec/04 EE-9's boot tail across it is out of reach",
 )
 
 # The interface the kernel publishes, exercised through eesim's harness. Every
@@ -154,7 +157,12 @@ def checkIop(image: pathlib.Path) -> list[str]:
     # test of the relocation rather than of the table.
     for index, name in enumerate(MODULES):
         module = moduleFromImage(image, name)
-        table = next(t["vaddr"] for t in module.tables() if t["kind"] == "export")
+        # A module need not export anything: EESYNC is a service, not a
+        # library (spec/02 IRX-13's export-free resident shape).
+        table = next((t["vaddr"] for t in module.tables()
+                      if t["kind"] == "export"), None)
+        if table is None:
+            continue
         module_base = bus.read(BOOT_LIST + 0x1F0 + index * 4, 4)
         for slot, value in enumerate(module.exportEntries(table)):
             loaded = bus.read(module_base + table + 0x14 + slot * 4, 4)
@@ -260,6 +268,35 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
     return problems
 
 
+def checkTogether(image: pathlib.Path) -> list[str]:
+    """Both processors, run against each other across the SIF (BOOT-10).
+
+    Each half was already checked alone. What only the pair can show is that
+    the two halves of the handshake fit: the EE's raise is what the IOP waits
+    for, and the IOP's answer is what releases the EE.
+    """
+    problems: list[str] = []
+    console = ps2sim.Console(image.read_bytes())
+    console.run()
+    mscom, msflg, smcom, smflg = console.handshake
+
+    if not (mscom and msflg):
+        problems.append(f"BOOT-10a: the EE published MSCOM {mscom:#x} and "
+                        f"MSFLG {msflg:#x}; both must carry something")
+    if not (smcom and smflg):
+        problems.append(f"BOOT-10b: the IOP answered with SMCOM {smcom:#x} "
+                        f"and SMFLG {smflg:#x}; both must carry something")
+    if not console.idle():
+        problems.append(f"BOOT-10d: the IOP did not reach an idle loop; it "
+                        f"stopped at {console.iop.pc:#010x}"
+                        + (f" ({console.iop.stop_reason})"
+                           if console.iop.stop_reason else ""))
+    text = console.ee.bus.console.decode("ascii", "replace")
+    if HANDSHAKE_LINE not in text:
+        problems.append("BOOT-10: the EE never got past its wait for the IOP")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -271,6 +308,7 @@ def main() -> int:
     problems += checkModules(arguments.image)
     problems += checkIop(arguments.image)
     problems += checkEe(arguments.image)
+    problems += checkTogether(arguments.image)
 
     for problem in problems:
         print(f"{arguments.image}: {problem}", file=sys.stderr)
@@ -282,7 +320,8 @@ def main() -> int:
           f"loads its modules, binds and registers them; the EE path "
           f"reaches "
           f"its kernel, which "
-          f"announces itself and serves its syscalls")
+          f"announces itself and serves its syscalls; and the two meet "
+          f"across the SIF")
     print("\nnot required of the image yet:")
     for item in NOT_YET:
         print(f"   {item}")

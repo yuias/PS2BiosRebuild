@@ -54,6 +54,14 @@ _kernel_entry:
     mtc0  $k0, $12
     .word 0x0000040F                    // sync.p
 
+    // BOOT-10: meet the IOP. Until this returns the machine has one working
+    // processor; after it, both know where the other's memory is.
+    jal   _sif_handshake
+    nop
+    la    $a0, _met_iop
+    jal   _print
+    nop
+
 _kernel_idle:
     b     _kernel_idle
     nop
@@ -122,6 +130,8 @@ _print_nibble_emit:
     .section .rodata, "a"
 _banner:
     .asciz "# PS2BiosRebuild EE kernel: entered at 0x80001000.\n"
+_met_iop:
+    .asciz "# The IOP answered; the SIF handshake is complete.\n"
 
     .section .bss, "aw", @nobits
     .align 4
