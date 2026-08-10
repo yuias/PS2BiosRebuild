@@ -5,11 +5,10 @@ how the work is done, and what is next. `README.md` is the front door; this is
 the working document and is kept current.
 
 > **Where the work is right now:** the analysis phase is under way and has
-> reached the sixteenth module of the IOP boot list. Ten documents cover the ROM
+> worked through most of the IOP boot list. Eleven documents cover the ROM
 > archive format, the boot block, `IOPBOOT` and the boot list, the IRX module
-> format, and the kernel modules from `SYSMEM` through `MODLOAD` — at which
-> point the loader's residency rule and the nested boot-configuration archives
-> close the last questions carried from earlier documents. Tooling is
+> format, and the kernel modules from `SYSMEM` through the SIF interface — with
+> no questions outstanding. Tooling is
 > `tools/romdir.py` (archive), `tools/irxinfo.py` (modules) and
 > `tools/romdis.py` (IOP/EE disassembly). Nothing is implemented yet; there is
 > no build system and no `docs/spec/` — both arrive with the first
