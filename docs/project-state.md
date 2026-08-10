@@ -4,23 +4,25 @@ Read this first when picking the project up. It records where the work stands,
 how the work is done, and what is next. `README.md` is the front door; this is
 the working document and is kept current.
 
-> **Where the work is right now:** the **IOP boot list is fully surveyed** —
-> all twenty-nine modules, in twelve documents covering the ROM archive format,
-> the boot block, `IOPBOOT` and the boot list, the IRX module format, and every
-> module from `SYSMEM` to `EESYNC`, with no questions outstanding. The EE side
-> is next and is untouched apart from an outline. **Two specifications are
-> written and mechanically checked**: `01-rom-archive.md`, verified by a
-> round-trip that rebuilds both reference images and a nested archive byte for
-> byte, `02-module-abi.md`, verified by a conformance checker that passes on
-> every IRX module of both images, and `03-boot-chain.md`, whose static claims
-> are each reproducible by disassembly. **`tools/iopsim.py` now boots the
-> reference image** all the way to where the IOP waits for the EE, reproducing
-> the spec's retail POST sequence and leaving 23 registered libraries and 55
-> bound import tables in RAM — so both the boot chain and the run-time half of
-> the module ABI are verified rather than described.
+> **Where the work is right now:** **the analysis is complete on both CPUs.**
+> The IOP boot list is fully surveyed — all twenty-nine modules, in twelve
+> documents — and so is the EE: its boot path, kernel tables, syscall groups,
+> and now the arguments and return value of every one of the 125 syscall slots.
+> **Five specifications are written and mechanically checked**:
+> `01-rom-archive.md`, verified by a round-trip that rebuilds both reference
+> images and a nested archive byte for byte; `02-module-abi.md`, verified by a
+> conformance checker that passes on every IRX module of both images;
+> `03-boot-chain.md`, executed by `tools/iopsim.py`, which boots the reference
+> image to where the IOP waits for the EE, reproducing the spec's retail POST
+> sequence and leaving 23 registered libraries and 55 bound import tables in
+> RAM; and `04-ee-kernel.md` and `05-ee-syscall-abi.md`, gated statically by
+> `tools/eeksys.py --check` and `tools/eeabi.py --check`.
 > Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
-> `tools/irxinfo.py` (modules) and `tools/romdis.py` (IOP/EE disassembly).
-> There is still no build system for the image's *contents*.
+> `tools/irxinfo.py` (modules), `tools/romdis.py` (IOP/EE disassembly),
+> `tools/iopsim.py` (IOP execution) and `tools/eeksys.py`/`tools/eeabi.py` (EE
+> kernel). **What remains is implementation** — there is still no build system
+> for the image's contents — and the EE's one structural gap: nothing executes
+> R5900 code, so every EE requirement is checked statically.
 
 ---
 
@@ -87,12 +89,15 @@ per-file, and the eventual build will assemble the image the same way.
 | EE syscalls: cache and CP0 control | analysed — `docs/analysis/18-ee-cache-syscalls.md` |
 | EE syscalls: initialisation and configuration | analysed — `docs/analysis/19-ee-config-syscalls.md` |
 | **EE syscall group survey** | **complete — every band characterised** |
+| EE syscalls: arguments and return values | analysed — `docs/analysis/21-ee-syscall-abi.md` |
 | OSD (`OSDSYS`) | analysed — `docs/analysis/20-osdsys.md` |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
 | EE reset path + kernel interface | **specified and checked** — `docs/spec/04-ee-kernel.md` |
+| EE syscall signatures, slot by slot | **specified and checked** — `docs/spec/05-ee-syscall-abi.md` |
 | IOP simulator | **a gate** — `tools/iopsim.py --check`, tested in both directions |
+| EE static gates | `tools/eeksys.py --check`, `tools/eeabi.py --check`, both tested in both directions |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -157,6 +162,17 @@ document each cites):
 - Export slots 0 and 1 are reserved hooks that nothing imports; the lowest
   ordinal bound anywhere is 2. Slot 0 is *not* reliably the module entry.
   (`spec/02` IRX-7, correcting `05`)
+- **No EE syscall takes a fifth argument or reads the caller's stack** — it
+  cannot, since the handler runs on the kernel stack. Where the kernel needs a
+  fifth value it is an internal `$t0` mode written by a wrapper. (`21`)
+- Slot `0x74` writes the syscall table itself, so **all three dispatch tables**
+  — exception, interrupt, syscall — are installable at run time and must be in
+  writable memory. (`21`, extending `16`)
+- Slots `0x04` and `0x05` never return to their caller: `0x04` re-enters the
+  browser, `0x05` resumes from two stored kernel words. (`21`)
+- The eight `EE-8h` pairs agree on their argument lists although their two
+  entry paths are different code of very different size — an independent check
+  that the signature analysis is sound. (`21`)
 
 ### Open questions
 
@@ -165,25 +181,26 @@ None outstanding. Both questions carried since `03` and `06` were settled in
 
 ## 5. Next steps
 
-In rough order; each becomes a `docs/analysis/` document:
+The survey phase is finished: every major component has a document and every
+component that can be gated has a gate. What is left is one large piece of work
+and three loose ends.
 
-1. **The EE side.** Promote `02` §"EE reset path" to a full document: how the
-   EE path stages `EELOAD` to RAM at `0x8000_1000`, and what the `KERNEL` image
-   — byte-identical across both reference ROMs — contains. This needs the R5900
-   caveats in `tools/romdis.py` kept in mind.
-2. **`OSDSYS`** and the boot flow that reaches it.
-3. **Residency (IRX-12) stays unverified for now.** The one-shot modules that
-   would demonstrate it — `SIFINIT` (26) and `IGREETING` (20) — sit at or past
-   the point where the IOP boot waits for the EE, so an IOP-only simulator
-   cannot reach them being freed. It needs either an EE stub answering the SIF
+1. **Implementation.** This is now the main line: a build system that assembles
+   the image from per-file inputs the way `tools/mkromdir.py` already can, and
+   the first contents written from `docs/spec/`. Nothing in the analysis is
+   blocking it.
+2. **The EE has no simulator**, so `spec/04` and `spec/05`'s dynamic
+   requirements are described and statically checked but never executed — the
+   main asymmetry with the IOP side, and worth stating in any release material.
+   An R5900 simulator is a much larger undertaking than the R3000 one; a
+   narrower harness that executes only the syscall entry and a handful of
+   handlers would already close most of the gap.
+3. **Residency (IRX-12) stays unverified.** The one-shot modules that would
+   demonstrate it — `SIFINIT` (26) and `IGREETING` (20) — sit at or past the
+   point where the IOP boot waits for the EE, so an IOP-only simulator cannot
+   reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **Depth on the EE syscalls** — arguments and return values slot by slot,
-   within the groups `16`–`19` established. This is the largest remaining
-   analysis and feeds a `docs/spec/05`.
-5. **`OSDSYS`** last: it is the largest component but mostly a consumer of the
-   syscalls above, and much of its bulk is material `docs/clean-room-policy.md`
-   §3 puts out of bounds anyway.
-5. **The EE has no simulator**, so `spec/04`'s dynamic requirements are
-   described and statically checked but never executed — the main asymmetry
-   with the IOP side, and worth stating in any release material. An R5900
-   simulator is a much larger undertaking than the R3000 one.
+4. **Nine EE slots have an inferred rather than observed return.** `0x63` and
+   `0x67` leave through the CP0 jump table, and seven others take their result
+   from a callee (`spec/05` SYS-1c). Following those by hand would replace an
+   inference with an observation, but nothing depends on it yet.

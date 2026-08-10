@@ -4,13 +4,16 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS.
 
-Status: **analysis phase, well under way.** The IOP side is fully surveyed —
-the ROM archive format, the boot block, and all twenty-nine modules of the IOP
-boot list — and three specifications are written and mechanically gated: an
+Status: **analysis complete, implementation not started.** Both CPUs are
+surveyed — the ROM archive format, the boot block, all twenty-nine modules of
+the IOP boot list, and the EE kernel down to the arguments of each of its 125
+syscalls — and five specifications are written and mechanically gated: an
 archive built from `docs/spec/01-rom-archive.md` reproduces both reference
-images byte for byte, every IRX module passes `tools/irxinfo.py --check`, and
-`tools/iopsim.py --check` boots the IOP side and judges the result. The EE side
-and the image's actual contents are not started.
+images byte for byte, every IRX module passes `tools/irxinfo.py --check`,
+`tools/iopsim.py --check` boots the IOP side and judges the result, and
+`tools/eeksys.py --check` and `tools/eeabi.py --check` judge the EE kernel's
+tables and its syscall signatures. The EE half is checked statically only —
+there is no R5900 simulator — and the image's actual contents are not started.
 [`docs/project-state.md`](docs/project-state.md) is the working document and
 records exactly where things stand.
 
@@ -45,6 +48,7 @@ must also stay outside the repository.
 | `tools/romdis.py` | Disassemble a raw image or module, for either CPU, at a chosen address. |
 | `tools/iopsim.py` | Boot an image's IOP side on a simulated R3000 and judge it against `docs/spec/`. |
 | `tools/eeksys.py` | Report or check the EE kernel's exception and syscall tables. |
+| `tools/eeabi.py` | Infer each EE syscall's arguments and return value, and check them against `docs/spec/05-ee-syscall-abi.md`. |
 
 ```sh
 # what the archive holds, with computed offsets
@@ -78,6 +82,16 @@ The IOP side of an image can be booted and judged without any emulator:
 ```sh
 python3 tools/iopsim.py assets/SCPH-50000.bin           # report the boot
 python3 tools/iopsim.py assets/SCPH-50000.bin --check   # judge it, exit 1 on failure
+```
+
+The EE kernel is read out of the archive and judged against its two
+specifications:
+
+```sh
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>
+python3 tools/eeksys.py <outdir>/KERNEL --check   # tables and vectors, spec/04
+python3 tools/eeabi.py  <outdir>/KERNEL --check   # syscall signatures, spec/05
+python3 tools/eeabi.py  <outdir>/KERNEL --slot 0x18   # one slot, in detail
 ```
 
 ## Layout
