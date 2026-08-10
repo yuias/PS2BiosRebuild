@@ -1,0 +1,288 @@
+# Specification: The IOP Module and Link ABI
+
+Derived from `docs/analysis/04-iop-module-format.md`,
+`05-sysmem-and-loadcore.md`, `08-c-library-and-heap.md`,
+`09-threads-and-eeconf.md`, `10-module-loading-and-boot-configs.md` and
+`12-ee-facing-services.md`.
+
+Where `docs/spec/01-rom-archive.md` fixes the container, this fixes what goes in
+it: how a module is encoded, how modules find each other, and what the loader
+does with one. Every rule here is checked against all 57 IRX modules of the
+reference image by `tools/irxinfo.py --check` (see "Verification").
+
+The archive holds **two** kinds of ELF and this specification governs only the
+first: 57 IOP relocatable modules (`e_type 0xFF80`, no arch flags) and 4 EE
+executables (`e_type ET_EXEC`, MIPS-III arch flags) — `OSDSYS`, `PS1DRV`,
+`PS2LOGO` and `TESTMODE`. The EE executables are a separate format, specified
+when the EE side is analysed.
+
+## IRX-1: Container
+
+A module is a little-endian **ELF32 for MIPS-I** with `e_type = 0xFF80`, a
+processor-specific type in the `ET_LOPROC` range. It carries exactly two program
+headers:
+
+| `p_type` | Contents |
+| --- | --- |
+| `0x70000080` | the `.iopmod` metadata section |
+| `PT_LOAD` | `.text`, `.rodata`, `.data`, `.bss`, linked at `p_vaddr = 0` |
+
+The single load segment at virtual address 0 is what makes a module
+relocatable: the loader chooses a base, copies the segment there, appends zeroed
+`.bss`, and applies the relocations of IRX-3.
+
+## IRX-2: `.iopmod`
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u32 | address of the module-info pair, or `0xFFFFFFFF` |
+| 4 | u32 | entry point |
+| 8 | u32 | `gp` value |
+| 12 | u32 | text size |
+| 16 | u32 | data size |
+| 20 | u32 | bss size |
+| 24 | u16 | version, BCD |
+| 26 | char[] | name, NUL-terminated |
+
+The module-info pair at the address in field 0 is `{const char *name; u16
+version}`.
+
+**IRX-2a:** The name and version here must equal the `0x03` comment and `0x02`
+version of this file's `EXTINFO` entry (`ARC-6c`). One source produces both.
+
+**IRX-2b:** The module version and any exported library version are independent
+fields and need not agree. `ROMDRV` ships `.iopmod` 1.03 with `romdrv` 2.01.
+Only the library version participates in IRX-11.
+
+## IRX-3: Relocation
+
+The load segment is relocated with standard MIPS `REL` entries (8 bytes:
+`r_offset`, `r_info`) in `.rel.text` and `.rel.data`. Exactly four types occur,
+all resolved against the chosen load base `B`:
+
+| Type | Applied as |
+| --- | --- |
+| `R_MIPS_32` | word `+= B` |
+| `R_MIPS_26` | jump target field rebased into the loaded segment |
+| `R_MIPS_HI16` | high half of an address literal |
+| `R_MIPS_LO16` | low half |
+
+**IRX-3a:** `HI16` and `LO16` are **paired**, and occur in equal counts. A
+loader must hold each `HI16` until its matching `LO16` so the carry from the low
+half is applied to the high half. This is the only non-mechanical part of the
+fixup.
+
+## IRX-4: Library table header
+
+Export and import tables share a 20-byte header:
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | magic — `0x41C00000` export, `0x41E00000` import |
+| 4 | 4 | registry link, 0 in the stored file |
+| 8 | 2 | version, BCD |
+| 10 | 2 | flags |
+| 12 | 8 | library tag, ASCII, NUL-padded |
+| 20 | … | entries |
+
+**IRX-4a:** The tag field is a fixed 8 bytes with no terminator when the tag
+fills it (`loadcore` does).
+
+**IRX-4b:** A table header is word-aligned within the load segment. The magic
+byte pattern occurring at an unaligned offset is data, not a table — `CDVDMAN`
+contains exactly such a false positive.
+
+## IRX-5: Export tables
+
+Entries begin at header + `0x14` and are absolute function pointers, terminated
+by a zero word.
+
+**IRX-5a:** Every entry carries an `R_MIPS_32` relocation, and the entries are
+the **contiguous run** of such relocations starting at header + `0x14`. This is
+the only reliable way to determine the extent *in the stored file*, because an
+entry whose unrelocated value is 0 is indistinguishable from the terminator by
+inspection. Scanning for a zero word is valid only after relocation.
+
+**IRX-5b:** The word following the last entry is zero in the stored file.
+
+## IRX-6: Ordinals are ABI
+
+Importers bind by **ordinal** — the index into the export entry array — so slot
+positions are fixed for the life of a library version. Inserting or removing an
+entry renumbers every later one and silently breaks every importer.
+
+**IRX-6a:** Unused slots are kept occupied rather than removed, and several may
+share one `jr $ra` return stub. `SYSMEM` slots 2, 11, 12 and 13 all point at the
+same two instructions.
+
+**IRX-6b:** A slot may deliberately alias another. `intrman` slots 19 and 20
+repeat the addresses of 17 and 18 — two published names for one function pair.
+
+## IRX-7: Slots 0 and 1 are reserved
+
+Slot 0 is a library-level hook, **not** reliably the module entry point.
+
+Across the reference image: of the 41 modules exporting a single library, 39
+have slot 0 equal to the `.iopmod` entry and 2 (`ROMDRV`, `XFLASH`) do not; and
+in the 2 modules exporting several libraries (`SYSCLIB`, `THREADMAN`), every
+secondary library's slot 0 is a `jr $ra` stub.
+
+**IRX-7a:** No module imports ordinal 0 or 1 from any library. The lowest
+ordinal bound anywhere in the reference is 2. Slots 0 and 1 are therefore
+reserved hooks reached by the library machinery, if at all, and never by an
+importer.
+
+A build must keep both slots present so that ordinals from 2 upward land where
+importers expect them, but is free to fill them with a return stub.
+
+## IRX-8: Import tables
+
+Entries are 8-byte stubs, two instructions each, terminated by a zero word:
+
+```
+jr    $ra                      # 0x03E00008
+addiu $v0, $zero, <ordinal>    # opcode 9, ordinal in the low 16 bits
+```
+
+**IRX-8a:** Unbound, a stub returns harmlessly. An unresolved import is
+survivable rather than fatal, and a build must preserve that property.
+
+## IRX-9: Binding
+
+To bind an importer's table against an exporter's:
+
+1. Count the exporter's entries to the zero terminator.
+2. For each stub, require its **second** word to decode as `addiu` (opcode 9);
+   take the ordinal from that word's low 16 bits.
+3. If the ordinal is within the exporter's count, overwrite the stub's **first**
+   word with `0x08000000 | ((target >> 2) & 0x03FFFFFF)` — a `j` to
+   `export[ordinal]`.
+4. If the ordinal is out of range, write `0x03E00008` (`jr $ra`) instead, so an
+   over-range import degrades to a return.
+5. Advance 8 bytes; stop at the terminator.
+
+**IRX-9a:** Only the first word is rewritten. The `addiu` remains as the new
+jump's delay slot — harmless, because `$v0` is the return-value register the
+callee overwrites, and it leaves the bound stub still recording its ordinal.
+
+**IRX-9b:** Import tables whose flags have any of the low three bits set are
+skipped by the binder.
+
+## IRX-10: Registration
+
+Two entry points register an export table, and they are not interchangeable.
+
+**IRX-10a — versioned registration** (`loadcore` ordinal 6). Validates the
+export magic, then walks the registry:
+
+- different tag → not this library, continue;
+- same tag, different **major** version → a different library, continue;
+- same tag and major → the same library, and registration succeeds **only if the
+  new minor version is strictly greater**. Equal or lower returns −1.
+
+So a library's identity is **tag + major version**, and the minor version is a
+generation counter.
+
+**IRX-10b — pinned registration** (`loadcore` ordinal 10). Validates the magic,
+sets **flags bit 0** on the table, and links it at the registry head with no
+comparison at all. The flag is set at run time; the stored table has `flags 0`.
+
+## IRX-11: Supersession
+
+When IRX-10a accepts a higher minor version, the old library's list of bound
+clients is walked and each client's flags halfword at +`0xA` is tested:
+
+- bit 0 clear → the client is re-bound against the new library;
+- bit 0 set → the client stays attached to the old one.
+
+Supersession therefore actually redirects callers, and IRX-10b's flag is what
+exempts a library from having its clients taken.
+
+**IRX-11a:** A module may rewrite its own table's version in RAM before
+registering it, to arrange the generation ordering. `SYSCLIB` decrements its
+`stdio` table from 1.02 to 1.01 so that `STDIO`'s 1.02 supersedes it eight
+modules later. **A build that registers the stored version instead would make
+the later registration fail with no diagnostic anywhere.**
+
+## IRX-12: Module entry and residency
+
+A module entry is called as
+
+```
+entry(argc, argv, 0, module_record)
+```
+
+with the module's own `$gp` installed from the module record and the loader's
+`$gp` restored afterwards.
+
+**IRX-12a:** Residency is decided by `return & 3` — **clear keeps the module
+resident, set frees it**. It is a mask, not an equality test.
+
+**IRX-12b:** A non-resident module is torn down inside an `intrman` 17/18
+critical section, and its memory is released through `sysmem` ordinal 5 with the
+base rounded **down to a `0x100` boundary**.
+
+**IRX-12c:** Module record offsets `+0x10` (entry) and `+0x14` (`gp`) are ABI.
+
+## IRX-13: Module shapes
+
+All four shapes must be expressible:
+
+| Shape | Exports | Resident | Example |
+| --- | --- | --- | --- |
+| Library | yes | yes | `SYSMEM` |
+| Multi-library | several | yes | `THREADMAN` (7) |
+| Resident service | none | yes | `REBOOT`, `FILEIO` |
+| One-shot action | none | no | `SIFINIT`, `IGREETING` |
+
+Only the last is distinguished by IRX-12a. A one-shot module may legitimately
+have an empty `.iopmod` name and version `0.00`.
+
+## IRX-14: Identified ordinals
+
+These are fixed by how importers call them and must not move:
+
+| Library | Ordinal | Function |
+| --- | --- | --- |
+| `loadcore` | 6 | versioned export registration (IRX-10a) |
+| `loadcore` | 10 | pinned export registration (IRX-10b) |
+| `loadcore` | 12 | boot-record lookup by key |
+| `intrman` | 17, 18 | critical section enter / leave (aliased at 19, 20) |
+| `sysmem` | 4, 5 | allocate / free |
+
+## Verification
+
+`tools/irxinfo.py --check` asserts the mechanically checkable requirements
+against a module and exits non-zero on any failure: IRX-1's container shape,
+IRX-2a's metadata agreement, IRX-3a's `HI16`/`LO16` pairing, IRX-4a/4b's header
+placement, IRX-5a/5b's export extent and terminator, IRX-7a's reserved slots,
+and IRX-8's stub encoding.
+
+Run across every IRX module of the reference image, it must report no failures.
+It does — **57 modules, 0 failures**:
+
+```sh
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>   # outside the repo
+for f in <outdir>/*; do
+  head -c4 "$f" | grep -q ELF || continue
+  python3 tools/irxinfo.py "$f" --check --quiet || echo "FAIL $f"
+done
+```
+
+The four EE executables fail IRX-1 by design — that is the check correctly
+refusing to treat them as IOP modules, and is how the 57/4 split above was
+established in the first place.
+
+`SCPH-70000` passes too, at 56 IRX modules and 0 failures, so nothing here is
+specific to the primary reference image.
+
+What this does **not** check is the dynamic half — IRX-9 through IRX-12 describe
+run-time behaviour and need a loader to exercise. Those arrive with the
+implementation; IRX-11a in particular has no static signature and is the single
+most likely thing to get silently wrong.
+
+**IRX-7 exists because this sweep contradicted an earlier document.**
+`docs/analysis/05` had generalised "slot 0 is the module entry" from two
+examples; running it across every module produced nine counterexamples, and the
+rule that survives is the weaker, checkable IRX-7a. The sweep also corrected the
+module count itself, by failing on the four files that are not IRX at all.

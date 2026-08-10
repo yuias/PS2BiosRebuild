@@ -133,6 +133,80 @@ class Irx:
         return out
 
 
+def checkModule(irx: Irx) -> list[str]:
+    """Assert the static requirements of docs/spec/02-module-abi.md."""
+    d = irx.data
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    (e_type,) = struct.unpack_from("<H", d, 16)
+    (e_machine,) = struct.unpack_from("<H", d, 18)
+    require(e_type == 0xFF80, "IRX-1", f"e_type is {e_type:#06x}, want 0xff80")
+    require(e_machine == 8, "IRX-1", f"e_machine is {e_machine}, want 8 (MIPS)")
+    require(irx.iopmod_off is not None, "IRX-1", "no PT_IOPMOD segment")
+
+    # IRX-3a: HI16 and LO16 are paired, so their counts agree.
+    (shoff,) = struct.unpack_from("<I", d, 32)
+    entsize, count, _ = struct.unpack_from("<HHH", d, 46)
+    hi = lo = 0
+    for i in range(count):
+        fields = struct.unpack_from("<10I", d, shoff + i * entsize)
+        typ, off, size = fields[1], fields[4], fields[5]
+        if typ != SHT_REL:
+            continue
+        for k in range(size // 8):
+            _, r_info = struct.unpack_from("<II", d, off + k * 8)
+            hi += (r_info & 0xFF) == 5
+            lo += (r_info & 0xFF) == 6
+    require(hi == lo, "IRX-3a", f"{hi} HI16 against {lo} LO16")
+
+    relocated = irx.relocatedWords()
+    for t in irx.tables():
+        where = f"{t['kind']} {t['tag']!r} @{t['vaddr']:#x}"
+        require(t["vaddr"] % 4 == 0, "IRX-4b", f"{where} is not word-aligned")
+        if t["kind"] == "export":
+            entries = irx.exportEntries(t["vaddr"])
+            require(bool(entries), "IRX-5a", f"{where} has no relocated entries")
+            if not entries:
+                continue
+            after = irx.load_off + t["vaddr"] + TABLE_HEADER_SIZE + 4 * len(entries)
+            (term,) = struct.unpack_from("<I", d, after)
+            require(term == 0, "IRX-5b", f"{where} terminator is {term:#x}")
+            require(len(entries) >= 2, "IRX-7",
+                    f"{where} has {len(entries)} slots, fewer than the two "
+                    f"reserved ones")
+        else:
+            at = irx.load_off + t["vaddr"] + TABLE_HEADER_SIZE
+            index = 0
+            while True:
+                first, second = struct.unpack_from("<II", d, at)
+                if first == 0:
+                    break
+                require(first == 0x03E00008, "IRX-8",
+                        f"{where} stub {index} starts with {first:#x}")
+                require((second >> 26) == 9, "IRX-8",
+                        f"{where} stub {index} second word {second:#x} "
+                        f"is not addiu")
+                require((second & 0xFFFF) >= 2, "IRX-7a",
+                        f"{where} imports reserved ordinal {second & 0xFFFF}")
+                at += STUB_SIZE
+                index += 1
+
+    info = irx.moduleInfo()
+    if info and info["moduleinfo"] not in (0, 0xFFFFFFFF):
+        # IRX-2: the module-info pair is {name pointer, version}.
+        at = irx.load_off + info["moduleinfo"]
+        if 0 <= at + 8 <= len(d):
+            name_ptr, version = struct.unpack_from("<II", d, at)
+            require(version & 0xFFFF == info["version"], "IRX-2",
+                    f"module-info version {version & 0xFFFF:#06x} disagrees "
+                    f"with .iopmod {info['version']:#06x}")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -144,9 +218,22 @@ def main() -> int:
                         help="list imported ordinals per library")
     parser.add_argument("--dump-load", metavar="PATH", type=pathlib.Path,
                         help="write the PT_LOAD segment here")
+    parser.add_argument("--check", action="store_true",
+                        help="assert docs/spec/02-module-abi.md; exit 1 on any "
+                             "failure")
+    parser.add_argument("--quiet", action="store_true",
+                        help="with --check, print only failures")
     args = parser.parse_args()
 
     irx = Irx(args.module)
+
+    if args.check:
+        problems = checkModule(irx)
+        for p in problems:
+            print(f"{args.module}: {p}", file=sys.stderr)
+        if not problems and not args.quiet:
+            print(f"{args.module}: ok")
+        return 1 if problems else 0
 
     info = irx.moduleInfo()
     if info:
