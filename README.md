@@ -11,9 +11,8 @@ syscalls — and five specifications are written and mechanically gated: an
 archive built from `docs/spec/01-rom-archive.md` reproduces both reference
 images byte for byte, every IRX module passes `tools/irxinfo.py --check`,
 `tools/iopsim.py --check` boots the IOP side and judges the result, and
-`tools/eeksys.py --check` and `tools/eeabi.py --check` judge the EE kernel's
-tables and its syscall signatures. The EE half is checked statically only —
-there is no R5900 simulator — and the image's actual contents are not started.
+`tools/eesim.py --check` boots the EE side on a simulated R5900, reaching the
+kernel and calling its syscalls. The image's actual contents are not started.
 [`docs/project-state.md`](docs/project-state.md) is the working document and
 records exactly where things stand.
 
@@ -49,6 +48,7 @@ must also stay outside the repository.
 | `tools/iopsim.py` | Boot an image's IOP side on a simulated R3000 and judge it against `docs/spec/`. |
 | `tools/eeksys.py` | Report or check the EE kernel's exception and syscall tables. |
 | `tools/eeabi.py` | Infer each EE syscall's arguments and return value, and check them against `docs/spec/05-ee-syscall-abi.md`. |
+| `tools/eesim.py` | Boot an image's EE side on a simulated R5900, call its syscalls, and judge both against `docs/spec/`. |
 
 ```sh
 # what the archive holds, with computed offsets
@@ -92,6 +92,15 @@ python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>
 python3 tools/eeksys.py <outdir>/KERNEL --check   # tables and vectors, spec/04
 python3 tools/eeabi.py  <outdir>/KERNEL --check   # syscall signatures, spec/05
 python3 tools/eeabi.py  <outdir>/KERNEL --slot 0x18   # one slot, in detail
+```
+
+The EE side can also be booted, which needs no extraction — it reaches the
+kernel, prints what the kernel prints, and can call individual syscalls:
+
+```sh
+python3 tools/eesim.py assets/SCPH-50000.bin            # report the boot
+python3 tools/eesim.py assets/SCPH-50000.bin --check    # judge it, exit 1 on failure
+python3 tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 3
 ```
 
 ## Layout

@@ -19,10 +19,11 @@ the working document and is kept current.
 > `tools/eeksys.py --check` and `tools/eeabi.py --check`.
 > Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
 > `tools/irxinfo.py` (modules), `tools/romdis.py` (IOP/EE disassembly),
-> `tools/iopsim.py` (IOP execution) and `tools/eeksys.py`/`tools/eeabi.py` (EE
-> kernel). **What remains is implementation** — there is still no build system
-> for the image's contents — and the EE's one structural gap: nothing executes
-> R5900 code, so every EE requirement is checked statically.
+> `tools/iopsim.py` (IOP execution), `tools/eeksys.py`/`tools/eeabi.py` (EE
+> kernel, statically) and `tools/eesim.py`, which **boots the EE on a simulated
+> R5900**, reaches the kernel, and calls its syscalls — so the EE's dynamic
+> requirements are executed rather than described. **What remains is
+> implementation**: there is still no build system for the image's contents.
 
 ---
 
@@ -98,6 +99,8 @@ per-file, and the eventual build will assemble the image the same way.
 | EE syscall signatures, slot by slot | **specified and checked** — `docs/spec/05-ee-syscall-abi.md` |
 | IOP simulator | **a gate** — `tools/iopsim.py --check`, tested in both directions |
 | EE static gates | `tools/eeksys.py --check`, `tools/eeabi.py --check`, both tested in both directions |
+| EE simulator | **a gate** — `tools/eesim.py --check`, boots both reference images and calls their syscalls |
+| EE execution | analysed — `docs/analysis/22-ee-execution.md` |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -173,6 +176,16 @@ document each cites):
 - The eight `EE-8h` pairs agree on their argument lists although their two
   entry paths are different code of very different size — an independent check
   that the signature analysis is sound. (`21`)
+- Executed, the kernel announces its subsystems in a **different order** from
+  the one its messages are stored in: GS, INTC and TIMER come first, not DMAC.
+  A rebuild driven by the stored order would be wrong. (`22`, `spec/04` EE-10b)
+- The kernel prints its own TLB layout — scratchpad at entry 0, its own
+  mappings at 1–12, allocatable from 13 — which settles what `spec/05` SYS-7b
+  had to leave open about syscall `0x09` choosing a `Random` index. (`22`)
+- The two images' EE reset paths are **not** the same code: v2.00 clears the
+  upper 64 bits of four registers with `padduw` first. `tools/romdis.py` cannot
+  show this, since LLVM has no R5900 target; it surfaced only under execution.
+  (`22`)
 
 ### Open questions
 
@@ -189,18 +202,13 @@ and three loose ends.
    the image from per-file inputs the way `tools/mkromdir.py` already can, and
    the first contents written from `docs/spec/`. Nothing in the analysis is
    blocking it.
-2. **The EE has no simulator**, so `spec/04` and `spec/05`'s dynamic
-   requirements are described and statically checked but never executed — the
-   main asymmetry with the IOP side, and worth stating in any release material.
-   An R5900 simulator is a much larger undertaking than the R3000 one; a
-   narrower harness that executes only the syscall entry and a handful of
-   handlers would already close most of the gap.
-3. **Residency (IRX-12) stays unverified.** The one-shot modules that would
-   demonstrate it — `SIFINIT` (26) and `IGREETING` (20) — sit at or past the
-   point where the IOP boot waits for the EE, so an IOP-only simulator cannot
-   reach them being freed. It needs either an EE stub answering the SIF
-   handshake or a targeted harness that loads a single module.
-4. **Nine EE slots have an inferred rather than observed return.** `0x63` and
+2. **Join the two simulators.** `tools/iopsim.py` stops where the IOP waits for
+   the EE and `tools/eesim.py` stops where the EE waits for the IOP. Running
+   them against each other across a modelled SIF would execute `spec/04` EE-9's
+   boot tail *and* settle **residency (IRX-12)**, unverified since
+   `docs/analysis/12` because the one-shot modules that would demonstrate it
+   sit past the handshake. One capability, two long-standing gaps.
+3. **Nine EE slots have an inferred rather than observed return.** `0x63` and
    `0x67` leave through the CP0 jump table, and seven others take their result
    from a callee (`spec/05` SYS-1c). Following those by hand would replace an
    inference with an observation, but nothing depends on it yet.
