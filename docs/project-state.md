@@ -70,6 +70,7 @@ per-file, and the eventual build will assemble the image the same way.
 | `SYSCLIB`, `STDIO`, `HEAPLIB` | analysed — `docs/analysis/08-c-library-and-heap.md` |
 | `EECONF`, `THREADMAN` | analysed — `docs/analysis/09-threads-and-eeconf.md` |
 | `VBLANK`, `IOMAN`, `MODLOAD` | analysed — `docs/analysis/10-module-loading-and-boot-configs.md` |
+| `ROMDRV`, `SIFMAN`, `SIFCMD`, `SIFINIT` | analysed — `docs/analysis/11-sif-and-rom-driver.md` |
 | Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -84,14 +85,19 @@ document each cites):
   `0x3ba000`, with the remainder of the 4 MiB zero-filled. (`01`)
 - One discriminator, `PRId < 0x10 || (*(u32*)0xBF801450 & 8)`, runs from the
   reset vector through the kernel modules: it picks the boot block's bus table
-  (`02`) and selects between the `P`/`I` module variant pairs (`06`).
+  (`02`), selects between the `P`/`I` module variant pairs (`06`), and gates
+  `SIFMAN`'s residency outright (`11`).
 - Ordinals identified so far, from how importers call them: `loadcore` 6 is
   versioned export registration and `loadcore` 10 the pinned variant,
   `loadcore` 12 looks up a boot record, `intrman` 17/18 are the
   critical-section pair (aliased at 19/20), `sysmem` 4 and 5 are the allocator
   and deallocator. (`05`, `07`, `08`, `09`, `10`)
 - Fixed absolute addresses are part of the ABI: the exception vector at `0`
-  (`06`) and the boot-parameter table anchored at `0x3F0` (`09`).
+  (`06`) and the boot-parameter table anchored at `0x3F0`, consulted by
+  `EECONF`, `SIFINIT` and `SIFCMD` (`09`, `11`).
+- The self-locating ROMDIR scan is written out four times over — boot block,
+  `IOPBOOT`, `MODLOAD`, `ROMDRV` — with no shared routine, so the archive's
+  self-location is firmly ABI. (`02`, `03`, `10`, `11`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -112,8 +118,8 @@ None outstanding. Both questions carried since `03` and `06` were settled in
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **`ROMDRV`, `SIFMAN`, `SIFCMD`**, the next modules in boot order — the ROM
-   file driver and the EE/IOP interface.
+1. **`IGREETING`, `REBOOT`, `LOADFILE`** and the CDVD stack, continuing the
+   boot order.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
