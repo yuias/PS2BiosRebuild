@@ -157,8 +157,41 @@ File *names* are interface — consumers resolve by name — and are reproduced.
 ## Verification
 
 `tools/mkromdir.py` builds an archive from a manifest, and
-`tools/romdir.py --list` parses it. The round-trip check is that building an
-archive from the reference's own extracted files reproduces the reference's
-table region byte for byte: same entry order, same `extinfo_size` and `size`
-fields, same computed offsets. That exercises ARC-2 through ARC-6a against real
-data without any of it entering the repository.
+`tools/romdir.py --list` parses it. The check is a **round-trip**: extract a
+reference image's files and metadata, write a manifest naming them in order, and
+rebuild. If this specification is right, the result is the original image.
+
+It is. All three cases reproduce their input **byte for byte over the whole
+file**:
+
+| Input | Size | Result |
+| --- | --- | --- |
+| `SCPH-50000.bin` | 4194304 | identical |
+| `SCPH-70000.bin` | 4194304 | identical |
+| `EELOADCNF` (nested, ARC-8) | 428 | identical |
+
+Because the reference's own file contents are supplied unchanged, this proves
+nothing about *contents* — it isolates and proves the **layout rules**: ARC-2's
+entry encoding, ARC-3's implied offsets, ARC-4a's table size, ARC-5's padding
+entries, ARC-6/6a's EXTINFO slicing, ARC-8's nesting and ARC-8b's omitted
+trailing padding. A build that satisfies these produces a structurally exact
+image.
+
+ARC-6b's record encoding is checked separately, by rebuilding one entry's
+metadata from directives and comparing against the reference bytes:
+
+```sh
+printf 'date 2002-04-03\nversion 1.01\ncomment System_Memory_Manager\n' > sysmem.ext
+python3 -c "
+import sys, pathlib; sys.path.insert(0, 'tools'); import mkromdir
+print(mkromdir.buildExtinfo(pathlib.Path('sysmem.ext')).hex())"
+# matches SYSMEM's slice in the reference EXTINFO
+```
+
+None of the intermediate artefacts are committed: extraction output and rebuilt
+images stay outside the repository, per `docs/clean-room-policy.md` §1.
+
+**ARC-8b was found by this check**, not by reading: the nested rebuild came out
+four bytes long until the builder stopped padding after the final entry. The
+requirement was already in this document from `docs/analysis/10`; the round-trip
+is what proved the tool wrong rather than the specification.

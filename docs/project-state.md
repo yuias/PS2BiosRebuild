@@ -8,11 +8,12 @@ the working document and is kept current.
 > all twenty-nine modules, in twelve documents covering the ROM archive format,
 > the boot block, `IOPBOOT` and the boot list, the IRX module format, and every
 > module from `SYSMEM` to `EESYNC`, with no questions outstanding. The EE side
-> is next and is untouched apart from an outline. Tooling is
-> `tools/romdir.py` (archive), `tools/irxinfo.py` (modules) and
-> `tools/romdis.py` (IOP/EE disassembly). Nothing is implemented yet; there is
-> no build system and no `docs/spec/` — both arrive with the first
-> implementation milestone.
+> is next and is untouched apart from an outline. **The first specification is
+> written and proven**: `docs/spec/01-rom-archive.md`, verified by a round-trip
+> that rebuilds both reference images and a nested archive byte for byte.
+> Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
+> `tools/irxinfo.py` (modules) and `tools/romdis.py` (IOP/EE disassembly).
+> There is still no build system for the image's *contents*.
 
 ---
 
@@ -74,6 +75,7 @@ per-file, and the eventual build will assemble the image the same way.
 | **IOP boot list** | **complete — all 29 modules surveyed** |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
+| ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -129,6 +131,7 @@ In rough order; each becomes a `docs/analysis/` document:
    — byte-identical across both reference ROMs — contains. This needs the R5900
    caveats in `tools/romdis.py` kept in mind.
 2. **`OSDSYS`** and the boot flow that reaches it.
-3. From there the PS1 pattern: analysis → spec → implementation. With the IOP
-   list complete, the first `docs/spec/` documents can begin in parallel — the
-   archive format and the module/link ABI are the settled parts.
+3. **`docs/spec/02`: the module and link ABI** — the IRX format, the library
+   table layout, versioned vs pinned registration, supersession, and the
+   `return & 3` residency rule. The settled half of the IOP work, and the
+   natural companion to the archive spec.
