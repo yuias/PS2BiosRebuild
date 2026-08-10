@@ -87,7 +87,7 @@ per-file, and the eventual build will assemble the image the same way.
 | EE syscalls: cache and CP0 control | analysed — `docs/analysis/18-ee-cache-syscalls.md` |
 | EE syscalls: initialisation and configuration | analysed — `docs/analysis/19-ee-config-syscalls.md` |
 | **EE syscall group survey** | **complete — every band characterised** |
-| OSD (`OSDSYS` and resources) | not started |
+| OSD (`OSDSYS`) | analysed — `docs/analysis/20-osdsys.md` |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
@@ -132,6 +132,9 @@ document each cites):
   stub; syscall `0x7B` is `0x06` with the path pinned to `rom0:OSDSYS`; the
   default boot passes `argv = { "BootBrowser" }`. `rom0:` is served by the
   IOP's `ROMDRV` across the SIF. (`15`)
+- `OSDSYS` is 99% one compressed blob behind a 3 KB decompressor. Only its
+  container and entry contract need reproducing; the payload is material the
+  clean-room policy already excludes. (`20`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -174,9 +177,9 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **`OSDSYS`**, the last unexamined component. With the syscall groups
-   characterised its call sites are now readable, which is why it was left
-   until now.
+4. **Depth on the EE syscalls** — arguments and return values slot by slot,
+   within the groups `16`–`19` established. This is the largest remaining
+   analysis and feeds a `docs/spec/05`.
 5. **`OSDSYS`** last: it is the largest component but mostly a consumer of the
    syscalls above, and much of its bulk is material `docs/clean-room-policy.md`
    §3 puts out of bounds anyway.
