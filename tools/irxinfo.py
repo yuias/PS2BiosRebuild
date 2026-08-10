@@ -95,6 +95,11 @@ class Irx:
                 i = d.find(needle, at)
                 if i < 0 or i >= end:
                     break
+                # A table header is word-aligned within the segment; the same
+                # byte pattern occurring at an odd offset is data, not a table.
+                if (i - self.load_off) % 4 != 0:
+                    at = i + 1
+                    continue
                 version, flags = struct.unpack_from("<HH", d, i + 8)
                 tag = d[i + 12:i + 20].split(b"\0")[0].decode("ascii", "replace")
                 found.append({"kind": kind, "vaddr": i - self.load_off,
