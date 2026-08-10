@@ -1,0 +1,3 @@
+date 2026-08-10
+version 1.00
+comment Memory_controller_bring_up

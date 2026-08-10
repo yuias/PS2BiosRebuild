@@ -1,0 +1,11 @@
+# name        source                          extinfo
+# The archive of docs/spec/01-rom-archive.md, in storage order. RESET is entry
+# zero and the table follows it, which is what makes the archive self-locating
+# (ARC-4). CMake configures the paths; mkromdir.py resolves them from wherever
+# the configured file lands, so they are absolute.
+RESET         @PS2_BINARY_DIR@/reset.bin      @@PS2_SOURCE_DIR@/src/rom/extinfo/reset.txt
+ROMDIR        =table                          -
+EXTINFO       =extinfo                        -
+ROMVER        @PS2_BINARY_DIR@/romver.bin     -
+RDRAM         @PS2_BINARY_DIR@/rdram.bin      @@PS2_SOURCE_DIR@/src/rom/extinfo/rdram.txt
+KERNEL        @PS2_BINARY_DIR@/kernel.bin     @@PS2_SOURCE_DIR@/src/rom/extinfo/kernel.txt
