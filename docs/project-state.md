@@ -11,8 +11,10 @@ the working document and is kept current.
 > is next and is untouched apart from an outline. **Two specifications are
 > written and mechanically checked**: `01-rom-archive.md`, verified by a
 > round-trip that rebuilds both reference images and a nested archive byte for
-> byte, and `02-module-abi.md`, verified by a conformance checker that passes on
-> every IRX module of both images.
+> byte, `02-module-abi.md`, verified by a conformance checker that passes on
+> every IRX module of both images, and `03-boot-chain.md`, whose static claims
+> are each reproducible by disassembly. **The settled part of the IOP side is
+> now specified.**
 > Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
 > `tools/irxinfo.py` (modules) and `tools/romdis.py` (IOP/EE disassembly).
 > There is still no build system for the image's *contents*.
@@ -79,6 +81,7 @@ per-file, and the eventual build will assemble the image the same way.
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
+| Boot chain (reset → boot list) | **specified** — `docs/spec/03-boot-chain.md` |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -140,6 +143,8 @@ In rough order; each becomes a `docs/analysis/` document:
    — byte-identical across both reference ROMs — contains. This needs the R5900
    caveats in `tools/romdis.py` kept in mind.
 2. **`OSDSYS`** and the boot flow that reaches it.
-3. **`docs/spec/03`: the boot chain** — the reset vector's CPU dispatch, the
-   IOP reset path and its POST codes, `IOPBOOT` and the `IOPBTCONF` grammar.
-   The last part of the IOP side that is settled enough to specify.
+3. **An emulator harness.** BOOT-4's ordering and BOOT-5's POST trace, and all
+   of `spec/02`'s run-time half (IRX-9 to IRX-12), can only be verified on a
+   machine. The PS1 project gated exactly this with a headless emulator
+   asserting a POST trace; the equivalent here is PCSX2. Until it exists those
+   requirements are described rather than verified.
