@@ -633,8 +633,12 @@ class Cpu:
         self.bus.write(base, size, merged & mask)
 
 
-# `spec/04` EE-2: the reset path calls `RDRAM` at this hard-coded address.
+# `spec/04` EE-2: the reset path calls `RDRAM`. The reference reaches it by the
+# hard-coded address below -- ROM offset 0x41000 -- but EE-2a allows a build to
+# place the file elsewhere, so the address is taken from the image's own archive
+# when it can be, and this is only the fallback.
 RDRAM_ENTRY = 0x9FC41000
+ROM_WINDOW = 0x9FC00000
 
 # Where the syscall harness puts its two-instruction caller. Far above the
 # kernel's own data, and inside the RAM the kernel has already accounted for.
@@ -646,12 +650,30 @@ KERNEL_STEPS = 1_500_000         # kernel entry to its wait for the IOP
 SYSCALL_STEPS = 400_000
 
 
+def locateRdram(rom: bytes) -> int:
+    """Where this image keeps `RDRAM`, which is where EE-2's call must land.
+
+    A rebuild may resolve the file by name rather than carry the reference's
+    constant, so the observation point is the file's actual address.
+    """
+    try:
+        import romdir
+        entries = romdir.parseEntries(rom, romdir.findTable(rom))
+        for entry in entries:
+            if entry.name == "RDRAM":
+                return ROM_WINDOW + entry.offset
+    except Exception:
+        pass                                 # not our archive; use the reference's
+    return RDRAM_ENTRY
+
+
 class Machine:
     """A booted EE, and the operations the specifications want performed on it."""
 
     def __init__(self, rom: bytes) -> None:
         self.bus = Bus(rom)
         self.cpu = Cpu(self.bus)
+        self.rdram_entry = locateRdram(rom)
         self.rdram_called = False
         self.stack_at_rdram = 0
         self.reached_kernel = False
@@ -672,7 +694,7 @@ class Machine:
             if trace and cpu.steps < trace:
                 print(f"  {cpu.steps:7d}  {cpu.pc:#010x}  "
                       f"{self.bus.read(cpu.pc, 4):08x}")
-            if cpu.pc == RDRAM_ENTRY:
+            if cpu.pc == self.rdram_entry:
                 self.rdram_called = True
                 self.stack_at_rdram = cpu.get(29) & MASK32
                 cpu.set(2, 0)
@@ -764,7 +786,8 @@ def checkMachine(machine: Machine) -> list[str]:
             f"the stack was {machine.stack_at_rdram:#010x}, "
             f"not in the scratchpad")
     require(machine.rdram_called, "EE-2",
-            f"{RDRAM_ENTRY:#010x} was never called")
+            f"{machine.rdram_entry:#010x} -- where RDRAM lies -- was never "
+            f"called")
     require(machine.reached_kernel, "EE-3d",
             f"control never reached {KERNEL_ENTRY:#010x}")
     if not machine.reached_kernel:
@@ -841,7 +864,8 @@ def report(machine: Machine) -> None:
         index, entry = cpu.tlb_writes[0]
         print(f"   first TLB entry: index {index}, EntryHi={entry[1]:#010x}, "
               f"EntryLo0={entry[2]:#010x}, EntryLo1={entry[3]:#010x}")
-    print(f"   RDRAM called at {RDRAM_ENTRY:#010x}: {machine.rdram_called}")
+    print(f"   RDRAM called at {machine.rdram_entry:#010x}: "
+          f"{machine.rdram_called}")
     print(f"   reached {KERNEL_ENTRY:#010x}: {machine.reached_kernel}")
     if machine.kernel_console:
         print("\nthe kernel's own console:")
