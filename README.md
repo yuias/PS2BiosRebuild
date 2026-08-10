@@ -9,19 +9,18 @@ It builds from source, its IOP loads and links its modules, its EE comes up on
 our own kernel, the two meet across the SIF, and the boot ends by fetching
 `rom0:OSDSYS` over that bus and running it. What is thin is depth: three of the
 boot list's twenty-nine modules exist and fourteen of the 125 syscall slots are
-served. [`docs/implementation.md`](docs/implementation.md) is the output-side
-document. Both CPUs are
-surveyed — the ROM archive format, the boot block, all twenty-nine modules of
-the IOP boot list, and the EE kernel down to the arguments of each of its 125
-syscalls — and five specifications are written and mechanically gated: an
-archive built from `docs/spec/01-rom-archive.md` reproduces both reference
-images byte for byte, every IRX module passes `tools/irxinfo.py --check`,
-`tools/iopsim.py --check` boots the IOP side and judges the result, and
-`tools/eesim.py --check` boots the EE side on a simulated R5900, reaching the
-kernel and calling its syscalls, and `tools/ps2sim.py --check` runs both CPUs
-against each other over a modelled SIF.
-[`docs/project-state.md`](docs/project-state.md) is the working document and
-records exactly where things stand.
+served.
+
+Behind that, both CPUs are fully surveyed — the archive format, the boot block,
+all twenty-nine modules of the IOP boot list, and the EE kernel down to the
+arguments of each of its 125 syscalls — and five specifications are written,
+each with a gate that has been tested in both directions: an archive built from
+`docs/spec/01-rom-archive.md` reproduces both reference images byte for byte,
+every IRX module passes `tools/irxinfo.py --check`, and `tools/iopsim.py`,
+`tools/eesim.py` and `tools/ps2sim.py` boot the IOP, the EE, and the two
+against each other. [`docs/project-state.md`](docs/project-state.md) is the
+working document; [`docs/implementation.md`](docs/implementation.md) is the
+output side.
 
 This project follows the method of its sibling PS1 BIOS reimplementation:
 observations from the reference images go into `docs/analysis/` with the
