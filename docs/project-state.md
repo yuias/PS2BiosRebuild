@@ -4,11 +4,11 @@ Read this first when picking the project up. It records where the work stands,
 how the work is done, and what is next. `README.md` is the front door; this is
 the working document and is kept current.
 
-> **Where the work is right now:** the analysis phase is under way and has
-> worked through most of the IOP boot list. Eleven documents cover the ROM
-> archive format, the boot block, `IOPBOOT` and the boot list, the IRX module
-> format, and the kernel modules from `SYSMEM` through the SIF interface — with
-> no questions outstanding. Tooling is
+> **Where the work is right now:** the **IOP boot list is fully surveyed** —
+> all twenty-nine modules, in twelve documents covering the ROM archive format,
+> the boot block, `IOPBOOT` and the boot list, the IRX module format, and every
+> module from `SYSMEM` to `EESYNC`, with no questions outstanding. The EE side
+> is next and is untouched apart from an outline. Tooling is
 > `tools/romdir.py` (archive), `tools/irxinfo.py` (modules) and
 > `tools/romdis.py` (IOP/EE disassembly). Nothing is implemented yet; there is
 > no build system and no `docs/spec/` — both arrive with the first
@@ -70,7 +70,8 @@ per-file, and the eventual build will assemble the image the same way.
 | `EECONF`, `THREADMAN` | analysed — `docs/analysis/09-threads-and-eeconf.md` |
 | `VBLANK`, `IOMAN`, `MODLOAD` | analysed — `docs/analysis/10-module-loading-and-boot-configs.md` |
 | `ROMDRV`, `SIFMAN`, `SIFCMD`, `SIFINIT` | analysed — `docs/analysis/11-sif-and-rom-driver.md` |
-| Remaining IOP kernel modules | not started |
+| `IGREETING`, `REBOOT`, `LOADFILE`, CDVD, `FILEIO`, `SECRMAN`, `EESYNC` | analysed — `docs/analysis/12-ee-facing-services.md` |
+| **IOP boot list** | **complete — all 29 modules surveyed** |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
 | Build system / implementation | not started |
@@ -107,6 +108,12 @@ document each cites):
 - Alternative IOP configurations are nested ROMDIR archives (`EELOADCNF`,
   `OSDCNF`) carrying their own `IOPBTCONF`, so the archive format must nest and
   the `X`-variant modules are chosen by which list is booted. (`10`)
+- The boot list has three phases — kernel core, OS services, then EE-facing
+  services. No phase-one module imports `sifman`/`sifcmd`; every phase-three one
+  does. Alternative configurations extend phase three only. (`12`)
+- Four module shapes exist: library, multi-library, export-free resident
+  service, and one-shot action (never resident, distinguished only by
+  `return & 3`). (`12`)
 
 ### Open questions
 
@@ -117,10 +124,11 @@ None outstanding. Both questions carried since `03` and `06` were settled in
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **`IGREETING`, `REBOOT`, `LOADFILE`** and the CDVD stack, continuing the
-   boot order.
-2. From there, module by module, the PS1 pattern: analysis → spec → (later)
-   implementation.
-3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
-   once the EE kernel is under analysis (how `EELOAD` is staged to RAM at
-   `0x8000_1000`).
+1. **The EE side.** Promote `02` §"EE reset path" to a full document: how the
+   EE path stages `EELOAD` to RAM at `0x8000_1000`, and what the `KERNEL` image
+   — byte-identical across both reference ROMs — contains. This needs the R5900
+   caveats in `tools/romdis.py` kept in mind.
+2. **`OSDSYS`** and the boot flow that reaches it.
+3. From there the PS1 pattern: analysis → spec → implementation. With the IOP
+   list complete, the first `docs/spec/` documents can begin in parallel — the
+   archive format and the module/link ABI are the settled parts.
