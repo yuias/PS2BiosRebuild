@@ -68,7 +68,7 @@ per-file, and the eventual build will assemble the image the same way.
 | --- | --- |
 | ROM file table (ROMDIR/EXTINFO/ROMVER) | analysed — `docs/analysis/01-rom-layout.md` |
 | Boot block (`RESET`): dispatch + IOP path | analysed — `docs/analysis/02-boot-block.md` |
-| Boot block: EE path detail | outlined only (`02` §"EE reset path") |
+| Boot block: EE path detail | analysed — `docs/analysis/13-ee-boot-path.md` |
 | `IOPBOOT` + `IOPBTCONF` boot list | analysed — `docs/analysis/03-iopboot-and-boot-list.md` |
 | IOP module (IRX) file format | analysed — `docs/analysis/04-iop-module-format.md` |
 | `SYSMEM`, `LOADCORE` + the link algorithm | analysed — `docs/analysis/05-sysmem-and-loadcore.md` |
@@ -107,9 +107,13 @@ document each cites):
 - Fixed absolute addresses are part of the ABI: the exception vector at `0`
   (`06`) and the boot-parameter table anchored at `0x3F0`, consulted by
   `EECONF`, `SIFINIT` and `SIFCMD` (`09`, `11`).
-- The self-locating ROMDIR scan is written out four times over — boot block,
-  `IOPBOOT`, `MODLOAD`, `ROMDRV` — with no shared routine, so the archive's
-  self-location is firmly ABI. (`02`, `03`, `10`, `11`)
+- The self-locating ROMDIR scan is written out **five** times over — boot block,
+  `IOPBOOT`, `MODLOAD`, `ROMDRV` and the EE reset path — with no shared routine,
+  so the archive's self-location is firmly ABI. (`02`, `03`, `10`, `11`, `13`)
+- `RDRAM` is entered by hard-coded address `0x9FC41000`, so its archive offset
+  is load-bearing where no other file's is. (`13`)
+- `KERNEL` is copied to physical 0 and entered at `0x80001000`: its first
+  `0x1000` bytes are the EE exception vectors. (`13`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -152,5 +156,7 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **The EE side**, which the SIF wait now makes the natural next subject:
-   `02` §"EE reset path", `EELOAD`, and the `KERNEL` image.
+4. **The `KERNEL` image.** Now known to be a vector table followed by kernel
+   code, byte-identical across both reference ROMs, and entered with the boot's
+   result waiting in the scratchpad at `0x70003FF0`. `EELOAD` is loaded by
+   something later — finding out what is part of the same work.
