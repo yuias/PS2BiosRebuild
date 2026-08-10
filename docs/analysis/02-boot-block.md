@@ -72,10 +72,12 @@ the one this project follows first. In order:
 
 1. **POST tracing.** Throughout, a one-byte progress code is written to the IOP
    POST register at `0xBF80_2070` (`sb $3, 0x2070($1)` with `$1 = 0xBF80_0000`).
-   The sequence observed is `1, 2, 4, 5, 6, 7` on the normal path (and `8, 9`
-   on the alternate, plus `0xFA` on failure) — an equivalent of the PS1 BIOS's
-   `0x0..0xFF` POST codes, and the first thing to reproduce so a boot can be
-   traced.
+   Ten writes occur in `0xBFC02000..0xBFC02740`. A **retail** machine emits
+   `2, 3, 4, 5, 8, 9`; codes `1`, `6` and `7` belong to the alternate machine
+   selected by the discriminator below, and `0xFA` is the failure stop. They are
+   an equivalent of the PS1 BIOS's POST codes and the first thing to reproduce
+   so a boot can be traced. `docs/spec/03-boot-chain.md` §BOOT-5 tabulates them
+   with the extraction command.
 
 2. **Bus / RAM configuration.** Two small tables at `0xBFC0_2560` and
    `0xBFC0_24A8` are walked as `(register_address, value)` pairs, OR-ing a bit
@@ -110,10 +112,12 @@ the one this project follows first. In order:
    bfc023e4  jr    $2                # enter the module
    ```
 
-   Bit 3 of `0xBF80_1450` chooses which module: set → `"TBIN"` (the factory /
-   test path), clear → `"IOPBOOT"` (the retail path, same shape at `0xBFC023EC`
-   with the name pointer `0xBFC0_2478`). Both names are plain strings in the
-   boot block:
+   The **whole discriminator** — `PRId < 0x10 || (*(u32*)0xBF80_1450 & 8)`, not
+   bit 3 alone — chooses which module: true → `"TBIN"` (the factory / test
+   path, POST `6`, `7`), false → `"IOPBOOT"` (the retail path at `0xBFC023EC`,
+   POST `8`, `9`, with the name pointer `0xBFC0_2478`). Each path first loads a
+   RAM-size record — `0xBFC0_24A0` for `TBIN`, `0xBFC0_2498` for `IOPBOOT` —
+   into `0xBF80_1060`. Both names are plain strings in the boot block:
 
    ```sh
    python3 -c "d=open('assets/SCPH-50000.bin','rb').read(); \
