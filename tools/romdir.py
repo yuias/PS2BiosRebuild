@@ -132,7 +132,10 @@ def checkConsistency(data: bytes, entries: list[Entry]) -> None:
             f"sum of extinfo_size {total_ext}",
             file=sys.stderr,
         )
-    end = entries[-1].offset + alignUp(entries[-1].size)
+    # The last entry's alignment padding may be omitted in storage -- nested
+    # archives such as EELOADCNF end exactly at their final file's last byte --
+    # so bound-check the content, not the padding.
+    end = entries[-1].offset + entries[-1].size
     if end > len(data):
         sys.exit(f"romdir: entries run past the image end ({end:#x})")
 
