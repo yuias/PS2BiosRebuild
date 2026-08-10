@@ -4,16 +4,18 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS.
 
-Status: **analysis phase, just begun.** The ROM's file-archive structure
-(ROMDIR/EXTINFO/ROMVER) is parsed and documented, and the extraction tooling
-works against both reference images. Nothing is implemented yet; there is no
-build system. [`docs/project-state.md`](docs/project-state.md) is the working
-document and records exactly where things stand.
+Status: **analysis phase, well under way.** The IOP side is fully surveyed —
+the ROM archive format, the boot block, and all twenty-nine modules of the IOP
+boot list — and the first specification is written and proven: an archive built
+from `docs/spec/01-rom-archive.md` reproduces both reference images byte for
+byte. The EE side and the image's actual contents are not started.
+[`docs/project-state.md`](docs/project-state.md) is the working document and
+records exactly where things stand.
 
 This project follows the method of its sibling PS1 BIOS reimplementation:
 observations from the reference images go into `docs/analysis/` with the
 command that reproduces each claim, behavioural specifications distilled from
-them will go into `docs/spec/`, and the implementation is written from the
+them go into `docs/spec/`, and the implementation is written from the
 specifications. [`docs/clean-room-policy.md`](docs/clean-room-policy.md) states
 the rules — and their current limits — honestly.
 
@@ -36,6 +38,7 @@ must also stay outside the repository.
 | Tool | Purpose |
 | --- | --- |
 | `tools/romdir.py` | Parse the ROM's ROMDIR file table: list, extract, decode ROMVER/EXTINFO, diff two images. |
+| `tools/mkromdir.py` | Build a ROM archive from a manifest, per `docs/spec/01-rom-archive.md`. |
 | `tools/irxinfo.py` | Inspect an extracted IOP module: `.iopmod` metadata, library tables, export ordinals. |
 | `tools/romdis.py` | Disassemble a raw image or module, for either CPU, at a chosen address. |
 
@@ -51,6 +54,9 @@ python3 tools/romdir.py assets/SCPH-50000.bin --extinfo SYSMEM
 
 # what changed between two models
 python3 tools/romdir.py assets/SCPH-50000.bin --compare assets/SCPH-70000.bin
+
+# build an archive from a manifest
+python3 tools/mkromdir.py manifest.txt -o out.bin --size 0x400000 --list
 ```
 
 Modules are analysed after extracting them (to a directory outside the
@@ -69,12 +75,12 @@ python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x60 0xd8
 assets/                 reference ROM images (not committed)
 docs/project-state.md   start here: status, method, next steps
 docs/analysis/          observations from the reference images, with repro commands
+docs/spec/              behavioural specifications - the input to the build
 docs/clean-room-policy.md
 tools/                  host-side analysis tooling
 ```
 
-`docs/spec/`, `src/` and the build system arrive with the first implementation
-milestone.
+`src/` and the build system arrive with the first implementation milestone.
 
 ## Target notes
 
@@ -97,6 +103,8 @@ the archive format itself.
   how it is done, what is next. The handover document, kept current.
 - `docs/analysis/NN-*.md` — observations from the reference images, every
   claim naming the command that reproduces it.
+- `docs/spec/NN-*.md` — behavioural specifications with numbered requirement
+  IDs (`ARC-1`, `ARC-6b`, …), the input to the implementation.
 - [`docs/clean-room-policy.md`](docs/clean-room-policy.md) — what is and is
   not enforced, and why the "clean room" label is not yet accurate.
 
