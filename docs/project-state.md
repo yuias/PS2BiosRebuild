@@ -85,7 +85,7 @@ per-file, and the eventual build will assemble the image the same way.
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
-| IOP simulator | boots the reference to the SIF wait; verifies the module ABI's run-time half |
+| IOP simulator | **a gate** — `tools/iopsim.py --check`, tested in both directions |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -147,11 +147,10 @@ In rough order; each becomes a `docs/analysis/` document:
    — byte-identical across both reference ROMs — contains. This needs the R5900
    caveats in `tools/romdis.py` kept in mind.
 2. **`OSDSYS`** and the boot flow that reaches it.
-3. **Turn the simulator run into a gate.** It currently reports; it should
-   assert — a `--check` that fails on a wrong POST sequence, a missing library,
-   an unbound import, or a lost supersession, so a future build is judged
-   automatically. `tools/romdis.py`-style, this is what `checkimage.py` was to
-   the PS1 project.
-4. **Residency (IRX-12) is still unverified.** The simulator does not yet report
-   which modules were freed rather than kept, which is the one part of `spec/02`
-   the run does not currently observe.
+3. **Residency (IRX-12) stays unverified for now.** The one-shot modules that
+   would demonstrate it — `SIFINIT` (26) and `IGREETING` (20) — sit at or past
+   the point where the IOP boot waits for the EE, so an IOP-only simulator
+   cannot reach them being freed. It needs either an EE stub answering the SIF
+   handshake or a targeted harness that loads a single module.
+4. **The EE side**, which the SIF wait now makes the natural next subject:
+   `02` §"EE reset path", `EELOAD`, and the `KERNEL` image.
