@@ -64,6 +64,7 @@ per-file, and the eventual build will assemble the image the same way.
 | IOP module (IRX) file format | analysed — `docs/analysis/04-iop-module-format.md` |
 | `SYSMEM`, `LOADCORE` + the link algorithm | analysed — `docs/analysis/05-sysmem-and-loadcore.md` |
 | `EXCEPMAN`, `INTRMANP`/`INTRMANI` | analysed — `docs/analysis/06-exceptions-and-interrupts.md` |
+| `SSBUSC`, `DMACMAN` | analysed — `docs/analysis/07-bus-and-dma.md` |
 | Remaining IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -79,6 +80,9 @@ document each cites):
 - One discriminator, `PRId < 0x10 || (*(u32*)0xBF801450 & 8)`, runs from the
   reset vector through the kernel modules: it picks the boot block's bus table
   (`02`) and selects between the `P`/`I` module variant pairs (`06`).
+- Ordinals identified so far, from how importers call them: `loadcore` 6 is
+  export-library registration, `intrman` 17/18 are the critical-section pair
+  (aliased at 19/20). (`05`, `07`)
 
 ### Open questions
 
@@ -91,7 +95,8 @@ document each cites):
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **Bus and DMA**: `SSBUSC` and `DMACMAN`, the next modules in boot order.
+1. **C library and heap**: `SYSCLIB` and `HEAPLIB`, the next modules in boot
+   order and the base later modules are written against.
 2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
 3. **EE boot path detail**: promote `02` §"EE reset path" to a full document

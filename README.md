@@ -36,6 +36,8 @@ must also stay outside the repository.
 | Tool | Purpose |
 | --- | --- |
 | `tools/romdir.py` | Parse the ROM's ROMDIR file table: list, extract, decode ROMVER/EXTINFO, diff two images. |
+| `tools/irxinfo.py` | Inspect an extracted IOP module: `.iopmod` metadata, library tables, export ordinals. |
+| `tools/romdis.py` | Disassemble a raw image or module, for either CPU, at a chosen address. |
 
 ```sh
 # what the archive holds, with computed offsets
@@ -49,6 +51,16 @@ python3 tools/romdir.py assets/SCPH-50000.bin --extinfo SYSMEM
 
 # what changed between two models
 python3 tools/romdir.py assets/SCPH-50000.bin --compare assets/SCPH-70000.bin
+```
+
+Modules are analysed after extracting them (to a directory outside the
+repository), then inspected and disassembled:
+
+```sh
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>
+python3 tools/irxinfo.py <outdir>/SYSMEM --exports
+python3 tools/irxinfo.py <outdir>/SYSMEM --dump-load <outdir>/SYSMEM.text
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x60 0xd8
 ```
 
 ## Layout
