@@ -85,7 +85,8 @@ per-file, and the eventual build will assemble the image the same way.
 | EE syscalls: exceptions and interrupts | analysed — `docs/analysis/16-ee-interrupt-syscalls.md` |
 | EE syscalls: the scheduler group | analysed — `docs/analysis/17-ee-scheduler-syscalls.md` |
 | EE syscalls: cache and CP0 control | analysed — `docs/analysis/18-ee-cache-syscalls.md` |
-| EE syscalls: the far-end slots | not started |
+| EE syscalls: initialisation and configuration | analysed — `docs/analysis/19-ee-config-syscalls.md` |
+| **EE syscall group survey** | **complete — every band characterised** |
 | OSD (`OSDSYS` and resources) | not started |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
@@ -173,8 +174,9 @@ In rough order; each becomes a `docs/analysis/` document:
    the point where the IOP boot waits for the EE, so an IOP-only simulator
    cannot reach them being freed. It needs either an EE stub answering the SIF
    handshake or a targeted harness that loads a single module.
-4. **The far-end EE syscall slots** — `0x01`, `0x4A`–`0x4F`, `0x6E`, `0x6F` —
-   the last unexamined group, sitting past `0x8000CD18` in the image.
+4. **`OSDSYS`**, the last unexamined component. With the syscall groups
+   characterised its call sites are now readable, which is why it was left
+   until now.
 5. **`OSDSYS`** last: it is the largest component but mostly a consumer of the
    syscalls above, and much of its bulk is material `docs/clean-room-policy.md`
    §3 puts out of bounds anyway.

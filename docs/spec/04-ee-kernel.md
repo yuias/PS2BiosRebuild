@@ -240,13 +240,34 @@ remaining arguments along and tail-calls it.
 which means the IOP boot of `spec/03` must have completed before EE-9c can
 succeed.
 
-## EE-10: Hardware the kernel brings up
+## EE-10: Hardware initialisation is a syscall
 
-Before the boot tail runs, the kernel initialises DMAC, VU0, VU1, VIF0, VIF1,
-GIF, GS, IPU, INTC, TIMER, FPU, user memory and the scratchpad. The kernel
-announces each step, which is how the list is known; the message text is
-original expression and a rebuild supplies its own (`docs/clean-room-policy.md`
-§3).
+The kernel brings up DMAC, VU0, VU1, VIF0, VIF1, GIF, GS, IPU, INTC, TIMER,
+FPU, user memory and the scratchpad. It announces each step, which is how the
+list is known; the message text is original expression and a rebuild supplies
+its own (`docs/clean-room-policy.md` §3).
+
+**EE-10a:** This is **slot `0x01`**, a callable syscall, not a fixed boot
+sequence. `$a0` is a bitmask selecting which subsystems to bring up, and each
+bit is tested twice — once to emit the announcement and once to guard the work.
+The bit assignment is part of the contract: a caller passing a mask must get
+exactly those subsystems. (`docs/analysis/19`)
+
+## EE-11: Other pinned interfaces
+
+**EE-11a:** Slot `0x4C` reads the GS revision from the privileged register at
+`0x12001000` with a **64-bit `ld`**, takes bits 16–23, and branches on whether
+it is below `0x19`. GS privileged registers are doubleword-wide; two word loads
+are not equivalent.
+
+**EE-11b:** Slots `0x4A` and `0x4B` are the **set and get** of one packed
+configuration word at `0x80022590`, with near-identical code running in
+opposite directions. They must not be merged: doing so would make one direction
+silently overwrite the other's fields.
+
+**EE-11c:** Slot `0x02` sign-extends three arguments **from 16 bits** before
+use. A rebuild taking them at full width would accept values the reference
+truncates.
 
 ## Verification
 
