@@ -4,9 +4,13 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS.
 
-Status: **analysis complete; implementation started.** The image builds, its
-EE boots into our own kernel, and the IOP path reaches its handoff — see
-[`docs/implementation.md`](docs/implementation.md). Both CPUs are
+Status: **analysis complete; the image boots end to end on the simulators.**
+It builds from source, its IOP loads and links its modules, its EE comes up on
+our own kernel, the two meet across the SIF, and the boot ends by fetching
+`rom0:OSDSYS` over that bus and running it. What is thin is depth: three of the
+boot list's twenty-nine modules exist and fourteen of the 125 syscall slots are
+served. [`docs/implementation.md`](docs/implementation.md) is the output-side
+document. Both CPUs are
 surveyed — the ROM archive format, the boot block, all twenty-nine modules of
 the IOP boot list, and the EE kernel down to the arguments of each of its 125
 syscalls — and five specifications are written and mechanically gated: an
@@ -14,9 +18,8 @@ archive built from `docs/spec/01-rom-archive.md` reproduces both reference
 images byte for byte, every IRX module passes `tools/irxinfo.py --check`,
 `tools/iopsim.py --check` boots the IOP side and judges the result, and
 `tools/eesim.py --check` boots the EE side on a simulated R5900, reaching the
-kernel and calling its syscalls. Run together by `tools/ps2sim.py`, the two
-sides complete their handshake and the IOP boot finishes. The image's actual
-contents are not started.
+kernel and calling its syscalls, and `tools/ps2sim.py --check` runs both CPUs
+against each other over a modelled SIF.
 [`docs/project-state.md`](docs/project-state.md) is the working document and
 records exactly where things stand.
 

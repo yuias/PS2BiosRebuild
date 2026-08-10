@@ -4,31 +4,19 @@ Read this first when picking the project up. It records where the work stands,
 how the work is done, and what is next. `README.md` is the front door; this is
 the working document and is kept current.
 
-> **Where the work is right now:** **the analysis is complete on both CPUs.**
-> The IOP boot list is fully surveyed — all twenty-nine modules, in twelve
-> documents — and so is the EE: its boot path, kernel tables, syscall groups,
-> and now the arguments and return value of every one of the 125 syscall slots.
-> **Five specifications are written and mechanically checked**:
-> `01-rom-archive.md`, verified by a round-trip that rebuilds both reference
-> images and a nested archive byte for byte; `02-module-abi.md`, verified by a
-> conformance checker that passes on every IRX module of both images;
-> `03-boot-chain.md`, executed by `tools/iopsim.py`, which boots the reference
-> image to where the IOP waits for the EE, reproducing the spec's retail POST
-> sequence and leaving 23 registered libraries and 55 bound import tables in
-> RAM; and `04-ee-kernel.md` and `05-ee-syscall-abi.md`, gated statically by
-> `tools/eeksys.py --check` and `tools/eeabi.py --check`.
-> Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
-> `tools/irxinfo.py` (modules), `tools/romdis.py` (IOP/EE disassembly),
-> `tools/iopsim.py` (IOP execution), `tools/eeksys.py`/`tools/eeabi.py` (EE
-> kernel, statically) and `tools/eesim.py`, which **boots the EE on a simulated
-> R5900**, reaches the kernel, and calls its syscalls — so the EE's dynamic
-> requirements are executed rather than described, and `tools/ps2sim.py`, which
-> **runs both CPUs against each other** across a modelled SIF — completing the
-> handshake that each was blocked on and finishing the IOP boot. **What remains
-> is implementation**, and it now boots end to end: `cmake -B build -G Ninja` produces a
-> 4 MiB image whose **EE boots into our own kernel**, with `ninja -C build
-> check` judging it at the depth it has reached
-> (`docs/implementation.md`).
+> **Where the work is right now:** the analysis is complete on both CPUs and
+> **the image boots end to end on the simulators**. Its EE comes up on our own
+> kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus and
+> runs it — `spec/03` BOOT-1 to BOOT-10 and `spec/04` EE-1 to EE-9, on our own
+> code rather than the reference's. What is thin is *depth*: three of the boot
+> list's twenty-nine modules exist, fourteen of the 125 syscall slots are
+> served, and there is no scheduler.
+>
+> Five specifications are written and every one has a gate that has been tested
+> in both directions. Six simulators and checkers judge an image — ours and the
+> reference's on the same terms — and `ninja -C build check` states what our
+> image is currently expected to do, printing what it is *not* yet expected to
+> do on every success so the list cannot go stale.
 
 ---
 
@@ -109,17 +97,25 @@ per-file, and the eventual build will assemble the image the same way.
 | Joining the two CPUs (SIF handshake) | analysed — `docs/analysis/23-joining-the-two-cpus.md` |
 | Joint simulator | **a gate** — `tools/ps2sim.py --check`, tested with `--no-bridge` |
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
-| Build system | **CMake + Ninja + LLVM** — `docs/implementation.md` |
+
+### What is built
+
+`docs/implementation.md` covers all of this, including every deviation from the
+reference and the reason for it.
+
+| Area | State |
+| --- | --- |
+| Build system | **CMake + Ninja + LLVM** — no cross-gcc needed |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
 | `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list and loads modules from it |
-| IRX producer + loader | **built** — `tools/mkirx.py`; both modules pass `irxinfo --check` |
+| IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built** — normal-mode DMA both ways; the EE fetches an archive file |
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
-| Everything else in the image | not started |
+| Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
 document each cites):
@@ -217,25 +213,52 @@ document each cites):
 None outstanding. Both questions carried since `03` and `06` were settled in
 `10`.
 
-## 5. Next steps
+## 5. Resuming
 
-The survey phase is finished: every major component has a document and every
-component that can be gated has a gate. What is left is one large piece of work
-and three loose ends.
+```sh
+cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mipsel-ps2.cmake
+ninja -C build && ninja -C build check      # build the image and judge it
+```
 
-1. **Implementation**, continuing in this order, because each step is what the
-   next one needs: `IOPBOOT` and enough of the IOP kernel to load modules
-   (`spec/03` BOOT-7, `spec/02`); the EE vector page, exception dispatch and
-   syscall table (`spec/04` EE-5 to EE-8, `spec/05`); then the handshake of
-   BOOT-10, at which point `tools/ps2sim.py` can judge our image the way it
-   judges the reference.
-2. **SIF as a data path, not just registers.** `tools/ps2sim.py` shares the six
-   handshake registers, which is enough to finish the IOP boot and tear down
-   `SIFINIT`. It does not move data: after the handshake the EE waits on a SIF1
-   DMA that nothing drains. Modelling SIF0/SIF1 as real channels on both sides,
-   with their packet headers and an interrupt to wake the IOP's driver, is what
-   `spec/04` EE-9's boot tail — `rom0:OSDSYS` across the bus — needs.
-3. **Nine EE slots have an inferred rather than observed return.** `0x63` and
-   `0x67` leave through the CP0 jump table, and seven others take their result
-   from a callee (`spec/05` SYS-1c). Following those by hand would replace an
-   inference with an observation, but nothing depends on it yet.
+The reference gates, which must keep passing whatever we change in the tools:
+
+```sh
+python3 tools/iopsim.py assets/SCPH-50000.bin --check
+python3 tools/eesim.py  assets/SCPH-50000.bin --check
+python3 tools/ps2sim.py assets/SCPH-50000.bin --check
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>   # outside the repo
+python3 tools/eeksys.py <outdir>/KERNEL --check
+python3 tools/eeabi.py  <outdir>/KERNEL --check
+for f in <outdir>/*; do python3 tools/irxinfo.py "$f" --check; done   # 57 modules
+```
+
+`docs/implementation.md` is the output-side document: how the image is built,
+what it does today, and every deviation from the reference with its reason.
+
+## 6. Next steps
+
+In this order, because each removes what blocks the next.
+
+1. **The scheduler, and the context save it needs** (`spec/04` EE-7e, EE-7g;
+   `spec/05` SYS-2a). Two of our deviations close together here: the syscall
+   entry saves only `$ra`, `$sp` and `$at`, and `EESYNC` never returns from its
+   entry because there is no thread to put a service on. Threads on the IOP
+   (`THREADMAN`) and the EE's scheduling group are the same problem twice.
+2. **Fill in the syscall slots** (`spec/05` SYS-1). 111 of the 125 still resolve
+   to the reporter. The table and the entry are done, so each slot is now an
+   isolated piece of work — and `tools/eeabi.py --check` on our own `KERNEL`
+   measures the distance directly: it currently fails on exactly two counts,
+   the unimplemented slots and the KSEG1 cache trio.
+3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
+   twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
+   allocator cannot free out of order and everything above it wants a real
+   heap.
+4. **Try it in PCSX2.** The image boots on our simulators, which model far less
+   than an emulator does; the first run on the working target will find
+   whatever we have modelled too kindly. Nothing is on screen yet — the EE
+   speaks only over the serial port — so read PCSX2's console rather than its
+   window.
+5. **Two loose ends in the analysis.** Nine EE slots have an inferred rather
+   than observed return (`spec/05` SYS-1c), and the EE's chain-mode DMA is
+   unmodelled, which is why the *reference* still stops after its handshake in
+   `tools/ps2sim.py` while ours goes on.

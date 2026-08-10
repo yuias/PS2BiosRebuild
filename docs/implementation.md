@@ -321,16 +321,50 @@ first-pair bit preservation and the POST side effect are all implemented.
 ## What is not built yet
 
 `ninja -C build check` prints this list at the end of every successful run, so
-it cannot quietly go stale:
+it cannot quietly go stale. This copy is the gate's own text:
 
-- loading an IRX module: `IOPBOOT` locates them but cannot yet relocate, link
-  or enter one (`spec/02`)
-- 111 of the 125 syscall slots, which resolve to the reporter rather than to
-  their own handlers (`spec/05` SYS-1)
-- EE-7e's context save, and the scheduler that needs it
-- the EE's chain mode, which the reference's driver uses
-- `spec/04` EE-9's boot tail: a file crosses the SIF, but nothing loads and
-  runs a program from one yet
+- The rest of the boot list: three of its twenty-nine modules are built
+- Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
+- 111 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- EE-7e's 128-bit context save, and the scheduler that needs it
+- The EE's chain mode: our transfers are normal-mode, so the tag lists the reference's driver builds have no counterpart here
+- EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
+
+## Four things that cost time, written down so they cost it once
+
+None of these is in a specification, because none of them is about the PS2.
+They are about writing a freestanding image with this toolchain, and each was
+found by a simulator saying exactly where control went.
+
+**`jal` is not position-independent.** It encodes an absolute target within the
+current 256 MiB region — a *link-time* address. `IOPBOOT` runs from wherever
+the archive puts it, so its first `jal` jumped into nothing (`0xB01DE5C8`).
+`b` is PC-relative and had been working, which is what made it puzzling. Every
+call in that file is `bal`.
+
+**`%hi`/`%lo` are a pair with `addiu`, not with `ori`.** `%hi` compensates for
+the sign extension of the `addiu` that follows it, so a constant whose low half
+is `>= 0x8000` lands `0x10000` too high when the low half is applied with
+`ori`: `0xB000F500` became `0xB001F500`, and the kernel printed nothing because
+its writes went to a register that does not exist. The `liw` macro computes
+both halves itself; `la` is for symbols, where the linker must do the
+relocation and `addiu` is right.
+
+**A module's bss is zeroed where it lands.** The boot list was at `0x2000`,
+comfortably above the load base of `0x800` — until a module grew a 16 KiB
+buffer and the loader's zero-fill wiped the list on its way past. The load base
+says where the *first* module starts and nothing about where the last one ends;
+the boot's own structures now live above the load region entirely.
+
+**`Status.BEV` is set when the kernel gets control.** `spec/04` EE-1 leaves it
+set, so exceptions go to the ROM's vectors at `0xBFC00200` — not to the vector
+page the kernel just arrived with. Syscalls did nothing at all until the kernel
+cleared it. The specification does not mention this because the reference
+kernel clears it as a matter of course; a rebuild has to know.
+
+**And one that is about the assembler**: ten bytes of string followed by code
+leaves the code two bytes out of alignment, and the instruction stream decodes
+as garbage from that point on (`unknown opcode 0x3f`). `.align 2` after data.
 
 ## How the image is judged
 
