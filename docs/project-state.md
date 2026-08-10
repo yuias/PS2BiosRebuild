@@ -61,7 +61,8 @@ per-file, and the eventual build will assemble the image the same way.
 | Boot block (`RESET`): dispatch + IOP path | analysed — `docs/analysis/02-boot-block.md` |
 | Boot block: EE path detail | outlined only (`02` §"EE reset path") |
 | `IOPBOOT` + `IOPBTCONF` boot list | analysed — `docs/analysis/03-iopboot-and-boot-list.md` |
-| IOP module (ELF/IRX) load mechanics | not started |
+| IOP module (IRX) file format | analysed — `docs/analysis/04-iop-module-format.md` |
+| IOP module load/link algorithm (`LOADCORE`) | not started |
 | IOP kernel modules | not started |
 | EE kernel (`KERNEL`) | not started |
 | OSD (`OSDSYS` and resources) | not started |
@@ -79,14 +80,12 @@ Notable early observations to keep in mind (details and repro commands in
 
 In rough order; each becomes a `docs/analysis/` document:
 
-1. **Module format survey**: the stored IOP modules are ELF (`01`); establish
-   their loader-relevant structure — the IRX conventions, relocation, and the
-   import/export stub tables LOADCORE resolves between modules. This is the
-   load/relocate/run step `IOPBOOT` performs per module, deferred from `03`.
-2. **IOP kernel core**: `SYSMEM` and `LOADCORE` — the first modules the boot
-   list runs, and the base every other module links against.
-3. From there, module by module, the PS1 pattern: analysis → spec → (later)
+1. **IOP kernel core**: `SYSMEM` and `LOADCORE` — the first modules the boot
+   list runs, and the base every other module links against. `LOADCORE` also
+   holds the load/relocate/link *algorithm* deferred from `04` (the stub-table
+   byte layout and how an importer's stubs bind to an exporter's entries).
+2. From there, module by module, the PS1 pattern: analysis → spec → (later)
    implementation.
-4. **EE boot path detail**: promote `02` §"EE reset path" to a full document
+3. **EE boot path detail**: promote `02` §"EE reset path" to a full document
    once the EE kernel is under analysis (how `EELOAD` is staged to RAM at
    `0x8000_1000`).
