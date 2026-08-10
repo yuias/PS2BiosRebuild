@@ -14,8 +14,10 @@ the working document and is kept current.
 > byte, `02-module-abi.md`, verified by a conformance checker that passes on
 > every IRX module of both images, and `03-boot-chain.md`, whose static claims
 > are each reproducible by disassembly. **`tools/iopsim.py` now boots the
-> reference image**, reproducing the spec's retail POST sequence and running on
-> into the loaded modules — so the boot chain is verified rather than described.
+> reference image** all the way to where the IOP waits for the EE, reproducing
+> the spec's retail POST sequence and leaving 23 registered libraries and 55
+> bound import tables in RAM — so both the boot chain and the run-time half of
+> the module ABI are verified rather than described.
 > Tooling is `tools/romdir.py` and `tools/mkromdir.py` (archive read/write),
 > `tools/irxinfo.py` (modules) and `tools/romdis.py` (IOP/EE disassembly).
 > There is still no build system for the image's *contents*.
@@ -83,7 +85,7 @@ per-file, and the eventual build will assemble the image the same way.
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
-| IOP simulator | boots the reference through `IOPBOOT`; stops at the first `syscall` |
+| IOP simulator | boots the reference to the SIF wait; verifies the module ABI's run-time half |
 | Build system / implementation | not started |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -145,10 +147,11 @@ In rough order; each becomes a `docs/analysis/` document:
    — byte-identical across both reference ROMs — contains. This needs the R5900
    caveats in `tools/romdis.py` kept in mind.
 2. **`OSDSYS`** and the boot flow that reaches it.
-3. **Exceptions in `tools/iopsim.py`.** The simulator stops at the first
-   `syscall`, which the IOP kernel uses for its own dispatch. Modelling the
-   R3000 exception path (`Cause`, `EPC`, the vector at `0x80000080`, `rfe`) is
-   what lets the boot run to the end of `IOPBTCONF` — and only then can
-   `spec/02`'s run-time half (IRX-9 to IRX-12) be asserted: the registry
-   contents, the supersession of `SYSCLIB`'s provisional `stdio`, and which
-   modules stayed resident.
+3. **Turn the simulator run into a gate.** It currently reports; it should
+   assert — a `--check` that fails on a wrong POST sequence, a missing library,
+   an unbound import, or a lost supersession, so a future build is judged
+   automatically. `tools/romdis.py`-style, this is what `checkimage.py` was to
+   the PS1 project.
+4. **Residency (IRX-12) is still unverified.** The simulator does not yet report
+   which modules were freed rather than kept, which is the one part of `spec/02`
+   the run does not currently observe.
