@@ -19,7 +19,10 @@
     .set noreorder
     .set noat
 
-// What the boot leaves in low RAM for anything that follows it:
+// What the boot leaves for anything that follows it. These live *above* the
+// modules, not below: a module's bss is zeroed by the loader as it goes, and
+// the boot list sat inside that range until an early module grew enough to
+// wipe it. The load base only tells you where the first module starts.
 //
 //   +0x000  how many names resolved
 //   +0x004  the base load address the `@` token set
@@ -31,7 +34,7 @@
 // Nothing outside this file reads it yet -- the loader that will is the next
 // piece of work -- so the layout is ours to choose, unlike the boot-parameter
 // table of BOOT-8 whose address is ABI.
-    .set BOOT_LIST,       0x00002000
+    .set BOOT_LIST,       0x001F8100
     .set BOOT_LIST_MAX,   64
     .set BL_COUNT,        0x000
     .set BL_BASE,         0x004
@@ -41,11 +44,11 @@
     .set BL_LOADED,       0x400
 // Where a name is assembled before it is looked up. It has to be RAM: the
 // only writable memory this early, since the code itself is running from ROM.
-    .set NAME_SCRATCH,    0x00001F00
+    .set NAME_SCRATCH,    0x001F8000
 // The head of the library registry (IRX-10). Every registered export table's
 // first word holds the previous head, which is what IRX-4c means by the magic
 // being consumed at registration.
-    .set REGISTRY_HEAD,   0x00001F80
+    .set REGISTRY_HEAD,   0x001F8010
 
     .set EXPORT_MAGIC,    0x41C00000
     .set IMPORT_MAGIC,    0x41E00000

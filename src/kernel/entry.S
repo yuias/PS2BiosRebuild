@@ -66,7 +66,10 @@ _kernel_entry:
     // ROM's file table on its side of the bus, so this is the shape every
     // later `rom0:` read has: a name out, bytes back.
     la    $a0, _wanted
-    jal   _sif_request
+    addiu $a1, $zero, 1                  // the content verb
+    la    $a2, _romver
+    addiu $a3, $zero, 1                  // one quadword is enough for it
+    jal   _sif_exchange
     nop
     move  $s1, $v0
     la    $a0, _fetched
@@ -74,6 +77,11 @@ _kernel_entry:
     nop
     jal   _print
     move  $a0, $s1
+
+    // EE-9c: and then the boot ends the way the reference's does, by running
+    // the program the archive holds for it.
+    jal   _boot_default
+    nop
 
 _kernel_idle:
     b     _kernel_idle
@@ -154,6 +162,8 @@ _wanted:
 
     .section .bss, "aw", @nobits
     .align 4
+_romver:
+    .space 16
 _kernel_stack:
     .space 0x1000
 _kernel_stack_top:

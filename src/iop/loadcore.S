@@ -21,9 +21,12 @@
     addiu \reg, \reg, %lo(\symbol)
 .endm
 
-    .set REGISTRY_HEAD, 0x00001F80
+    .set REGISTRY_HEAD, 0x001F8010
     .set EXPORT_MAGIC,  0x41C00000
-    .set RAN_MARKER,    0x00003010       // scaffolding, until there is more to see
+// Scaffolding, until there is more to see. It sits with the boot's own words
+// above the modules: anywhere in the load region would be zeroed by the bss of
+// whichever module lands on top of it.
+    .set RAN_MARKER,    0x001F8020
 
     .section .text, "ax"
     .globl _module_start

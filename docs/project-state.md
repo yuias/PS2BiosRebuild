@@ -25,7 +25,7 @@ the working document and is kept current.
 > requirements are executed rather than described, and `tools/ps2sim.py`, which
 > **runs both CPUs against each other** across a modelled SIF — completing the
 > handshake that each was blocked on and finishing the IOP boot. **What remains
-> is implementation**, and it has begun: `cmake -B build -G Ninja` produces a
+> is implementation**, and it now boots end to end: `cmake -B build -G Ninja` produces a
 > 4 MiB image whose **EE boots into our own kernel**, with `ninja -C build
 > check` judging it at the depth it has reached
 > (`docs/implementation.md`).
@@ -116,6 +116,7 @@ per-file, and the eventual build will assemble the image the same way.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built** — normal-mode DMA both ways; the EE fetches an archive file |
+| Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
 | Everything else in the image | not started |

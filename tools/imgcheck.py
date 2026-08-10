@@ -31,7 +31,7 @@ EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
 
 # Where IOPBOOT leaves what it parsed out of the boot list: a count, then the
 # base load address the `@` token set (spec/03 BOOT-9).
-BOOT_LIST = 0x2000
+BOOT_LIST = 0x1F8100
 EXPECTED_BASE = 0x800
 EXPECTED_MODULES = 3             # SYSMEM, LOADCORE and EESYNC; the rest follows
 MODULES = ("SYSMEM", "LOADCORE", "EESYNC")
@@ -42,7 +42,7 @@ EXPECTED_LIBRARIES = ["sysmem", "loadcore"]
 # cross-module call in the image, so the value is the end-to-end evidence that
 # IRX-9's binding worked -- and that SYSMEM's own entry ran, since an
 # uninitialised heap cursor could not answer with its start.
-CROSS_CALL_RESULT = 0x3010
+CROSS_CALL_RESULT = 0x1F8020
 HEAP_START = 0x00100000
 
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
@@ -53,6 +53,10 @@ HANDSHAKE_LINE = "the SIF handshake is complete"
 # What the EE asks the IOP for once they have met, and what must come back:
 # our own ROMVER, read out of the archive on the IOP's side of the bus.
 FETCHED_LINE = "0100XP20260810"
+# EE-9c: and then the boot runs the program the archive holds for it, with the
+# one argument that selects the browser.
+PROGRAM_LINE = "OSDSYS: loaded from the archive and running"
+PROGRAM_ARGUMENT = "BootBrowser"
 
 NOT_YET = (
     "the rest of the boot list: three of its twenty-nine modules are built",
@@ -63,8 +67,8 @@ NOT_YET = (
     "EE-7e's 128-bit context save, and the scheduler that needs it",
     "the EE's chain mode: our transfers are normal-mode, so the tag lists "
     "the reference's driver builds have no counterpart here",
-    "spec/04 EE-9's boot tail: a file crosses the SIF, but nothing yet loads "
-    "and runs a program from one",
+    "EELOAD: the reference replaces the running program through that stub "
+    "(spec/04 EE-9a), where our kernel loads the program itself",
 )
 
 # The interface the kernel publishes, exercised through eesim's harness. Every
@@ -302,6 +306,12 @@ def checkTogether(image: pathlib.Path) -> list[str]:
                         f"asked the IOP for; its console held {text!r}")
     if not console.dma.transfers:
         problems.append("SIF: no DMA transfer happened at all")
+    if PROGRAM_LINE not in text:
+        problems.append("EE-9: the boot never reached the program in the "
+                        "archive")
+    elif PROGRAM_ARGUMENT not in text:
+        problems.append(f"EE-9c: the program did not receive "
+                        f"{PROGRAM_ARGUMENT!r} as its argument")
     return problems
 
 

@@ -37,11 +37,13 @@
     .set DMA_START, 0x01000000
 
 // What the boot block left for us, at the address `src/boot/iopboot.S` fixes.
-    .set BOOT_LIST, 0x00002000
+    .set BOOT_LIST, 0x001F8100
     .set BL_TABLE,  0x008
 
-    .set REQUEST_WORDS, 4                // a 16-byte request: one name
-    .set PAYLOAD_WORDS, 64               // and up to 256 bytes back
+    .set REQUEST_WORDS, 4                // a 16-byte request: a name and a verb
+    .set PAYLOAD_WORDS, 4096             // and up to 16 KiB back
+    .set VERB_SIZE,    0                 // how big is it?
+    .set VERB_CONTENT, 1                 // send it
 
     .section .text, "ax"
     .globl _module_start
@@ -111,19 +113,34 @@ _serve_wait:
     la    $a0, _request
     bal   _lookup
     nop
-    beq   $v0, $zero, _serve_empty
+
+    la    $t7, _payload
+    la    $t6, _request
+    lw    $t6, 12($t6)                   // the verb
+    bne   $t6, $zero, _serve_content
     nop
 
-    // Copy what we found into the buffer the channel will send from.
-    la    $t7, _payload
-    move  $t8, $zero
-    sltiu $at, $v1, PAYLOAD_WORDS * 4
-    bne   $at, $zero, _serve_copy
+    // A size request answers in one quadword, so the asker knows how much to
+    // arm its channel for before the bytes arrive.
+    sw    $v1, 0($t7)
+    sw    $zero, 4($t7)
+    sw    $zero, 8($t7)
+    sw    $zero, 12($t7)
+    b     _serve_send
+    ori   $t8, $zero, 4                  // words to send
+
+_serve_content:
+    beq   $v0, $zero, _serve_empty
     nop
-    ori   $v1, $zero, PAYLOAD_WORDS * 4
+    sltiu $at, $v1, PAYLOAD_WORDS * 4
+    bne   $at, $zero, _serve_clamped
+    nop
+    ori   $v1, $zero, PAYLOAD_WORDS * 4  // no more than the buffer holds
+_serve_clamped:
+    move  $t8, $zero
 _serve_copy:
     sltu  $at, $t8, $v1
-    beq   $at, $zero, _serve_send
+    beq   $at, $zero, _serve_copied
     nop
     addu  $t9, $v0, $t8
     lw    $at, 0($t9)
@@ -131,10 +148,15 @@ _serve_copy:
     sw    $at, 0($t9)
     b     _serve_copy
     addiu $t8, $t8, 4
+_serve_copied:
+    addiu $t8, $v1, 3
+    srl   $t8, $t8, 2                    // words, rounded up
+    b     _serve_send
+    nop
 
 _serve_empty:
-    la    $t7, _payload
     sw    $zero, 0($t7)
+    ori   $t8, $zero, 4
 
 _serve_send:
     la    $t3, _payload
@@ -142,8 +164,8 @@ _serve_send:
     ori   $t4, $t4, DMA_SIF0 & 0xFFFF
     sw    $t3, 0($t4)                    // MADR
     lui   $t5, 0x0001
-    ori   $t5, $t5, PAYLOAD_WORDS
-    sw    $t5, 4($t4)                    // BCR
+    or    $t5, $t5, $t8
+    sw    $t5, 4($t4)                    // BCR: one block of that many words
     lui   $t5, (DMA_START >> 16) & 0xFFFF
     sw    $t5, 8($t4)                    // CHCR: start
 

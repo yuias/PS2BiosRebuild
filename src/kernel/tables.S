@@ -15,7 +15,11 @@
 // which for an unimplemented one means the reporter of EE-8d.
     .section .syscalls, "aw"
 _syscall_table:
-    .rept 0x0D                          // 0x00 .. 0x0C
+    .rept 6                             // 0x00 .. 0x05
+    .word _sys_undefined
+    .endr
+    .word _sys_load_program             // 0x06  EE-9a: the program loader
+    .rept 6                             // 0x07 .. 0x0C
     .word _sys_undefined
     .endr
     .word _sys_set_exception_handler    // 0x0D
@@ -43,9 +47,11 @@ _syscall_table:
     .endr
     .word _sys_set_syscall              // 0x74
     .word _sys_nothing                  // 0x75
-    .rept 7                             // 0x76 .. 0x7C
+    .rept 5                             // 0x76 .. 0x7A
     .word _sys_undefined
     .endr
+    .word _sys_load_osd                 // 0x7B  EE-9b: the path pinned
+    .word _sys_undefined                // 0x7C
 
 // EE-6a: fourteen entries, for ExcCode 0 to 13, indexed by `Cause & 0x7C`
 // without a shift. EE-6b: only ExcCode 8 has its own handler.

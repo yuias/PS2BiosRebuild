@@ -82,11 +82,24 @@ ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.S)
 
+# An EE program is stored as the ELF it is: the kernel's loader reads the
+# program headers rather than being told a layout.
+add_executable(osdsys.elf src/ee/osdsys.S)
+# Without a small page size the linker aligns the segment's file offset to
+# 64 KiB, which would store sixty-odd kilobytes of padding in the archive for
+# a program of a few hundred bytes.
+target_link_options(osdsys.elf PRIVATE
+    "-T${CMAKE_CURRENT_SOURCE_DIR}/src/link/osdsys.ld"
+    -z max-page-size=16)
+set_target_properties(osdsys.elf PROPERTIES
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/link/osdsys.ld")
+
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
     src/kernel/entry.S
     src/kernel/syscall.S
     src/kernel/sif.S
+    src/kernel/program.S
     src/kernel/tables.S)
 
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")
@@ -111,7 +124,7 @@ add_custom_command(
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" "${PS2_ROMVER}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf eesync.elf
+            loadcore.elf eesync.elf osdsys.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
