@@ -314,6 +314,12 @@ above, because a module's bss is zeroed by the loader as it lands: the boot
 list sat below the load base until an early module grew enough to wipe it, and
 the load base only says where the *first* module starts.
 
+**Our returning packets are tagged `end` where the reference tags them `cnt`.**
+`spec/03` BOOT-11c's destination tag is id 1 with the interrupt bit set on the
+reference; ours is id 7, `end`. Both terminate the EE channel's run and both
+are read the same way by it, but a rebuild aiming at bit-level agreement should
+know which one the reference writes.
+
 **Our SIF exchange is framed as the reference's is, but rendezvous is by flag.**
 `spec/03` BOOT-11's framing is implemented in full: the EE runs a source chain
 over a packet headed for the address the IOP published, and the IOP builds a

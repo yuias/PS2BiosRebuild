@@ -50,6 +50,8 @@ BD6_IDENTITY = 0x1D000060
 
 STEPS_PER_TURN = 2000            # small enough that a poll loop makes progress
 MAX_TURNS = 4000
+QUIET_TURNS = 50                 # nothing crossing the bus for this long is over
+IDLE_POLL = 128                  # how often, in steps, to look for the idle loop
 
 # The two SIF DMA channels, as each side addresses them. Which IOP channels
 # they are was derived by running the reference and watching which registers
@@ -79,6 +81,13 @@ TAG_REFE, TAG_CNT, TAG_NEXT, TAG_REF, TAG_END = 0, 1, 2, 3, 7
 # A list whose end marker never arrives is a hang, not a diagnosis. Both walks
 # stop well past any length either side's driver builds, and say why.
 MAX_TAGS = 64
+
+# The IOP's DMA interrupt registers. The second bank's channels are enabled and
+# flagged in DICR2 -- enables from bit 16, flags from bit 24, both counting from
+# channel 7 -- while the master enable that gates the lot stays in DICR.
+IOP_DICR, IOP_DICR2 = 0x1F8010F4, 0x1F801574
+DICR_MASTER_ENABLE = 1 << 23
+IOP_CHANNELS = {0x1F801520: 9, 0x1F801530: 10}
 
 
 def quadwords(count: int) -> int:
@@ -327,6 +336,19 @@ def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
                 if finished:
                     del self.armed[channel]
                     self.io[channel + 8] = chcr & ~IOP_START
+                    self.completed(channel)
+
+        def completed(self, channel: int) -> None:
+            """A finished channel raises the one interrupt the IOP's SIF driver
+            is asleep on -- if its own two enables allow it."""
+            shift = IOP_CHANNELS[channel] - 7
+            enables = self.io.get(IOP_DICR2, 0)
+            if not enables & (1 << (16 + shift)):
+                return
+            if not self.io.get(IOP_DICR, 0) & DICR_MASTER_ENABLE:
+                return
+            self.io[IOP_DICR2] = enables | (1 << (24 + shift))
+            self.raiseIrq(iopsim.IRQ_DMA)
 
         def send(self, channel: int) -> bool:
             """SIF0, IOP -> EE. TADR walks a list of 16-byte send blocks; each
@@ -384,6 +406,10 @@ class Console:
         self.watcher = iopsim.FreeWatcher(self.iop_bus)
         self.frees_before_handshake = 0
         self.turns = 0
+        # BOOT-10d is about *reaching* the idle loop, and with interrupts
+        # delivered the IOP does not stay there: the EE's first packet wakes it
+        # again. What the run records is that it got there.
+        self.reached_idle = False
 
     def idle(self) -> bool:
         """True when the IOP has run out of work: a jump to itself.
@@ -413,13 +439,21 @@ class Console:
         # The EE reaches its kernel without needing the IOP at all, so run that
         # part first and interleave only where the two actually interact.
         recorded: int | None = None
+        previous, quiet = (0, 0), 0
         self.ee.boot()
         for self.turns in range(MAX_TURNS):
-            for _ in range(STEPS_PER_TURN):
+            for step in range(STEPS_PER_TURN):
                 if self.iop.stop_reason:
                     break
                 self.watcher.observe(self.iop)
                 self.iop.step()
+                # The idle loop is no longer somewhere the IOP stays, so
+                # looking only at turn boundaries misses it: an interrupt can
+                # wake it again within the same turn.
+                if step % IDLE_POLL == 0 and not self.reached_idle:
+                    if (recorded is not None and self.idle()
+                            and len(self.watcher.frees) > recorded):
+                        self.reached_idle = True
             for _ in range(STEPS_PER_TURN):
                 if self.ee.cpu.stop_reason:
                     break
@@ -431,8 +465,14 @@ class Console:
             if recorded is None and self.handshakeDone():
                 recorded = len(self.watcher.frees)
                 self.frees_before_handshake = recorded
-            if (recorded is not None and self.idle()
-                    and len(self.watcher.frees) > recorded):
+            # Once the boot has got everything it came for, the run ends when
+            # the bus falls silent -- both sides waiting on something neither
+            # can produce. Stopping at the idle loop instead would cut the
+            # conversation off at its first packet.
+            progress = (len(self.dma.transfers), len(self.watcher.frees))
+            quiet = quiet + 1 if progress == previous else 0
+            previous = progress
+            if self.reached_idle and quiet >= QUIET_TURNS:
                 return
 
     @property
@@ -466,7 +506,7 @@ def check(console: Console) -> list[str]:
             "the IOP never answered with an address in SMCOM")
     require(smflg != 0, "BOOT-10b",
             "the IOP never raised a bit in SMFLG")
-    require(console.idle(), "BOOT-10c",
+    require(console.reached_idle, "BOOT-10c",
             f"the IOP did not reach its idle loop; it stopped at "
             f"{console.iop.pc:#010x}"
             + (f" ({console.iop.stop_reason})" if console.iop.stop_reason else ""))

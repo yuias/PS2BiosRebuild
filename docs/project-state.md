@@ -229,15 +229,16 @@ None outstanding. Both questions carried since `03` and `06` were settled in
 
 `docs/analysis/24` used, and says so, a set of observations contributed from a
 sibling project of the same author's — notes taken while bringing an emulator
-up against the same SCPH-50000 image. The SIF ones are analysed and gated. The
-rest are recorded here so they are not lost, **unverified against this
-repository's tools**, each against the document that would confirm it:
+up against the same SCPH-50000 image. The SIF ones are analysed and gated, and
+the IOP's `I_MASK` of `0x1080D` was confirmed by reading the reference's own
+state at the point it parks. The rest are recorded here so they are not lost,
+**unverified against this repository's tools**, each against the document that
+would confirm it:
 
 | Lead | Where it belongs |
 | --- | --- |
 | SBUS interrupt: the IOP's `SMFLG` writes raise EE INTC bit 1; the EE's handler folds the flags into an `SREG` array and acknowledges by clearing | `16`, `23`, `24` |
 | SIF control register: EE reads OR in `0xF0000102`, IOP `0xF0000002`; the IOP sets bits `0x20`/`0x40`/`0x80` per path and polls that they stick | `11`, `23` |
-| IOP `I_MASK` `0x1080D` — vblank, CDVD, DMA, evblank, timer 5; without them every thread sleeps forever | `06`, `09` |
 | EE timer 3: the compare interrupt is a latch, fires only while `EQUF` is clear, and the kernel parks the timer by leaving `EQUF` set | `16`, `22` |
 | EE TLB: after boot the kernel relies on real mappings; address folding stops working once `OSDSYS` loads | `18`, `22` |
 | `RDRAM`: `0x1000F520` reads `0x1201` at reset and keys a table of configurations; `MCH_RICM`/`MCH_DRD` run a serial device handshake | `13` |
@@ -271,6 +272,12 @@ what it does today, and every deviation from the reference with its reason.
 
 In this order, because each removes what blocks the next.
 
+> A note on where effort goes. The simulators are instruments, not the product,
+> and it is easy to keep sharpening them: each one buys a real observation, so
+> each next one looks worth it. It stops being worth it where PCSX2 would
+> answer the same question — which is the case for everything left on the
+> simulator side after `24`. Item 4 is deliberately not last.
+
 1. **The scheduler, and the context save it needs** (`spec/04` EE-7e, EE-7g;
    `spec/05` SYS-2a). Two of our deviations close together here: the syscall
    entry saves only `$ra`, `$sp` and `$at`, and `EESYNC` never returns from its
@@ -281,24 +288,17 @@ In this order, because each removes what blocks the next.
    isolated piece of work — and `tools/eeabi.py --check` on our own `KERNEL`
    measures the distance directly: it currently fails on exactly two counts,
    the unimplemented slots and the KSEG1 cache trio.
-3. **Interrupts, on both sides.** This is now what stops the *reference* going
-   further in `tools/ps2sim.py`: its transfer completes, and then it waits for
-   an answer its IOP cannot produce, because every IOP thread is asleep on a
-   vblank or timer interrupt that never arrives and its SIF driver is woken by
-   an interrupt that is never raised. The leads table above records what the
-   imported notes say about the masks and the sources; none of it is verified
-   yet, and verifying it is most of the work. Our own image gains from it too —
-   the flag-polling rendezvous around BOOT-11's framing is the last piece of
-   the SIF path that is ours rather than the reference's.
-4. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
+3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real
    heap.
-5. **Try it in PCSX2.** The image boots on our simulators, which model far less
+4. **Try it in PCSX2.** The image boots on our simulators, which model far less
    than an emulator does; the first run on the working target will find
    whatever we have modelled too kindly. Nothing is on screen yet — the EE
    speaks only over the serial port — so read PCSX2's console rather than its
-   window.
-6. **One loose end in the analysis.** Nine EE slots have an inferred rather than
+   window. This is also what replaces further simulator work: the EE's INTC and
+   DMAC, the IOP's vblank and timer, and everything else `24` lists as still
+   unmodelled are things an emulator already has.
+5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.

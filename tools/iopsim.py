@@ -52,8 +52,27 @@ STATUS_BEV = 0x00400000          # boot exception vectors, in ROM
 STATUS_MODE_MASK = 0x3F          # the KU/IE three-deep stack
 
 COP0_SR, COP0_CAUSE, COP0_EPC = 12, 13, 14
-EXC_SYSCALL, EXC_BREAK = 8, 9
+EXC_INTERRUPT, EXC_SYSCALL, EXC_BREAK = 0, 8, 9
 VECTOR_NORMAL, VECTOR_BEV = 0x80000080, 0xBFC00180
+
+# The interrupt controller. Every hardware source funnels into one line, which
+# the core sees as `Cause` IP2 -- so a source is delivered only when it is in
+# I_STAT, allowed by I_MASK, not gated off by I_CTRL, and IM2 and IEc are both
+# set. Registers observed in use by the reference; see `docs/analysis/24`.
+I_STAT, I_MASK, I_CTRL = 0x1F801070, 0x1F801074, 0x1F801078
+STATUS_IEC = 0x00000001          # interrupts enabled, current
+STATUS_IM2 = 0x00000400          # ... and hardware line 2 unmasked
+CAUSE_IP2 = 0x00000400
+
+IRQ_VBLANK, IRQ_CDVD, IRQ_DMA, IRQ_TIMER5, IRQ_EVBLANK = 0, 2, 3, 16, 11
+
+# The DMA controllers' interrupt registers, one per bank. Their top byte holds
+# per-channel flags that are cleared by writing a one, not by writing a zero:
+# stored verbatim, a flag the handler tried to clear would stick, and a driver
+# that keeps being told about an interrupt it has already served gives up and
+# masks the source off.
+DICR, DICR2 = 0x1F8010F4, 0x1F801574
+DICR_FLAGS = 0x7F000000
 
 SIGN32 = 0xFFFFFFFF
 
@@ -85,17 +104,41 @@ class Bus:
     def read(self, addr: int, size: int) -> int:
         buf, off = self._region(addr)
         if buf is None:
+            if off == I_CTRL:
+                # Reading is how a critical section begins: it hands back
+                # whether interrupts were on and turns them off in one step,
+                # and the matching write puts the old value back. A register
+                # that merely stored would let an interrupt land inside one.
+                enabled = self.io.get(I_CTRL, 0)
+                self.io[I_CTRL] = 0
+                return enabled
             if IO_BASE <= off < IO_END:
                 return self.io.get(off, 0)
             self.unmapped.add(off)
             return 0
         return int.from_bytes(buf[off:off + size], "little")
 
+    def raiseIrq(self, source: int) -> None:
+        """Make a hardware source pending. Whether it is *delivered* is the
+        core's business, and depends on three more registers."""
+        self.io[I_STAT] = self.io.get(I_STAT, 0) | (1 << source)
+
+    def irqPending(self) -> bool:
+        return bool(self.io.get(I_CTRL, 0)
+                    and self.io.get(I_STAT, 0) & self.io.get(I_MASK, 0))
+
     def write(self, addr: int, size: int, value: int, pc: int) -> None:
         buf, off = self._region(addr)
         if buf is None:
             if off == POST_REG:
                 self.post.append((pc, value & 0xFF))
+            elif off == I_STAT:
+                # Acknowledgement, and the sense is inverted: a bit written as
+                # zero is the one being cleared.
+                self.io[I_STAT] = self.io.get(I_STAT, 0) & value
+            elif off in (DICR, DICR2):
+                kept = self.io.get(off, 0) & DICR_FLAGS & ~(value & DICR_FLAGS)
+                self.io[off] = (value & ~DICR_FLAGS) | kept
             elif IO_BASE <= off < IO_END:
                 self.io[off] = value
             else:
@@ -132,12 +175,31 @@ class Cpu:
 
     def step(self) -> None:
         pc = self.pc
+        if self._interrupted():
+            # Nothing has been fetched yet, so what `branched` still says is
+            # whether *this* pc is a delay slot -- which is what decides
+            # whether EPC points here or at the branch above it.
+            self.in_delay = self.branched
+            self._raise(EXC_INTERRUPT, pc)
+            return
         instr = self.bus.read(pc, 4)
         self.pc = self.next_pc
         self.next_pc = (self.pc + 4) & SIGN32
         self.in_delay, self.branched = self.branched, False
         self.steps += 1
         self._execute(instr, pc)
+
+    def _interrupted(self) -> bool:
+        """A pending source becomes an exception only between instructions,
+        and only with the core's own two gates open."""
+        cause = self.cop0[COP0_CAUSE]
+        if self.bus.irqPending():
+            cause |= CAUSE_IP2
+        else:
+            cause &= ~CAUSE_IP2
+        self.cop0[COP0_CAUSE] = cause
+        sr = self.cop0[COP0_SR]
+        return bool(sr & STATUS_IEC and sr & STATUS_IM2 and cause & CAUSE_IP2)
 
     def _raise(self, code: int, pc: int) -> None:
         """Enter the R3000 exception path.

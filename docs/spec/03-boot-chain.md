@@ -354,9 +354,12 @@ BOOT-11a's substance, since a receiver that chose its own address would pass
 the first test and fail the second. `--no-bridge` fails both, alongside
 BOOT-10's.
 
-BOOT-11c is exercised but not observed: our own image drives the send block and
-its transfers land, while the reference's IOP never reaches its sender under
-this simulator, which needs interrupts it does not have.
+BOOT-11c is observed on the reference too, once its IOP is woken by the one
+interrupt its SIF driver is asleep on: it builds a send block, and the tag in
+that block's second half lands the reply at the EE receive buffer the EE had
+nominated in its own first packet. The destination tag the reference writes is
+id 1, `cnt`, with bit 31 set — a rebuild may use `end` instead, as ours does,
+but should know it is not what the reference does.
 
 **BOOT-5 corrected `docs/analysis/02`.** Extracting the POST writes mechanically
 rather than reading them off a listing found a code the prose had missed

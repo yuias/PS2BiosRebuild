@@ -140,8 +140,9 @@ boundary of what is modelled, not a disagreement with the framing.
 
 ## The other direction: a send block, and a tag made for the EE
 
-The IOP-to-EE direction is the mirror image with one extra step, and this is
-the part contributed from outside rather than observed here.
+The IOP-to-EE direction is the mirror image with one extra step. It began as
+the part contributed from outside; the interrupt work described further down
+turned it into an observation.
 
 The IOP's channel 9 (`0x1F801520`) also works from a `TADR`, and what sits
 there is a sixteen-byte **send block** per packet:
@@ -228,24 +229,79 @@ the hardware does not agree on. It is also the change most likely to matter
 when the image is first tried in PCSX2, which emulates the channels rather than
 the convention two cooperating halves could have invented.
 
+## One interrupt turns the trust into an observation
+
+The reference's IOP would not reach its sender: it finishes its boot list, parks
+in the idle loop, and nothing wakes it. Reading its state at that moment says
+precisely what it is waiting for, and every register in the picture is one of
+the imported notes' claims, now checked here:
+
+```
+IOP CP0 SR 0x00000401       # IEc set, and hardware line 2 unmasked
+I_MASK     0x0001080d       # vblank, CDVD, DMA, evblank, timer 5
+DICR2      0x000c0400       # DMA interrupt enabled for channels 9 and 10
+DICR       0x00800000       # ... under the master enable in the other bank
+```
+
+`I_MASK` is `0x1080D` exactly as the notes said. So the IOP is not stuck; it is
+*armed*, and one source it is armed for — a SIF channel finishing — is one this
+simulator was in a position to raise. That took three pieces:
+
+- the interrupt controller: `I_STAT` acknowledged by writing a **zero** to the
+  bit being cleared, `I_MASK` as plain storage, and `I_CTRL` whose *read*
+  disables interrupts and hands back the previous state, which is how a
+  critical section begins and why storing it would let an interrupt land inside
+  one;
+- delivery: a pending, unmasked, ungated source raises `Cause` IP2, and the
+  core takes it between instructions when `IEc` and `IM2` are both set;
+- the DMA controller's own flags, which are **write-one-to-clear**. This one
+  cost a debugging round and is worth stating plainly: stored verbatim, a flag
+  the handler had cleared stuck, the driver kept being told about an interrupt
+  it had already served, and it responded by masking the DMA source off
+  entirely — `I_MASK` ended the run as `0x10805`, with bit 3 gone. The symptom
+  looked nothing like the cause.
+
+With that, the reference answers:
+
+```
+SIF transfers:
+   EE sent          48 bytes at 0x00021580
+   EE sent          32 bytes at 0x00021600
+   IOP received     32 bytes at 0x00019600
+   IOP received     16 bytes at 0x00019600
+   IOP sent         32 bytes at 0x00019870
+   EE received      32 bytes at 0x000935c0
+
+framed packets (BOOT-11), as the receiving channel read them:
+   EE -> IOP      8 words to 0x00019600   header 0xc0019600
+   EE -> IOP      4 words to 0x00019600   header 0xc0019600
+   IOP -> EE      8 words to 0x000935c0   header 0x90000002
+```
+
+Both of the EE's packets are taken now that the IOP re-arms its channel from
+the handler, and **the reply lands at `0x000935C0`** — which is the address
+that appeared inside the very first packet's payload, the EE receive buffer the
+EE nominated in its init message. BOOT-11c is no longer exercised-only: the
+reference builds the send block, and the tag it puts in front of the data is
+read here by the EE's own channel.
+
+That tag is `0x90000002`, which also settles what our image had to guess. Id 1,
+`cnt` — the data follows the tag, which is exactly the SIF0 case — with bit 31,
+the interrupt request, set. Not id 7. Our image sends `end` instead, which the
+simulator accepts and which is not wrong, but it is not what the reference
+writes, and `docs/implementation.md` now records that as a deviation rather
+than leaving it unstated.
+
 ## What is still taken on trust
 
-Three things, recorded plainly so that the next person does not mistake them
-for settled:
-
-1. **The IOP-to-EE send block is exercised, not observed.** Our image drives it
-   and the transfer lands, which proves the format is *self-consistent* and
-   that `tools/ps2sim.py` implements what the notes describe. It does not prove
-   the reference builds the same sixteen bytes, because the reference's IOP
-   never reaches its sender under this simulator.
-2. **Which destination-chain tag ids `SIFMAN` uses is not known.** Our IOP
-   sends id 7, `end`. The simulator also accepts a tag whose bit 31 is set as
-   ending a run, on the same reading as the outgoing header, but nothing has
-   confirmed what the reference actually writes there.
-3. **The interrupts are not modelled at all**, and they are what the reference
-   is waiting on. The imported notes describe the mechanism — the IOP's writes
-   to `SMFLG` raise the EE's INTC SBUS source (bit 1); the IOP's own DMA
-   completions report through `DICR2` and `I_STAT` bit 3; the IOP's threads
-   depend besides on vblank and a timer, without which every thread sleeps
-   forever — but none of it is implemented here, and none of it is verified
-   here. It is recorded in `docs/project-state.md` as the next step it is.
+1. **The EE takes no interrupts.** Its INTC and DMAC are unmodelled, so the
+   reply it has now received sits in its buffer unprocessed and the reference's
+   EE stops one step further on than it used to rather than going on. The
+   imported notes describe the missing piece — the IOP's writes to `SMFLG`
+   raise the EE's INTC SBUS source, bit 1, and the EE's handler folds the flags
+   into an `SREG` array — and none of it is verified here.
+2. **The IOP's other sources are still absent.** Vblank and timer 5 are in
+   `I_MASK` and nothing raises them, so any IOP thread that sleeps on a delay
+   sleeps for the rest of the run. Only the SIF path is awake.
+3. **Bit 30 of the outgoing header** is read as an interrupt request on the
+   notes' authority. This simulator acts on bit 31 only.
