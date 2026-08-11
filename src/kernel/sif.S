@@ -33,12 +33,18 @@
     .set REPLY_BIT,     0x00000002       // and it has answered
     .set CTRL_OPEN,     0x00000100
 
-// The EE's two SIF DMA channels: CHCR +0, MADR +0x10, QWC +0x20.
+// The EE's two SIF DMA channels: CHCR +0, MADR +0x10, QWC +0x20, TADR +0x30.
     .set DMA_SIF0, 0xB000C000            // from the IOP
     .set DMA_SIF1, 0xB000C400            // to the IOP
-    .set DMA_START, 0x00000100           // CHCR.STR, cleared by the hardware
+// BOOT-11b: both channels run in chain mode -- MOD=chain, TIE and STR, with
+// TTE clear so the tags stay out of the data.
+    .set DMA_CHAIN, 0x00000184
 
-    .set REQUEST_QUADS, 1                // a 16-byte request: a name and a verb
+    .set TAG_REFE,      0x00000000       // a source tag pointing elsewhere, last
+    .set TAG_END,       0x80000000       // the IOP-facing header's end bit
+
+    .set REQUEST_WORDS, 8                // name, verb, and where to reply
+    .set PACKET_QUADS,  3                // the header quadword and those two
 
     .globl _sif_handshake
     .globl _sif_exchange
@@ -76,19 +82,19 @@ _sif_wait:
     jr    $ra
     nop
 
-// _sif_exchange(name, verb, destination, quadwords)
+// _sif_exchange(name, verb, destination)
 //
 // One request out and one answer back. The EE cannot read the IOP's memory and
-// the IOP cannot read the EE's, so everything crosses as a transfer. Both
-// channels run in normal mode: the quadword count is what moves, with no tag
-// chain.
+// the IOP cannot read the EE's, so everything crosses as a transfer.
 //
-// The count has to be right. A channel armed for less than was sent leaves the
-// rest in the FIFO for whoever asks next, which is why the caller asks the size
-// before it asks for the bytes.
+// BOOT-11: neither channel is told where its bytes belong by its own driver.
+// What goes out is a packet headed by a quadword naming an address in *IOP*
+// memory, and what comes back is headed by a tag naming an address in ours --
+// which is why the destination travels in the request rather than into MADR.
 _sif_exchange:
-    // Put the ten-byte name and the verb where the outgoing channel reads.
-    la    $t0, _sif_area
+    // Put the ten-byte name, the verb and the destination where the outgoing
+    // channel will read them: one quadword past the header.
+    la    $t0, _sif_request
     move  $t1, $zero
     // An entry name is ten bytes, NUL-padded (spec/01 ARC-2). A caller's
     // string ends at its NUL and whatever follows it in memory is not part of
@@ -117,12 +123,36 @@ _sif_exchange_pad:
 _sif_exchange_named:
     sh    $zero, 10($t0)
     sw    $a1, 12($t0)
+    sw    $a2, 16($t0)                   // where the answer is to land here
+    sw    $zero, 20($t0)
+    sw    $zero, 24($t0)
+    sw    $zero, 28($t0)
+
+    // The header the IOP's channel reads: the address it published to us, and
+    // how many words follow. Its end bit stops that channel after this packet.
+    la    $t6, _sif_peer
+    lw    $t6, 0($t6)
+    liw   $t7, TAG_END
+    or    $t6, $t6, $t7
+    la    $t3, _sif_packet
+    sw    $t6, 0($t3)
+    ori   $t6, $zero, REQUEST_WORDS
+    sw    $t6, 4($t3)
+    sw    $zero, 8($t3)
+    sw    $zero, 12($t3)
+
+    // One source tag covers the whole packet, header included: TTE is clear,
+    // so the tag itself does not travel and the header leads the data.
+    la    $t6, _sif_tag
+    liw   $t7, TAG_REFE | PACKET_QUADS
+    sw    $t7, 0($t6)
+    sw    $t3, 4($t6)
+    sw    $zero, 8($t6)
+    sw    $zero, 12($t6)
 
     liw   $t4, DMA_SIF1
-    sw    $t0, 0x10($t4)                 // MADR
-    ori   $t5, $zero, REQUEST_QUADS
-    sw    $t5, 0x20($t4)                 // QWC
-    liw   $t5, DMA_START
+    sw    $t6, 0x30($t4)                 // TADR
+    liw   $t5, DMA_CHAIN
     sw    $t5, 0($t4)                    // CHCR: start
 
     liw   $t0, SIF_MSFLG
@@ -138,10 +168,10 @@ _sif_exchange_wait:
     nop
     sw    $t2, 0($t0)                    // our write to SMFLG clears
 
+    // Nothing is armed here but the mode: the tag the IOP put in front of the
+    // data is what says where it lands and how much of it there is.
     liw   $t4, DMA_SIF0
-    sw    $a2, 0x10($t4)                 // MADR: where the answer goes
-    sw    $a3, 0x20($t4)                 // QWC: how much of it there is
-    liw   $t5, DMA_START
+    liw   $t5, DMA_CHAIN
     sw    $t5, 0($t4)                    // CHCR: start
     jr    $ra
     move  $v0, $a2
@@ -152,3 +182,10 @@ _sif_area:
     .space 256                           // what we publish to the IOP
 _sif_peer:
     .space 4                             // and what it publishes to us
+    .align 4
+_sif_tag:
+    .space 16                            // the source tag the outgoing channel reads
+_sif_packet:
+    .space 16                            // the header the IOP's channel reads
+_sif_request:
+    .space REQUEST_WORDS * 4             // and the request it heads

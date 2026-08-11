@@ -67,8 +67,7 @@ _kernel_entry:
     // later `rom0:` read has: a name out, bytes back.
     la    $a0, _wanted
     addiu $a1, $zero, 1                  // the content verb
-    la    $a2, _romver
-    addiu $a3, $zero, 1                  // one quadword is enough for it
+    la    $a2, _romver                   // and where the answer is to land
     jal   _sif_exchange
     nop
     move  $s1, $v0

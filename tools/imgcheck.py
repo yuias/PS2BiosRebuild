@@ -65,8 +65,9 @@ NOT_YET = (
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
     "EE-7e's 128-bit context save, and the scheduler that needs it",
-    "the EE's chain mode: our transfers are normal-mode, so the tag lists "
-    "the reference's driver builds have no counterpart here",
+    "interrupt-driven SIF service: our exchange is framed as BOOT-11 says, "
+    "but both ends still rendezvous on the flag registers rather than on the "
+    "SBUS interrupt the reference's drivers wait for",
     "EELOAD: the reference replaces the running program through that stub "
     "(spec/04 EE-9a), where our kernel loads the program itself",
 )
@@ -306,6 +307,14 @@ def checkTogether(image: pathlib.Path) -> list[str]:
                         f"asked the IOP for; its console held {text!r}")
     if not console.dma.transfers:
         problems.append("SIF: no DMA transfer happened at all")
+    # BOOT-11: both directions have to be framed by the sender. A packet that
+    # crossed without a header would have been dropped by the receiving
+    # channel, so the count is what shows the framing is right.
+    for direction, requirement in (("EE -> IOP", "BOOT-11a"),
+                                   ("IOP -> EE", "BOOT-11c")):
+        if not any(packet[0] == direction for packet in console.dma.packets):
+            problems.append(f"{requirement}: nothing crossed {direction} with "
+                            f"a header the receiving channel could read")
     if PROGRAM_LINE not in text:
         problems.append("EE-9: the boot never reached the program in the "
                         "archive")

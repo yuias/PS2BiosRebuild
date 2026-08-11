@@ -108,9 +108,9 @@ _skip_device_done:
 
 // _fetch(name, destination) -> size, or 0.
 //
-// Two exchanges: how big is it, then send it. The size has to come first
-// because the receiving channel is armed for a quadword count, and a count
-// guessed too small would leave the rest in the FIFO for whoever asked next.
+// Two exchanges: how big is it, then send it. The transfer itself no longer
+// needs the size -- BOOT-11 has the sender frame it -- but the caller does,
+// since it has to know how much of the buffer the answer filled.
 _fetch:
     addiu $sp, $sp, -48
     sw    $ra, 0($sp)
@@ -121,7 +121,6 @@ _fetch:
 
     move  $a1, $zero                     // ask the size first
     la    $a2, _reply
-    addiu $a3, $zero, 1
     jal   _sif_exchange
     nop
     la    $t0, _reply
@@ -132,8 +131,6 @@ _fetch:
     move  $a0, $s0
     addiu $a1, $zero, 1                  // then ask for the bytes
     move  $a2, $s1
-    addiu $a3, $v1, 15
-    srl   $a3, $a3, 4                    // quadwords, rounded up
     sw    $v1, 12($sp)
     jal   _sif_exchange
     nop

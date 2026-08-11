@@ -62,7 +62,28 @@ EE_SIF0, EE_SIF1 = 0x1000C000, 0x1000C400        # CHCR +0, MADR +0x10, QWC +0x2
 IOP_SIF0, IOP_SIF1 = 0x1F801520, 0x1F801530      # MADR +0, BCR +4, CHCR +8
 
 EE_START = 0x100                 # CHCR.STR, which the hardware clears when done
+EE_CHAIN = 0x4                   # CHCR.MOD == 1, the chain modes
 IOP_START = 0x01000000           # the IOP's equivalent busy bit
+
+QUADWORD = 16
+
+# The quadword that heads every SIF1 packet, read by the IOP's channel (BOOT-11a).
+IOP_TAG_ADDRESS = 0x3FFFFFFF     # the rest of the first word is where it lands
+IOP_TAG_IRQ = 0x40000000
+IOP_TAG_END = 0x80000000
+
+# The EE's source-chain tag ids the SIF path uses (BOOT-11b). `ref` points at
+# data elsewhere and carries on; `refe` does the same and is the last one.
+TAG_REFE, TAG_CNT, TAG_NEXT, TAG_REF, TAG_END = 0, 1, 2, 3, 7
+
+# A list whose end marker never arrives is a hang, not a diagnosis. Both walks
+# stop well past any length either side's driver builds, and say why.
+MAX_TAGS = 64
+
+
+def quadwords(count: int) -> int:
+    """Bytes, rounded up to the quadword the SIF moves in."""
+    return (count + QUADWORD - 1) // QUADWORD * QUADWORD
 
 
 class SifDma:
@@ -70,10 +91,13 @@ class SifDma:
 
     Real hardware has a fixed FIFO and stalls a transfer that outruns it; a
     queue that grows models the same *result* for a driver that waits for its
-    channel to finish, which is what both sides' drivers do. Nothing here
-    models the tag chains of the EE's chain mode: a transfer moves the
-    quadwords its channel was given, and a chain-mode caller would find its
-    channel idle with nothing sent.
+    channel to finish, which is what both sides' drivers do.
+
+    What the queue carries is *framed*, and the framing is the point of
+    `docs/spec/03-boot-chain.md` BOOT-11: each side pushes packet headers the
+    other side's channel parses to learn where the bytes belong. Neither
+    direction is a bare copy -- a receiver is never told the destination by its
+    own driver, only by the sender's header.
     """
 
     def __init__(self) -> None:
@@ -82,6 +106,12 @@ class SifDma:
         # (what happened, bytes, address) -- both ends of one transfer are
         # recorded, because a send that nobody receives is the interesting case.
         self.transfers: list[tuple[str, int, int]] = []
+        # Every framed packet, as the receiving end decoded it: which way it
+        # went, where it landed, how big it was and what its header said.
+        self.packets: list[tuple[str, int, int, int]] = []
+        # Every chain tag walked, so the claim about what a tag list looks like
+        # can be read off a run rather than taken on trust.
+        self.tags: list[tuple[str, int, int, int]] = []
 
     def send(self, fifo: bytearray, memory, address: int, length: int,
              name: str) -> None:
@@ -95,6 +125,9 @@ class SifDma:
         del fifo[:len(taken)]
         memory[address:address + len(taken)] = taken
         self.transfers.append((name, len(taken), address))
+
+    def push(self, fifo: bytearray, values: bytes) -> None:
+        fifo += values
 
 
 class Sif:
@@ -161,6 +194,14 @@ class Split(Sif):
 
 def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
     class SharedBus(eesim.Bus):
+        def __init__(self, image: bytes) -> None:
+            super().__init__(image)
+            # A started channel that cannot finish yet stays busy rather than
+            # reporting itself idle with nothing moved: a receiver is armed
+            # before the sender has pushed anything, and clearing STR there
+            # would tell its driver a transfer had happened.
+            self.armed: dict[int, int] = {}
+
         def read(self, address: int, size: int) -> int:
             which = EE_REGISTERS.get(address & 0x1FFFFFFF)
             if which is not None:
@@ -175,23 +216,90 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
                 return
             super().write(address, size, value)
             if offset in (EE_SIF0, EE_SIF1) and value & EE_START:
-                self.runChannel(offset, value)
+                self.armed[offset] = value
+                self.service()
 
-        def runChannel(self, channel: int, chcr: int) -> None:
-            """A channel started: move its quadwords, then report itself idle."""
-            address = self.read(channel + 0x10, 4) & 0x1FFFFFFF
-            length = self.read(channel + 0x20, 4) * 16
-            if channel == EE_SIF1:
-                dma.send(dma.to_iop, self.ram, address, length, "EE sent")
-            else:
-                dma.receive(dma.to_ee, self.ram, address, length, "EE received")
-            self.io[channel] = chcr & ~EE_START
+        def word(self, address: int) -> int:
+            return int.from_bytes(self.ram[address:address + 4], "little")
+
+        def service(self) -> None:
+            """Give every armed channel a chance to finish."""
+            for channel, chcr in list(self.armed.items()):
+                finished = (self.send(channel, chcr) if channel == EE_SIF1
+                            else self.receive(channel, chcr))
+                if finished:
+                    del self.armed[channel]
+                    self.io[channel] = chcr & ~EE_START
+
+        def send(self, channel: int, chcr: int) -> bool:
+            """SIF1, EE -> IOP. Everything the EE sends is already in its RAM,
+            so a send always completes; the only question is what it moves."""
+            if not chcr & EE_CHAIN:
+                address = self.read(channel + 0x10, 4) & 0x1FFFFFFF
+                dma.send(dma.to_iop, self.ram, address,
+                         self.read(channel + 0x20, 4) * QUADWORD, "EE sent")
+                return True
+            # Source chain (BOOT-11b): a list of tags at TADR, each naming a
+            # run of quadwords. TTE is clear in the reference's CHCR, so the
+            # tag quadwords themselves are not sent -- what reaches the FIFO is
+            # only the data they point at, and the IOP-facing header of
+            # BOOT-11a is the first quadword of that data, not of the tag.
+            tadr = self.read(channel + 0x30, 4) & 0x1FFFFFFF
+            for _ in range(MAX_TAGS):
+                tag = self.word(tadr)
+                pointer = self.word(tadr + 4) & 0x1FFFFFFF
+                count, identifier = tag & 0xFFFF, (tag >> 28) & 7
+                elsewhere = identifier in (TAG_REFE, TAG_REF)
+                source = pointer if elsewhere else tadr + QUADWORD
+                dma.tags.append(("EE source", tadr, tag, pointer))
+                dma.send(dma.to_iop, self.ram, source, count * QUADWORD,
+                         "EE sent")
+                inline_end = tadr + QUADWORD + count * QUADWORD
+                tadr = tadr + QUADWORD if elsewhere else inline_end
+                if identifier == TAG_NEXT:
+                    tadr = pointer
+                self.io[channel + 0x30] = tadr
+                if identifier in (TAG_REFE, TAG_END):
+                    return True
+            raise RuntimeError(f"EE source chain at {channel:#010x} ran past "
+                               f"{MAX_TAGS} tags without one ending it")
+
+        def receive(self, channel: int, chcr: int) -> bool:
+            """SIF0, IOP -> EE. In chain mode the destination comes out of the
+            FIFO ahead of the data, so this can only proceed once the IOP has
+            pushed something."""
+            if not chcr & EE_CHAIN:
+                length = self.read(channel + 0x20, 4) * QUADWORD
+                if len(dma.to_ee) < length:
+                    return False
+                dma.receive(dma.to_ee, self.ram,
+                            self.read(channel + 0x10, 4) & 0x1FFFFFFF,
+                            length, "EE received")
+                return True
+            while len(dma.to_ee) >= QUADWORD:
+                tag = int.from_bytes(dma.to_ee[0:4], "little")
+                address = int.from_bytes(dma.to_ee[4:8], "little") & 0x1FFFFFFF
+                count, identifier = tag & 0xFFFF, (tag >> 28) & 7
+                if len(dma.to_ee) < QUADWORD + count * QUADWORD:
+                    return False                          # the rest is coming
+                del dma.to_ee[:QUADWORD]
+                dma.receive(dma.to_ee, self.ram, address, count * QUADWORD,
+                            "EE received")
+                dma.packets.append(("IOP -> EE", address, count * 4, tag))
+                self.io[channel + 0x10] = address + count * QUADWORD
+                if identifier == TAG_END or tag & 0x80000000:
+                    return True
+            return False
 
     return SharedBus(rom)
 
 
 def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
     class SharedBus(iopsim.Bus):
+        def __init__(self, image: bytes) -> None:
+            super().__init__(image)
+            self.armed: dict[int, int] = {}
+
         def read(self, addr: int, size: int) -> int:
             which = IOP_REGISTERS.get(addr & 0x1FFFFFFF)
             if which is not None:
@@ -206,17 +314,58 @@ def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
                 return
             super().write(addr, size, value, pc)
             if offset in (IOP_SIF0 + 8, IOP_SIF1 + 8) and value & IOP_START:
-                self.runChannel(offset - 8, value)
+                self.armed[offset - 8] = value
+                self.service()
 
-        def runChannel(self, channel: int, chcr: int) -> None:
-            address = self.read(channel, 4) & 0x1FFFFFFF
-            blocks = self.read(channel + 4, 4)
-            length = (blocks & 0xFFFF) * ((blocks >> 16) or 1) * 4
-            if channel == IOP_SIF0:
-                dma.send(dma.to_ee, self.ram, address, length, "IOP sent")
-            else:
-                dma.receive(dma.to_iop, self.ram, address, length, "IOP received")
-            self.io[channel + 8] = chcr & ~IOP_START
+        def word(self, address: int) -> int:
+            return int.from_bytes(self.ram[address:address + 4], "little")
+
+        def service(self) -> None:
+            for channel, chcr in list(self.armed.items()):
+                finished = (self.send(channel) if channel == IOP_SIF0
+                            else self.receive(channel))
+                if finished:
+                    del self.armed[channel]
+                    self.io[channel + 8] = chcr & ~IOP_START
+
+        def send(self, channel: int) -> bool:
+            """SIF0, IOP -> EE. TADR walks a list of 16-byte send blocks; each
+            names IOP memory to read and carries, ready-made, the tag the EE's
+            destination chain will pop to learn where it goes (BOOT-11c)."""
+            tadr = self.read(channel + 0xC, 4) & 0x1FFFFFFF
+            for _ in range(MAX_TAGS):
+                header = self.word(tadr)
+                source = header & IOP_TAG_ADDRESS
+                words = self.word(tadr + 4)
+                dma.push(dma.to_ee, self.ram[tadr + 8:tadr + 16] + bytes(8))
+                dma.send(dma.to_ee, self.ram, source, quadwords(words * 4),
+                         "IOP sent")
+                tadr += QUADWORD
+                self.io[channel + 0xC] = tadr
+                if header & IOP_TAG_END:
+                    return True
+            raise RuntimeError(f"IOP send blocks at {channel:#010x} ran past "
+                               f"{MAX_TAGS} without one ending the run")
+
+        def receive(self, channel: int) -> bool:
+            """SIF1, EE -> IOP. The header quadword at the front of the FIFO is
+            what says where the data lands; this end supplies no address at all
+            (BOOT-11a)."""
+            while len(dma.to_iop) >= QUADWORD:
+                header = int.from_bytes(dma.to_iop[0:4], "little")
+                words = int.from_bytes(dma.to_iop[4:8], "little")
+                length = quadwords(words * 4)
+                if len(dma.to_iop) < QUADWORD + length:
+                    return False                          # the rest is coming
+                del dma.to_iop[:QUADWORD]
+                address = header & IOP_TAG_ADDRESS
+                dma.receive(dma.to_iop, self.ram, address, length,
+                            "IOP received")
+                dma.packets.append(("EE -> IOP", address, words, header))
+                self.io[channel] = address + length
+                if header & IOP_TAG_END:
+                    return True
+            return False
 
     return SharedBus(rom)
 
@@ -275,6 +424,10 @@ class Console:
                 if self.ee.cpu.stop_reason:
                     break
                 self.ee.cpu.step()
+            # A channel armed before its data existed finishes here, once the
+            # other CPU's turn has pushed what it was waiting for.
+            self.ee.bus.service()
+            self.iop_bus.service()
             if recorded is None and self.handshakeDone():
                 recorded = len(self.watcher.frees)
                 self.frees_before_handshake = recorded
@@ -327,6 +480,20 @@ def check(console: Console) -> list[str]:
     require(not misaligned, "IRX-12b",
             f"released bases {[hex(a) for a in misaligned]} are not on a "
             f"0x100 boundary")
+
+    # BOOT-11a is the claim that the *sender* frames the transfer. The check
+    # that bites is not that a packet crossed but that its header, and nothing
+    # on the receiving side, chose where it landed: the address in it has to be
+    # the one the IOP published in SMCOM during the handshake.
+    inbound = [packet for packet in console.dma.packets
+               if packet[0] == "EE -> IOP"]
+    require(bool(inbound), "BOOT-11a",
+            "nothing crossed to the IOP with a header in front of it")
+    astray = [f"{address:#x}" for _, address, _, _ in inbound
+              if address != smcom]
+    require(not astray, "BOOT-11a",
+            f"headers sent the data to {astray}, not to the address the IOP "
+            f"published in SMCOM ({smcom:#010x})")
     return problems
 
 
@@ -346,6 +513,12 @@ def report(console: Console) -> None:
         print("\nSIF transfers:")
         for what, length, address in console.dma.transfers:
             print(f"   {what:<13} {length:5d} bytes at {address:#010x}")
+
+    if console.dma.packets:
+        print("\nframed packets (BOOT-11), as the receiving channel read them:")
+        for direction, address, words, header in console.dma.packets:
+            print(f"   {direction}  {words:5d} words to {address:#010x}"
+                  f"   header {header:#010x}")
 
     print(f"\nmodule images released (IRX-12): {len(console.watcher.frees)}")
     for index, (address, step) in enumerate(console.watcher.frees):
@@ -392,6 +565,11 @@ def main() -> int:
 
     report(console)
     if arguments.traffic:
+        if console.dma.tags:
+            print("\nchain tags walked (BOOT-11b):")
+            for what, at, tag, pointer in console.dma.tags:
+                print(f"   {what}  at {at:#010x}: {tag:#010x} {pointer:#010x}"
+                      f"   id {(tag >> 28) & 7}, {tag & 0xFFFF} quadwords")
         print("\nSIF register accesses:")
         seen = set()
         for kind, which, value, from_ee in console.sif.traffic:

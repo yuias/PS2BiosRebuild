@@ -32,15 +32,22 @@
 // The IOP's SIF DMA channels, in the second controller's bank. Which channels
 // these are was derived by watching the reference's driver rather than assumed
 // (docs/analysis/24-sif-data-path.md).
-    .set DMA_SIF0, 0xBF801520            // to the EE:   MADR +0, BCR +4, CHCR +8
+    .set DMA_SIF0, 0xBF801520            // to the EE:   MADR +0, BCR +4, CHCR +8, TADR +0xC
     .set DMA_SIF1, 0xBF801530            // from the EE
     .set DMA_START, 0x01000000
+
+// BOOT-11: what crosses the bus is framed. An incoming packet carries the
+// address it lands at, so this end supplies none; an outgoing one is described
+// by a 16-byte send block at TADR that also carries, ready-made, the tag the
+// EE's channel pops to learn where the bytes go.
+    .set TAG_END,      0x80000000        // last packet of this channel's run
+    .set TAG_DEST_END, 0x70000000        // an EE destination tag, and the last
 
 // What the boot block left for us, at the address `src/boot/iopboot.S` fixes.
     .set BOOT_LIST, 0x001F8100
     .set BL_TABLE,  0x008
 
-    .set REQUEST_WORDS, 4                // a 16-byte request: a name and a verb
+    .set REQUEST_WORDS, 8                // name, verb, and where to reply
     .set PAYLOAD_WORDS, 4096             // and up to 16 KiB back
     .set VERB_SIZE,    0                 // how big is it?
     .set VERB_CONTENT, 1                 // send it
@@ -98,24 +105,21 @@ _serve_wait:
     nop
     sw    $t2, 0($t0)                    // acknowledge by clearing
 
-    // Take what the EE sent into our own memory.
-    la    $t3, _request
+    // Take what the EE sent. Only the mode is armed: the packet's own header
+    // says where it lands, which is the address we published in SMCOM.
     lui   $t4, (DMA_SIF1 >> 16) & 0xFFFF
     ori   $t4, $t4, DMA_SIF1 & 0xFFFF
-    sw    $t3, 0($t4)                    // MADR
-    lui   $t5, 0x0001
-    ori   $t5, $t5, REQUEST_WORDS        // one block of that many words
-    sw    $t5, 4($t4)                    // BCR
     lui   $t5, (DMA_START >> 16) & 0xFFFF
     sw    $t5, 8($t4)                    // CHCR: start
 
     // Resolve the name in the archive, using the table the boot block left.
-    la    $a0, _request
+    la    $a0, _sif_area
+    lw    $s0, 16($a0)                   // where the EE wants the answer
     bal   _lookup
     nop
 
     la    $t7, _payload
-    la    $t6, _request
+    la    $t6, _sif_area
     lw    $t6, 12($t6)                   // the verb
     bne   $t6, $zero, _serve_content
     nop
@@ -158,14 +162,26 @@ _serve_empty:
     sw    $zero, 0($t7)
     ori   $t8, $zero, 4
 
+// _serve_send: $t8 holds how many words of `_payload` to send.
 _serve_send:
     la    $t3, _payload
+    lui   $t9, (TAG_END >> 16) & 0xFFFF
+    or    $t3, $t3, $t9                  // the last packet of this run
+    la    $t6, _send_block
+    sw    $t3, 0($t6)
+    sw    $t8, 4($t6)
+    // The EE's channel is a destination chain and pops this tag to learn where
+    // the bytes go. It counts quadwords, so round the words up to one.
+    addiu $t2, $t8, 3
+    srl   $t2, $t2, 2
+    lui   $t9, (TAG_DEST_END >> 16) & 0xFFFF
+    or    $t2, $t2, $t9
+    sw    $t2, 8($t6)
+    sw    $s0, 12($t6)                   // the address the EE asked us for
+
     lui   $t4, (DMA_SIF0 >> 16) & 0xFFFF
     ori   $t4, $t4, DMA_SIF0 & 0xFFFF
-    sw    $t3, 0($t4)                    // MADR
-    lui   $t5, 0x0001
-    or    $t5, $t5, $t8
-    sw    $t5, 4($t4)                    // BCR: one block of that many words
+    sw    $t6, 0xC($t4)                  // TADR
     lui   $t5, (DMA_START >> 16) & 0xFFFF
     sw    $t5, 8($t4)                    // CHCR: start
 
@@ -228,12 +244,12 @@ _lookup_miss:
     .section .bss, "aw", @nobits
     .align 4
 _sif_area:
-    .space 64                            // what we published to the EE
+    .space 64                            // what we published: the EE's requests land here
 _ee_area:
     .space 4                             // and what it published to us
     .align 4
-_request:
-    .space REQUEST_WORDS * 4             // the name the EE asked for
+_send_block:
+    .space 16                            // what our outgoing channel reads
     .align 4
 _payload:
     .space PAYLOAD_WORDS * 4             // and the bytes we send back
