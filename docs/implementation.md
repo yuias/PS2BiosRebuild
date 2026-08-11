@@ -192,21 +192,35 @@ python3 tools/ps2sim.py build/rom.bin
 
 ```
 SIF transfers:
-   EE sent          16 bytes at 0x000174c0
-   IOP received     16 bytes at 0x00000d50
-   IOP sent        256 bytes at 0x00000d60
-   EE received     256 bytes at 0x000173c0
+   EE sent          48 bytes at 0x000174f0
+   IOP received     32 bytes at 0x00000d40
+   IOP sent         16 bytes at 0x00000da0
+   EE received      16 bytes at 0x000153b0
+
+framed packets (BOOT-11), as the receiving channel read them:
+   EE -> IOP      8 words to 0x00000d40   header 0x80000d40
+   IOP -> EE      4 words to 0x000153b0   header 0x70000001
 
 # ROMVER, fetched from the archive across the SIF: 0100XP20260810
 ```
 
+Forty-eight bytes leave and thirty-two arrive because sixteen of them are
+BOOT-11a's header, which the IOP's channel consumes rather than stores; the
+address it stores at, `0x00000d40`, is the one the IOP published in `SMCOM`
+and the EE copied into that header.
+
 That last line is our own `ROMVER`, read out of the archive on the IOP's side
 of the bus and printed by the EE. It is the shape every later `rom0:` read has.
 
-The gate says so directly: setting the outgoing transfer's quadword count to
-zero — one halfword — leaves the EE waiting with an empty console line, and the
-run fails with `SIF: the EE never received the archive file it asked the IOP
-for`.
+The gate says so directly: emptying the outgoing chain tag — its quadword count
+set to zero, one word — leaves the EE waiting with an empty console line, and
+the run fails on three counts at once, naming the framing first:
+
+```
+BOOT-11a: nothing crossed EE -> IOP with a header the receiving channel could read
+SIF: the EE never received the archive file it asked the IOP for
+EE-9: the boot never reached the program in the archive
+```
 
 **And the boot ends where the reference's does.** The kernel asks for
 `rom0:OSDSYS`, which crosses the SIF as a 1288-byte transfer, reads its program
@@ -300,10 +314,14 @@ above, because a module's bss is zeroed by the loader as it lands: the boot
 list sat below the load base until an early module grew enough to wipe it, and
 the load base only says where the *first* module starts.
 
-**Our SIF transfers are normal-mode.** The reference's driver builds tag lists
-and runs the EE's channels in chain mode. Ours moves a fixed quadword count,
-which is enough for a request and a reply and needs no tag interpreter on
-either side. `tools/ps2sim.py` models what ours uses, and says so.
+**Our SIF exchange is framed as the reference's is, but rendezvous is by flag.**
+`spec/03` BOOT-11's framing is implemented in full: the EE runs a source chain
+over a packet headed for the address the IOP published, and the IOP builds a
+send block whose second half is the destination tag the EE's channel pops. What
+is still ours rather than the reference's is *when* each side looks. The
+reference's drivers are woken by the SBUS interrupt; ours poll a bit in the
+flag registers, because there is no interrupt dispatch on either side yet. The
+transfers are hardware-shaped; the handshake around them is not.
 
 **The syscall entry does not save the full context.** EE-7e's 128-bit `sq`
 context save exists for the scheduler, which does not exist yet. The entry
@@ -327,7 +345,7 @@ it cannot quietly go stale. This copy is the gate's own text:
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 111 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - EE-7e's 128-bit context save, and the scheduler that needs it
-- The EE's chain mode: our transfers are normal-mode, so the tag lists the reference's driver builds have no counterpart here
+- Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
 ## Four things that cost time, written down so they cost it once

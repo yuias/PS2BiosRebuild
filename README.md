@@ -7,9 +7,10 @@ emulator accepts in place of a retail BIOS.
 Status: **analysis complete; the image boots end to end on the simulators.**
 It builds from source, its IOP loads and links its modules, its EE comes up on
 our own kernel, the two meet across the SIF, and the boot ends by fetching
-`rom0:OSDSYS` over that bus and running it. What is thin is depth: three of the
-boot list's twenty-nine modules exist and fourteen of the 125 syscall slots are
-served.
+`rom0:OSDSYS` over that bus — in the packet framing the reference itself uses —
+and running it. What is thin is depth: three of the boot list's twenty-nine
+modules exist, fourteen of the 125 syscall slots are served, and neither
+processor takes an interrupt yet.
 
 Behind that, both CPUs are fully surveyed — the archive format, the boot block,
 all twenty-nine modules of the IOP boot list, and the EE kernel down to the

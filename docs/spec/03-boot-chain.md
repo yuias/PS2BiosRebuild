@@ -246,6 +246,53 @@ per `spec/02` IRX-12.
 address, or read with its top twenty bits clear; `SIFMAN` refuses the bus
 otherwise (`docs/analysis/11`).
 
+## BOOT-11: A transfer carries its own destination
+
+The six registers of BOOT-10 let the two CPUs meet; they do not let them talk.
+Data crosses on two DMA channels per side, and the governing rule is that
+**the sender frames the transfer**. Neither CPU can read the other's memory, so
+a receiving driver has no address to arm its channel with; every address a
+channel uses arrives ahead of the bytes it applies it to. Derived from
+`docs/analysis/24-sif-data-path.md`, which also states which parts of this are
+observed here and which are taken from outside.
+
+| Channel | EE side | IOP side | Direction |
+| --- | --- | --- | --- |
+| SIF0 | channel 5, `0x1000C000` | channel 9, `0x1F801520` | IOP → EE |
+| SIF1 | channel 6, `0x1000C400` | channel 10, `0x1F801530` | EE → IOP |
+
+**BOOT-11a:** Every EE→IOP packet in the SIF1 stream begins with one quadword
+of header: `{ address | flags, word count, pad, pad }`. Bit 31 of the first
+word ends the receiving channel's run and bit 30 asks for an interrupt; the
+rest is the address in **IOP** memory the payload is stored at, and it is the
+address that side published in `SMCOM`. The payload follows the header and is
+padded up to a quadword boundary, so the word count and the quadwords moved
+are two different numbers and both must be right.
+
+**BOOT-11b:** The EE drives SIF1 as a **source chain**: `CHCR` = `0x184` —
+`MOD` = chain, `TIE`, `STR`, with `TTE` **clear** — and `TADR` pointing at a
+list of quadword tags, each `{ quadword count | id at bits 28-30, address }`.
+Ids `refe` (0) and `ref` (3) name data elsewhere; `refe` is the last of a list.
+Because `TTE` is clear the tags themselves do not travel, so BOOT-11a's header
+is the first quadword of a tag's *data*, not of the tag. `TADR` advances past
+each tag as it is consumed, which is what lets a driver re-arm the channel
+without rewriting it.
+
+**BOOT-11c:** The IOP drives SIF0 from a `TADR` too, but what sits there is a
+sixteen-byte **send block** per packet: `{ address | flags, word count, EE tag
+low, EE tag high }`. The last two words are a destination-chain tag —
+`{ quadword count | id, address }` — made for the *other* side and pushed into
+the FIFO ahead of the data. The EE's channel 5 runs as a destination chain: it
+pops that quadword, and stores what follows at the address in it. A rebuild
+must supply the peer's tag from the sending end; there is nowhere else it can
+come from.
+
+**BOOT-11d:** A channel that has been started and cannot yet be satisfied stays
+**busy**. Both sides' drivers arm a receiver before the sender has pushed
+anything and read `CHCR.STR` going clear as the transfer having happened; a
+channel that reported itself idle with nothing moved would be indistinguishable
+from a completed transfer of zero bytes.
+
 ## Verification
 
 Everything in BOOT-1, BOOT-3, BOOT-5 and BOOT-6 is a statement about specific
@@ -292,6 +339,24 @@ So BOOT-1 and BOOT-3 through BOOT-7 are verified rather than merely described.
 BOOT-8 and BOOT-9 are exercised on the way (the boot reaches `IOPBTCONF` and
 loads modules from it) but not yet asserted; that needs the simulator to model
 exceptions, which is where it currently stops.
+
+BOOT-11 is gated the same way BOOT-10 is, and on the reference rather than only
+on our own image:
+
+```sh
+python3 tools/ps2sim.py assets/SCPH-50000.bin --traffic   # the tags and packets
+python3 tools/ps2sim.py assets/SCPH-50000.bin --check     # judge them
+```
+
+`--check` requires that something crossed to the IOP with a header in front of
+it and that the header sent it to the address the IOP published in `SMCOM` —
+BOOT-11a's substance, since a receiver that chose its own address would pass
+the first test and fail the second. `--no-bridge` fails both, alongside
+BOOT-10's.
+
+BOOT-11c is exercised but not observed: our own image drives the send block and
+its transfers land, while the reference's IOP never reaches its sender under
+this simulator, which needs interrupts it does not have.
 
 **BOOT-5 corrected `docs/analysis/02`.** Extracting the POST writes mechanically
 rather than reading them off a listing found a code the prose had missed

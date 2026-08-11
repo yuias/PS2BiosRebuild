@@ -6,11 +6,12 @@ the working document and is kept current.
 
 > **Where the work is right now:** the analysis is complete on both CPUs and
 > **the image boots end to end on the simulators**. Its EE comes up on our own
-> kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus and
-> runs it — `spec/03` BOOT-1 to BOOT-10 and `spec/04` EE-1 to EE-9, on our own
-> code rather than the reference's. What is thin is *depth*: three of the boot
-> list's twenty-nine modules exist, fourteen of the 125 syscall slots are
-> served, and there is no scheduler.
+> kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus in
+> the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
+> and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
+> is thin is *depth*: three of the boot list's twenty-nine modules exist,
+> fourteen of the 125 syscall slots are served, there is no scheduler, and
+> neither processor takes an interrupt.
 >
 > Five specifications are written and every one has a gate that has been tested
 > in both directions. Six simulators and checkers judge an image — ours and the
@@ -97,6 +98,8 @@ per-file, and the eventual build will assemble the image the same way.
 | Joining the two CPUs (SIF handshake) | analysed — `docs/analysis/23-joining-the-two-cpus.md` |
 | Joint simulator | **a gate** — `tools/ps2sim.py --check`, tested with `--no-bridge` |
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
+| SIF data path (framing) | analysed — `docs/analysis/24-sif-data-path.md` |
+| SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
 
 ### What is built
 
@@ -111,7 +114,7 @@ reference and the reason for it.
 | IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
-| SIF data path | **built** — normal-mode DMA both ways; the EE fetches an archive file |
+| SIF data path | **built** — BOOT-11's framing both ways; the EE fetches an archive file |
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
@@ -207,11 +210,40 @@ document each cites):
   upper 64 bits of four registers with `padduw` first. `tools/romdis.py` cannot
   show this, since LLVM has no R5900 target; it surfaced only under execution.
   (`22`)
+- On the SIF **the sender frames the transfer**. A receiving channel is armed
+  with a mode and nothing else; the address its data lands at arrives in front
+  of that data — in a header quadword going one way, in a peer-facing tag the
+  sender carries in its send block going the other. Every "where do I put this"
+  question on the bus is answered by whoever asked it. (`24`, `spec/03` BOOT-11)
+- The EE's outgoing SIF channel has `TTE` clear, so the tag quadwords do not
+  travel: the packet header the IOP reads is the first quadword of a tag's
+  *data*, not the tag. Reading it as the tag puts everything one quadword out.
+  (`24`)
 
 ### Open questions
 
 None outstanding. Both questions carried since `03` and `06` were settled in
 `10`.
+
+### Leads carried in from outside
+
+`docs/analysis/24` used, and says so, a set of observations contributed from a
+sibling project of the same author's — notes taken while bringing an emulator
+up against the same SCPH-50000 image. The SIF ones are analysed and gated. The
+rest are recorded here so they are not lost, **unverified against this
+repository's tools**, each against the document that would confirm it:
+
+| Lead | Where it belongs |
+| --- | --- |
+| SBUS interrupt: the IOP's `SMFLG` writes raise EE INTC bit 1; the EE's handler folds the flags into an `SREG` array and acknowledges by clearing | `16`, `23`, `24` |
+| SIF control register: EE reads OR in `0xF0000102`, IOP `0xF0000002`; the IOP sets bits `0x20`/`0x40`/`0x80` per path and polls that they stick | `11`, `23` |
+| IOP `I_MASK` `0x1080D` — vblank, CDVD, DMA, evblank, timer 5; without them every thread sleeps forever | `06`, `09` |
+| EE timer 3: the compare interrupt is a latch, fires only while `EQUF` is clear, and the kernel parks the timer by leaving `EQUF` set | `16`, `22` |
+| EE TLB: after boot the kernel relies on real mappings; address folding stops working once `OSDSYS` loads | `18`, `22` |
+| `RDRAM`: `0x1000F520` reads `0x1201` at reset and keys a table of configurations; `MCH_RICM`/`MCH_DRD` run a serial device handshake | `13` |
+| `ROMGSCRT` command interface, and the value that makes the ROM deliberately hang | not yet analysed |
+| SIO2: `CTRL` bit 0 must read back clear with `I_STAT` bit 17 raised, or `SIO2MAN` spins | not yet analysed |
+| `sceSifIopReset`: SIFCMD cid `0x80000003` reboots the IOP without the ROM stub, and in-flight FIFO state must be discarded | `12` |
 
 ## 5. Resuming
 
@@ -249,16 +281,24 @@ In this order, because each removes what blocks the next.
    isolated piece of work — and `tools/eeabi.py --check` on our own `KERNEL`
    measures the distance directly: it currently fails on exactly two counts,
    the unimplemented slots and the KSEG1 cache trio.
-3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
+3. **Interrupts, on both sides.** This is now what stops the *reference* going
+   further in `tools/ps2sim.py`: its transfer completes, and then it waits for
+   an answer its IOP cannot produce, because every IOP thread is asleep on a
+   vblank or timer interrupt that never arrives and its SIF driver is woken by
+   an interrupt that is never raised. The leads table above records what the
+   imported notes say about the masks and the sources; none of it is verified
+   yet, and verifying it is most of the work. Our own image gains from it too —
+   the flag-polling rendezvous around BOOT-11's framing is the last piece of
+   the SIF path that is ours rather than the reference's.
+4. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real
    heap.
-4. **Try it in PCSX2.** The image boots on our simulators, which model far less
+5. **Try it in PCSX2.** The image boots on our simulators, which model far less
    than an emulator does; the first run on the working target will find
    whatever we have modelled too kindly. Nothing is on screen yet — the EE
    speaks only over the serial port — so read PCSX2's console rather than its
    window.
-5. **Two loose ends in the analysis.** Nine EE slots have an inferred rather
-   than observed return (`spec/05` SYS-1c), and the EE's chain-mode DMA is
-   unmodelled, which is why the *reference* still stops after its handshake in
-   `tools/ps2sim.py` while ours goes on.
+6. **One loose end in the analysis.** Nine EE slots have an inferred rather than
+   observed return (`spec/05` SYS-1c). The other loose end carried here — the
+   EE's unmodelled chain-mode DMA — is closed by `24`.
