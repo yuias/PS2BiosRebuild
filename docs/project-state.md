@@ -18,6 +18,12 @@ the working document and is kept current.
 > reference's on the same terms — and `ninja -C build check` states what our
 > image is currently expected to do, printing what it is *not* yet expected to
 > do on every success so the list cannot go stale.
+>
+> **And it now runs on the working target.** PCSX2 accepts the image as a BIOS
+> and boots it: both processors reset, the EE reaches our kernel, the IOP loads
+> and links our modules, and the six-register handshake completes between them.
+> The data path is the live problem — EE-to-IOP transfers work there and
+> IOP-to-EE ones do not. §7 says exactly where that stands.
 
 ---
 
@@ -101,6 +107,7 @@ per-file, and the eventual build will assemble the image the same way.
 | SIF data path (framing) | analysed — `docs/analysis/24-sif-data-path.md` |
 | SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
 | First run on PCSX2 | analysed — `docs/analysis/25-first-run-on-pcsx2.md` |
+| PCSX2 as a target | **runs there** — accepted as a BIOS, boots through the handshake; SIF0 open (§4) |
 
 ### What is built
 
@@ -235,8 +242,36 @@ document each cites):
 
 ### Open questions
 
-None outstanding. Both questions carried since `03` and `06` were settled in
-`10`.
+**One, and it is the live one: why does SIF0 deliver nothing under PCSX2?**
+Stated precisely, because most of the obvious answers are already ruled out.
+
+*The symptom.* Our EE arms channel 5 as a destination chain and waits; the IOP
+builds its send block, starts channel 9 and raises the reply flag; the EE's
+channel then reports itself finished and its buffer is untouched. No stage of
+the exchange stalls. The other direction — the EE's source chain into the IOP —
+completes and is believed good.
+
+*What has been ruled out, each by measurement (`docs/analysis/25`):*
+
+- **The destination.** `SMCOM` reads back a sane IOP address, so the outgoing
+  packet's header is addressed correctly; and replying instead to a buffer the
+  EE published at handshake time, with a constant string the IOP builds itself,
+  delivers nothing either. So it is not that the reply is going to the wrong
+  place because the request failed to arrive.
+- **The channel enables.** `DPCR2`'s per-channel nibbles and the bank's global
+  enable at `0x1F801578` are both now set as the reference leaves them, which
+  is what stopped the stalls.
+- **The destination tag's shape.** Ours is now the value the reference itself
+  writes, `0x90000000 | qwc` — id 1 with the interrupt bit.
+
+*The next thing to establish.* Whether the IOP's channel 9 puts anything into
+the FIFO at all. Its busy bit never clears under PCSX2 — which is why waiting
+on it hangs (BOOT-11h) — and a channel that has not finished has not
+necessarily started. A way to see this from outside the IOP is needed, since
+the IOP has no console of its own; the EE reading the SIF control register
+before and after is the instrument that has worked so far.
+
+Everything else carried since `03` and `06` was settled in `10`.
 
 ### Leads carried in from outside
 
@@ -281,39 +316,106 @@ for f in <outdir>/*; do python3 tools/irxinfo.py "$f" --check; done   # 57 modul
 `docs/implementation.md` is the output-side document: how the image is built,
 what it does today, and every deviation from the reference with its reason.
 
+### Running it on PCSX2
+
+The working target, and since `docs/analysis/25` the thing that finds what the
+simulators do not. It is not installed by the repository; this is the setup
+that was used.
+
+```sh
+# v2.6.3, the Linux AppImage. Extracting it beats mounting it: the inner
+# binary can then be run directly and its diagnostics are visible.
+mkdir -p ~/tools && cd ~/tools
+curl -sL -o pcsx2.AppImage https://github.com/PCSX2/pcsx2/releases/download/\
+v2.6.3/pcsx2-v2.6.3-linux-appimage-x64-Qt.AppImage
+chmod +x pcsx2.AppImage && ./pcsx2.AppImage --appimage-extract
+```
+
+It needs `libopengl0`, `libxcb-cursor0` and `libxkbcommon-x11-0`, which are not
+part of a default Ubuntu install. Then:
+
+```sh
+cp build/rom.bin ~/.config/PCSX2/bios/PS2BiosRebuild.bin
+# and in ~/.config/PCSX2/inis/PCSX2.ini: [Filenames] BIOS = PS2BiosRebuild.bin
+timeout 40 ~/tools/squashfs-root/AppRun -bios -batch -nogui
+grep -E '^\[.*\] #' ~/.config/PCSX2/logs/emulog.txt      # our kernel's output
+```
+
+Two things about the harness will otherwise cost an hour each:
+
+- **PCSX2 rewrites its ini on startup.** `[Logging] EnableEEConsole = true` set
+  before the first run is silently replaced by `false`. Set it again *after*
+  PCSX2 has generated its own file, and re-set it before each run.
+- **`-batch` exits when the emulation shuts down**, which booting to a BIOS
+  never does. Give the run a timeout rather than waiting on it.
+
+The EE's serial console is the only instrument that reaches inside the running
+image. Printing a register from our own kernel has answered in one run what
+guessing did not in several — and a **bounded** wait that then reports beats an
+unbounded one that hangs, because the value it prints is the diagnosis.
+
 ## 6. Next steps
 
-In this order, because each removes what blocks the next.
+In this order. The first is a blocker rather than a piece of depth: until it
+closes, everything built afterwards is verified only against instruments we
+wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 
 > A note on where effort goes. The simulators are instruments, not the product,
 > and it is easy to keep sharpening them: each one buys a real observation, so
 > each next one looks worth it. It stops being worth it where PCSX2 would
 > answer the same question — which is the case for everything left on the
-> simulator side after `24`. Item 4 is deliberately not last.
+> simulator side after `24`.
 
-1. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
+1. **Make SIF0 deliver on PCSX2.** §4's open question states the symptom, what
+   is ruled out and what to establish next. Everything else here is depth; this
+   is the one thing standing between the image and a working boot on the target
+   it is built for.
+
+   The specific suspicion to test first: the IOP's channel 9 may never be
+   putting anything into the FIFO, its busy bit never clearing being the hint.
+   Worth trying — cheaply, in this order — the IOP writing `BCR` as a block
+   *count* rather than a size; the `TADR` value being a physical rather than a
+   `0xBFxxxxxx` address; and whether the reference's own IOP, run under
+   `tools/ps2sim.py` with the DMA interrupt delivered, clears the bit at all
+   (if it does not there either, the bit is simply not the completion signal
+   and our reading of it is wrong).
+
+2. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
    needs is done — EE-7e's 128-bit save and restore, through a block a handler
    can rewrite — so what is left is the part that chooses: `EESYNC` still never
    returns from its entry because there is no thread to put a service on.
    Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
    problem twice.
-2. **Fill in the syscall slots** (`spec/05` SYS-1). 105 of the 125 still resolve
+3. **Fill in the syscall slots** (`spec/05` SYS-1). 105 of the 125 still resolve
    to the reporter, and `ninja -C build check` counts that off the image's own
    table rather than from a number kept by hand. The table and the entry are
    done, so each slot is an isolated piece of work; `tools/eeksys.py --check` on
    our `KERNEL` now fails on that count alone, EE-8e having closed with the
-   cache trio.
-3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
+   cache trio. The band `0x64`–`0x6A` is the natural next group: `0x65`'s
+   algorithm is already specified (SYS-4d) and `0x64`/`0x66` are the two of the
+   band still unread.
+4. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real
    heap.
-4. **Finish the SIF data path on PCSX2** (`docs/analysis/25`). The image is
-   accepted as a BIOS there and boots through the handshake; EE-to-IOP
-   transfers work and IOP-to-EE ones do not yet. The thread to pull is the
-   control register's path bits, which are gone by the time the first transfer
-   is attempted — BOOT-11f says they are consumed, and raising them per
-   transfer was not by itself enough. The EE's serial console is the
-   instrument: print the register in question from our own kernel.
 5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.
+
+## 7. Known problems, in one place
+
+| Problem | Where it is written up | State |
+| --- | --- | --- |
+| SIF0 delivers nothing on PCSX2 | §4 open question, `docs/analysis/25` | **open, and the blocker** |
+| The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
+| Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
+| No scheduler, so `EESYNC` never returns from its entry | next step 2 | deliberate |
+| 105 of 125 syscall slots report themselves rather than working | next step 3 | deliberate |
+| Three of twenty-nine boot-list modules exist | next step 4 | deliberate |
+| Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
+| The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
+
+The distinction that matters when picking this up: everything marked
+*deliberate* is depth the build has not reached yet and is listed by the gate
+on every successful run. The first two rows are different — they are things
+that do not work and are not yet understood.

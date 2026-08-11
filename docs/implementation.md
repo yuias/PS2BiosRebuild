@@ -84,20 +84,19 @@ python3 tools/eesim.py build/rom.bin --syscall 0x14 3
 Every one of those returning at all is EE-7c: the handler advanced `EPC` past
 the `syscall`, or control would come back to the same instruction forever.
 
-**Two requirements from the reference's own gate.** `tools/eeksys.py --check`
-judges a `KERNEL` file structurally, and ours now fails it on exactly two
-counts, both "not written yet" rather than "written wrong":
+**One requirement left from the reference's own gate.** `tools/eeksys.py --check`
+judges a `KERNEL` file structurally, and ours now fails it on a single count,
+"not written yet" rather than "written wrong":
 
 ```sh
 python3 tools/romdir.py build/rom.bin --extract <outdir>
 python3 tools/eeksys.py <outdir>/KERNEL --check
-# EE-8d: ... also use the undefined reporter        (98 unimplemented slots)
-# EE-8e: kseg1 slots [] != ['0x60', '0x61', '0x62'] (the cache trio)
+# EE-8d: slots [...] also use the undefined reporter    (105 unimplemented)
 ```
 
 The vector page, EE-5a's identical `0x000`/`0x180`, EE-6b's single common
-handler, and EE-8a to EE-8c's slot count, absence of nulls and alias blocks all
-pass already.
+handler, EE-8a to EE-8c's slot count, absence of nulls and alias blocks, and
+EE-8e's KSEG1 cache trio all pass already.
 
 **The IOP reaches `IOPBOOT` and reads its boot list.**
 
@@ -367,6 +366,12 @@ it cannot quietly go stale. This copy is the gate's own text:
 - 111 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - The scheduler: EE-7e's context save is in place and EE-7g's exit can be driven from it, but nothing yet chooses a different thread to resume
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
+
+One further thing is *not* on that list because it is a fault rather than
+unbuilt depth: **SIF0 delivers nothing under PCSX2**. The image boots there
+through the handshake and its EE-to-IOP transfers work; the return direction
+does not, and the gate cannot see it because our own simulators carry that
+traffic happily. `docs/project-state.md` §4 states what has been ruled out.
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
 ## Four things that cost time, written down so they cost it once
