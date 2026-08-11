@@ -21,6 +21,9 @@ SECTIONS
     . = 0x80015380;                 /* EE-6d: the interrupt table */
     .inttable : { *(.inttable) }
 
+    . = 0x800154A8;                 /* EE-6f: the CP0 register read stubs */
+    .cop0reads : { *(.cop0reads) }
+
     /* Beyond the image: scratch the kernel uses but does not ship. */
     .bss (NOLOAD) : { *(.bss) *(COMMON) }
 

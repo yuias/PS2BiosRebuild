@@ -131,6 +131,24 @@ ROM (`docs/analysis/18`, which quotes the instruction word), and reproducing it
 is deliberate: it is what every retail machine does, so it is what software
 written for the platform encountered.
 
+**SYS-4c:** Slot `0x63` — aliased at `0x67` — takes a register number and
+returns that **CP0** register. It is a dispatcher, not a function, and must be:
+`mfc0` encodes its register number as an instruction field, so "read register
+*n*" cannot be expressed any other way than a table of stubs, one per register.
+The table is `spec/04` EE-6f's. Indices 0 to 6 read their register; index 7
+returns without writing `$v0` at all, the R5900 having nothing there. **The
+index is not bounds-checked**, so a caller passing more than seven reads a word
+past the table and jumps to it.
+
+**SYS-4d:** Slot `0x65` — aliased at `0x69` — is described in
+`docs/analysis/18` as a cache operation over an address range, and executing it
+shows the mechanism is the other way round: it walks the cache **by index**,
+reads each line's tag out of CP0 register 28, forms the address that tag
+implies, and operates only on lines whose address falls between `$a0` and
+`$a1`. Both endpoints are rounded down to a 64-byte line first. A rebuild that
+walked addresses instead would miss lines the reference reaches and touch lines
+it does not.
+
 **SYS-4b:** Slots `0x61` and `0x62` are a matched pair over `Config`'s two
 cache-enable bits, at 16 and 17. `0x61` **sets** the named bits and `0x62`
 **clears** them, and each sweeps a cache first only if the sweep is needed —

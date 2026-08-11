@@ -43,6 +43,7 @@ function(ps2AddComponent name)
               --only-section=.vectors --only-section=.text
               --only-section=.rodata --only-section=.syscalls
               --only-section=.exctable --only-section=.inttable
+              --only-section=.cop0reads
               "$<TARGET_FILE:${name}.elf>"
               "${CMAKE_CURRENT_BINARY_DIR}/${name}.bin"
       BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/${name}.bin"

@@ -1,12 +1,14 @@
-// The cache trio: syscall slots 0x60, 0x61 and 0x62.
+// The cache and CP0 band: syscall slots 0x60 to 0x63, and the fourth table the
+// last of them dispatches through.
 //
 // docs/spec/04-ee-kernel.md EE-8e and docs/spec/05-ee-syscall-abi.md SYS-4.
-// These three are published through KSEG1 rather than KSEG0, and that is a
+// The first three are published through KSEG1 rather than KSEG0, and that is a
 // hardware requirement, not a convention: each one reconfigures or invalidates
 // the very cache its own instruction fetches would come through. `tables.S`
 // aliases them; nothing here can enforce it, which is why the gate does.
 //
-// All three take one argument and return nothing (SYS-4).
+// Each takes one argument. The three cache calls return nothing (SYS-4); the
+// CP0 read returns the register (SYS-4c).
 
     .set noreorder
     .set noat
@@ -34,9 +36,21 @@
     .set ICACHE_WRITEBACK,  0x14
     .set DCACHE_OP,         0x07
 
+// EE-6f: the fourth published table, holding one read stub per CP0 register.
+    .set COP0_READS, 0x54A8             // 0x800154A8, from a 0x8001 base
+
     .globl _sys_set_cache_mode
     .globl _sys_enable_cache
     .globl _sys_disable_cache
+    .globl _sys_read_cop0
+    .globl _cop0_read_0
+    .globl _cop0_read_1
+    .globl _cop0_read_2
+    .globl _cop0_read_3
+    .globl _cop0_read_4
+    .globl _cop0_read_5
+    .globl _cop0_read_6
+    .globl _cop0_read_none
 
     .section .text, "ax"
 
@@ -161,5 +175,52 @@ _disable_write:
     sync
     mtc0  $t0, $16
     sync_p
+    jr    $ra
+    nop
+
+// Slot 0x63: read the CP0 register the argument names.
+//
+// SYS-4c. This is a dispatcher rather than a function, and it has to be: the
+// register number is a *field of the `mfc0` instruction*, so it cannot be
+// supplied at run time. A table of one two-instruction stub per register is
+// the only way to offer the call at all, which is why the kernel publishes a
+// fourth table (EE-6f) beside its three dispatch tables.
+//
+// The index is not checked, as it is not in the reference. A caller passing
+// more than seven reads a word past the table and jumps to it.
+_sys_read_cop0:
+    sll   $a0, $a0, 2
+    lui   $t0, 0x8001
+    addu  $t0, $t0, $a0
+    lwu   $t0, COP0_READS($t0)
+    jr    $t0
+    nop
+
+// The stubs themselves: each returns its register, in the delay slot of its
+// own return. Index 7 has no register to read -- the R5900 has nothing there --
+// and returns without writing $v0 at all, so the caller sees whatever it
+// already held rather than a value invented here.
+_cop0_read_0:
+    jr    $ra
+    mfc0  $v0, $0
+_cop0_read_1:
+    jr    $ra
+    mfc0  $v0, $1
+_cop0_read_2:
+    jr    $ra
+    mfc0  $v0, $2
+_cop0_read_3:
+    jr    $ra
+    mfc0  $v0, $3
+_cop0_read_4:
+    jr    $ra
+    mfc0  $v0, $4
+_cop0_read_5:
+    jr    $ra
+    mfc0  $v0, $5
+_cop0_read_6:
+    jr    $ra
+    mfc0  $v0, $6
+_cop0_read_none:
     jr    $ra
     nop

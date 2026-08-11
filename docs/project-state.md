@@ -10,7 +10,7 @@ the working document and is kept current.
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
 > is thin is *depth*: three of the boot list's twenty-nine modules exist,
-> eighteen of the 125 syscall slots are served, there is no scheduler, and
+> twenty of the 125 syscall slots are served, there is no scheduler, and
 > neither processor takes an interrupt.
 >
 > Five specifications are written and every one has a gate that has been tested
@@ -117,9 +117,9 @@ reference and the reason for it.
 | SIF data path | **built** — BOOT-11's framing both ways; the EE fetches an archive file |
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
-| EE kernel: vector page, dispatch, syscall table | **built** — 18 slots served, the rest report themselves |
+| EE kernel: vector page, dispatch, syscall table | **built** — 20 slots served, the rest report themselves |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
-| EE cache trio (EE-8e, SYS-4) | **built and gated** — the three KSEG1 slots, called and read back |
+| EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -296,7 +296,7 @@ In this order, because each removes what blocks the next.
    returns from its entry because there is no thread to put a service on.
    Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
    problem twice.
-2. **Fill in the syscall slots** (`spec/05` SYS-1). 107 of the 125 still resolve
+2. **Fill in the syscall slots** (`spec/05` SYS-1). 105 of the 125 still resolve
    to the reporter, and `ninja -C build check` counts that off the image's own
    table rather than from a number kept by hand. The table and the entry are
    done, so each slot is an isolated piece of work; `tools/eeksys.py --check` on

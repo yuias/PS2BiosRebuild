@@ -87,6 +87,10 @@ INSTALLED_SLOT, INSTALLED_HANDLER = 0x40, 0xDEADBEEF
 CONTEXT_PROBE_SLOT, CONTEXT_LOST_T9 = 0x75, 25
 # EE-8e's cache trio, and the two Config bits its pair is named for.
 KSEG1_SLOTS = (0x60, 0x61, 0x62)
+# EE-6f's table, and the CP0 registers that hold still enough to compare
+# ($1 is Random, which moves under its own steam).
+COP0_READ_TABLE = 0x800154A8
+COP0_STABLE = (2, 3, 0)
 COP0_CONFIG, CACHE_BOTH, CACHE_ENABLE_BITS = 16, 3, 3 << 16
 EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
 UNDEFINED_SLOT = 0x21
@@ -320,6 +324,27 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
             f"slots {[hex(s) for s in uncached]} are published through KSEG1, "
             f"want {[hex(s) for s in KSEG1_SLOTS]}: each of the three "
             f"reconfigures the cache its own fetches would come through")
+
+    # EE-6f: the fourth published table, one read stub per CP0 register.
+    stubs = [machine.word(COP0_READ_TABLE + index * 4) for index in range(8)]
+    require(all(stubs), "EE-6f",
+            f"the CP0 read table at {COP0_READ_TABLE:#010x} holds {stubs}; no "
+            f"entry may be null, and slot 0x63 jumps through every one")
+
+    # SYS-4c, called: reading register n has to come back with register n.
+    # `Random` is skipped -- it moves on its own, so a stale read looks the
+    # same as a correct one only by accident.
+    for register in COP0_STABLE:
+        got = machine.syscall(0x63, register)
+        want = machine.cpu.cop0[register] & eesim.MASK32
+        require(got is not None and got & eesim.MASK32 == want, "SYS-4c",
+                f"syscall 0x63({register}) returned "
+                f"{'nothing' if got is None else f'{got & eesim.MASK32:#010x}'}"
+                f", want CP0 register {register} = {want:#010x}")
+    # EE-8c: 0x67 is the same call, and must not have been collapsed away.
+    require(machine.syscall(0x67, COP0_STABLE[0])
+            == machine.syscall(0x63, COP0_STABLE[0]), "EE-8c",
+            "slots 0x63 and 0x67 disagree; the block is published twice")
 
     # SYS-4, called rather than read. The pair has to move the Config bits it
     # is named for and leave the rest of the register alone: a handler that

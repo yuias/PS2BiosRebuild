@@ -56,7 +56,16 @@ _syscall_table:
     .word _sys_set_cache_mode + KSEG1   // 0x60
     .word _sys_enable_cache + KSEG1     // 0x61
     .word _sys_disable_cache + KSEG1    // 0x62
-    .rept 0x11                          // 0x63 .. 0x73
+    .word _sys_read_cop0                // 0x63  cached, unlike the three above
+    .rept 3                             // 0x64 .. 0x66
+    .word _sys_undefined
+    .endr
+    // EE-8c again: 0x63..0x66 is published a second time at 0x67..0x6A.
+    .word _sys_read_cop0                // 0x67
+    .rept 3                             // 0x68 .. 0x6A
+    .word _sys_undefined
+    .endr
+    .rept 9                             // 0x6B .. 0x73
     .word _sys_undefined
     .endr
     .word _sys_set_syscall              // 0x74
@@ -94,3 +103,18 @@ _exception_table:
     .section .inttable, "aw"
 _interrupt_table:
     .space 32
+
+// EE-6f: the fourth table the kernel publishes, one stub per CP0 register.
+// Slot 0x63 jumps through it because `mfc0` encodes its register number in the
+// instruction, so "read register n" cannot be written any other way.
+    .section .cop0reads, "aw"
+    .globl _cop0_read_table
+_cop0_read_table:
+    .word _cop0_read_0
+    .word _cop0_read_1
+    .word _cop0_read_2
+    .word _cop0_read_3
+    .word _cop0_read_4
+    .word _cop0_read_5
+    .word _cop0_read_6
+    .word _cop0_read_none               // the R5900 has no register 7
