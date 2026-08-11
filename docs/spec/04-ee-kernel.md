@@ -166,6 +166,24 @@ can nest.
 **EE-7e:** Context is saved with `sq` — 128-bit stores — because the R5900's
 registers are 128 bits wide and the upper halves must survive the call.
 
+Measuring the reference rather than reading its prologue refines this in two
+ways a rebuild needs, since a marker planted in every register and read back
+after syscall `0x75` says exactly what survives:
+
+- **`$t9` does not come back whole, and that is correct.** The vector page
+  hands it through a 64-bit `sd`/`ld` pair before the entry is reached
+  (`EE-6c`), so its upper half is gone in the reference too. A rebuild that
+  matches the dispatcher will lose it in the same place; one that "fixes" it
+  has diverged.
+- **`$at` and `$sp` are not restored** by the reference either. Preserving them
+  is a superset of its behaviour, not a contradiction of it, and a rebuild may
+  do either — but must not assume the reference brings them back.
+
+**EE-7e2:** `$v1` is **not** restored. The caller gets back the dispatcher's
+byte index — `number × 4`, `spec/05` SYS-3a's scaled form — and both reference
+images agree. This is observable from outside the kernel, so a rebuild that
+helpfully puts the number back has changed the interface.
+
 **EE-7f:** Number `0x7C` is special-cased before the table lookup and takes its
 own path.
 

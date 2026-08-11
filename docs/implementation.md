@@ -329,11 +329,19 @@ reference's drivers are woken by the SBUS interrupt; ours poll a bit in the
 flag registers, because there is no interrupt dispatch on either side yet. The
 transfers are hardware-shaped; the handshake around them is not.
 
-**The syscall entry does not save the full context.** EE-7e's 128-bit `sq`
-context save exists for the scheduler, which does not exist yet. The entry
-preserves `$ra`, `$sp` and `$at`, and handlers clobber the temporaries. This is
-a deviation that must close before the scheduler group is written, not one that
-can stay.
+**The syscall entry preserves more than the reference's does.** EE-7e is
+implemented: every register but `$zero`, `$k0` and `$k1` is saved and restored
+128 bits at a time, from a block in memory rather than from registers the entry
+happened to keep — which is what lets a scheduling handler redirect the return
+by writing that block (EE-7g). Two registers the reference does *not* bring
+back, `$at` and `$sp`, come back here. Being a superset costs two `lq`s and
+removes a class of surprise; it is recorded because it is a difference, not
+because it is a problem. `$v1` is left scaled, which is not a superset but the
+reference's own behaviour (EE-7e2).
+
+LLVM has no R5900 target, so `lq` and `sq` are assembled the way `sync.p`
+already was — as `.word`s from a macro. They take the two opcodes MIPS III
+leaves unused, `0x1E` and `0x1F`.
 
 **The bus-configuration table holds only its POST entry.** `spec/03` BOOT-4
 step 1 applies a table of `(register, value)` pairs, and BOOT-5's first code is
@@ -350,7 +358,7 @@ it cannot quietly go stale. This copy is the gate's own text:
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 111 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
-- EE-7e's 128-bit context save, and the scheduler that needs it
+- The scheduler: EE-7e's context save is in place and EE-7g's exit can be driven from it, but nothing yet chooses a different thread to resume
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 

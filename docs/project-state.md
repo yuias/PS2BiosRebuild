@@ -118,6 +118,7 @@ reference and the reason for it.
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
+| EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -219,6 +220,11 @@ document each cites):
   travel: the packet header the IOP reads is the first quadword of a tag's
   *data*, not the tag. Reading it as the tag puts everything one quadword out.
   (`24`)
+- A syscall returns with `$v1` still holding the **scaled** number — the
+  dispatcher's byte index, `number × 4` — on both reference images. `$at`,
+  `$sp` and the upper half of `$t9` do not come back at all. Measured by
+  planting a 128-bit marker in every register, not read off the prologue.
+  (`spec/04` EE-7e, EE-7e2)
 
 ### Open questions
 
@@ -278,11 +284,12 @@ In this order, because each removes what blocks the next.
 > answer the same question — which is the case for everything left on the
 > simulator side after `24`. Item 4 is deliberately not last.
 
-1. **The scheduler, and the context save it needs** (`spec/04` EE-7e, EE-7g;
-   `spec/05` SYS-2a). Two of our deviations close together here: the syscall
-   entry saves only `$ra`, `$sp` and `$at`, and `EESYNC` never returns from its
-   entry because there is no thread to put a service on. Threads on the IOP
-   (`THREADMAN`) and the EE's scheduling group are the same problem twice.
+1. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
+   needs is done — EE-7e's 128-bit save and restore, through a block a handler
+   can rewrite — so what is left is the part that chooses: `EESYNC` still never
+   returns from its entry because there is no thread to put a service on.
+   Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
+   problem twice.
 2. **Fill in the syscall slots** (`spec/05` SYS-1). 111 of the 125 still resolve
    to the reporter. The table and the entry are done, so each slot is now an
    isolated piece of work — and `tools/eeabi.py --check` on our own `KERNEL`

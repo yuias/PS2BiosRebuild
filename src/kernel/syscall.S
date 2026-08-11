@@ -18,8 +18,22 @@
     addiu \reg, \reg, %lo(\symbol)
 .endm
 
+// EE-7e wants 128-bit stores, and LLVM has no R5900 target to assemble them
+// with -- the same reason `sync.p` above is a `.word`. LQ and SQ take the two
+// opcodes MIPS III leaves unused, and both ignore the low four address bits,
+// so a context block only has to be quadword-aligned once.
+.macro sq_ rt, offset, base
+    .word (0x1F << 26) | ((\base) << 21) | ((\rt) << 16) | ((\offset) & 0xFFFF)
+.endm
+
+.macro lq_ rt, offset, base
+    .word (0x1E << 26) | ((\base) << 21) | ((\rt) << 16) | ((\offset) & 0xFFFF)
+.endm
+
     .set SYSCALL_TABLE, 0x4F40          // 0x80014F40, from a 0x8001 base
     .set SYSCALL_COUNT, 0x7D
+
+    .set CONTEXT_BASE, 26               // $k0 addresses the context block
 
     .globl _syscall_entry
     .globl _sys_undefined
@@ -34,15 +48,18 @@
 //        `eret` resumes after it. EE-7g's scheduling handlers may overwrite
 //        that; nothing here does yet.
 // EE-7d: a kernel stack is installed before anything that could nest.
+// EE-7e: context is saved 128 bits at a time, because the caller's registers
+//        are that wide and a handler that returns a 64-bit value has already
+//        destroyed the upper half of the one it wrote.
 //
-// What is *not* done yet is EE-7e's full 128-bit context save. Handlers here
-// preserve $ra, $sp and $at and clobber the temporaries; the `sq` context of
-// the scheduler group arrives with the scheduler.
+// SYS-2a: the prologue must leave $a0-$a3 alone. It touches only $k0 and $k1,
+// which the vector page has already taken, so the handler is reached with the
+// caller's arguments exactly as they were passed.
 _syscall_entry:
-    la    $k0, _syscall_saved
-    sw    $ra, 0($k0)
-    sw    $sp, 4($k0)
-    sw    $at, 8($k0)
+    la    $k0, _syscall_context
+    .irp reg, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
+    sq_   \reg, \reg * 16, CONTEXT_BASE
+    .endr
 
     bgez  $v1, _syscall_positive        // EE-7b
     nop
@@ -70,11 +87,19 @@ _syscall_positive:
     jalr  $k1
     move  $v1, $k0
 
+// EE-7g: a scheduling handler resumes somewhere else by writing this block --
+// its own `$sp` slot decides the stack `eret` comes back on, and `mtc0` to EPC
+// decides the address. Restoring from memory rather than from registers we
+// happened to keep is what makes that possible at all.
+//
+// $v0 carries the result and $v1 is left as the dispatcher's scaled index:
+// SYS-3a's byte offset is what the reference's caller gets back too, measured
+// rather than assumed, so putting the number back would be our invention.
 _syscall_return:
-    la    $k0, _syscall_saved
-    lw    $ra, 0($k0)
-    lw    $sp, 4($k0)
-    lw    $at, 8($k0)
+    la    $k0, _syscall_context
+    .irp reg, 1,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
+    lq_   \reg, \reg * 16, CONTEXT_BASE
+    .endr
     sync_p
     eret
 
@@ -118,8 +143,8 @@ _newline:
 
     .section .bss, "aw", @nobits
     .align 4
-_syscall_saved:
-    .space 16                           // $ra, $sp, $at
+_syscall_context:
+    .space 32 * 16                      // one 128-bit slot per register
     .align 4
 _syscall_stack:
     .space 0x1000

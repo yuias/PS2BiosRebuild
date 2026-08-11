@@ -64,7 +64,8 @@ NOT_YET = (
     "nothing yet inherits a superseded library's clients",
     "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
     "rather than to their own handlers (spec/05 SYS-1)",
-    "EE-7e's 128-bit context save, and the scheduler that needs it",
+    "the scheduler: EE-7e's context save is in place and EE-7g's exit can be "
+    "driven from it, but nothing yet chooses a different thread to resume",
     "interrupt-driven SIF service: our exchange is framed as BOOT-11 says, "
     "but both ends still rendezvous on the flag registers rather than on the "
     "SBUS interrupt the reference's drivers wait for",
@@ -78,6 +79,9 @@ INTC_SOURCE = 3
 INTC_ALIAS_SOURCE = 4
 DMAC_CHANNEL = 2
 INSTALLED_SLOT, INSTALLED_HANDLER = 0x40, 0xDEADBEEF
+# The empty slot of SYS-3b, and the one register the reference does not bring
+# back whole either -- the vector page hands $t9 through a 64-bit save.
+CONTEXT_PROBE_SLOT, CONTEXT_LOST_T9 = 0x75, 25
 EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
 UNDEFINED_SLOT = 0x21
 
@@ -268,6 +272,22 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
 
     require(machine.syscall(0x75) is not None, "SYS-3b",
             "the empty syscall 0x75 did not return")
+
+    # EE-7e is about width. The empty slot is the one to measure it with,
+    # because whatever it changes was changed by the entry, not by a handler.
+    probed = machine.contextProbe(0x75)
+    require(probed is not None, "EE-7e",
+            "syscall 0x75 did not return under the context probe")
+    if probed is not None:
+        lost, scaled = probed
+        require(lost == [CONTEXT_LOST_T9], "EE-7e",
+                f"registers {lost} did not come back with all 128 bits; only "
+                f"$t9 may, because the vector page saves it 64 bits wide as "
+                f"the reference's does")
+        require(scaled == CONTEXT_PROBE_SLOT * 4, "SYS-3a",
+                f"$v1 came back as {scaled:#x}, not the dispatcher's byte "
+                f"index {CONTEXT_PROBE_SLOT * 4:#x}: the reference leaves it "
+                f"scaled and a caller sees that")
 
     before = len(machine.bus.console)
     machine.syscall(UNDEFINED_SLOT)

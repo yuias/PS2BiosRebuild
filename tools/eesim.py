@@ -649,6 +649,11 @@ BOOT_STEPS = 3_000_000           # reset vector to kernel entry costs ~236k
 KERNEL_STEPS = 1_500_000         # kernel entry to its wait for the IOP
 SYSCALL_STEPS = 400_000
 
+# `spec/04` EE-7e is a claim about *width*: the registers are 128 bits and the
+# upper halves have to survive a syscall. A marker with something in both
+# halves is what makes a 64-bit save look like the failure it is.
+CONTEXT_MARKER = 0xFACE0000_00000000_C0DE0000_00000000
+
 
 def locateRdram(rom: bytes) -> int:
     """Where this image keeps `RDRAM`, which is where EE-2's call must land.
@@ -741,6 +746,25 @@ class Machine:
         if cpu.pc != STUB_RETURN:
             return None
         return s32(cpu.get(2))
+
+    def contextProbe(self, number: int) -> tuple[list[int], int] | None:
+        """Call a syscall with a distinct 128-bit marker in every register it
+        must preserve, and report which came back changed, along with `$v1`.
+
+        `$k0`/`$k1` are the kernel's own, `$v0` carries the result and `$v1`
+        the dispatcher's index, so none of them is planted. `$ra` is not
+        either: the harness needs it to hold the sentinel it returns to, which
+        makes reaching the sentinel at all the proof that `$ra` survived.
+        """
+        cpu = self.cpu
+        checked = [1] + list(range(4, 26)) + [28, 29, 30]
+        for index in checked:
+            cpu.setq(index, CONTEXT_MARKER + index)
+        if self.syscall(number) is None:
+            return None
+        lost = [index for index in checked
+                if cpu.r[index] != CONTEXT_MARKER + index]
+        return lost, cpu.get(3)
 
     def word(self, address: int) -> int:
         return self.bus.read(address, 4)
