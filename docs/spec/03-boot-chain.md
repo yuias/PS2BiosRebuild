@@ -312,17 +312,24 @@ the relevant bit before each transfer.
 holding every channel. Until both are dealt with, starting a channel does
 nothing at all.
 
-**BOOT-11h:** A transfer is not instantaneous. Each side waits for its
-channel's `STR` to clear before treating the transfer as done — before
-signalling the peer that a request is there, and before reading an answer.
+**BOOT-11h:** A transfer is not instantaneous. The EE waits for its channel's
+`STR` to clear before treating the transfer as done — before signalling the
+peer that a request is there, and before reading an answer. The IOP's busy bit
+is a separate question and is *not* to be waited on the same way: under PCSX2
+it does not clear, and a rebuild that waits for it stops there
+(`docs/analysis/25`).
 
 **BOOT-11i:** The receiving end must be armed **first**. A transfer runs only
 when both ends are ready, so a side that arms its receiver only after asking
 for something has arranged for neither end to move.
 
 **BOOT-11j:** The IOP's second-bank channels have a per-channel enable in
-`DPCR2` (`0x1F801570`); the reference leaves `0x07777777` there. A channel
-whose nibble is clear does not run however its own `CHCR` is programmed.
+`DPCR2` (`0x1F801570`), one nibble each, whose **high bit is the enable** — a
+nibble of `7` is priority with the channel still off. The reference leaves
+`0x0777FF77`, enabling exactly the two SIF channels. Above them the bank has a
+global enable at `0x1F801578`, which the reference toggles around its critical
+sections and leaves set. A channel missing either does not run however its own
+`CHCR` is programmed.
 
 **BOOT-11d:** A channel that has been started and cannot yet be satisfied stays
 **busy**. Both sides' drivers arm a receiver before the sender has pushed

@@ -51,14 +51,23 @@
 // second bank's DPCR. A channel whose nibble is clear there does not run,
 // however its own CHCR is programmed.
     .set DMA_DPCR2,     0xBF801570
-    .set DMA_DPCR2_ALL, 0x07777777       // what the reference leaves there
+    .set DMA_DPCR2_ALL, 0x0777FF77       // what the reference leaves there.
+                                         // A nibble per channel, and its high
+                                         // bit is the enable -- the two SIF
+                                         // channels are the `f` pair, and a
+                                         // nibble of 7 is priority without it.
+// The bank has a global enable above the per-channel ones, which the
+// reference's driver toggles around its critical sections and leaves set.
+    .set DMA_DMACEN,    0xBF801578
 
 // BOOT-11: what crosses the bus is framed. An incoming packet carries the
 // address it lands at, so this end supplies none; an outgoing one is described
 // by a 16-byte send block at TADR that also carries, ready-made, the tag the
 // EE's channel pops to learn where the bytes go.
     .set TAG_END,      0x80000000        // last packet of this channel's run
-    .set TAG_DEST_END, 0x70000000        // an EE destination tag, and the last
+    .set TAG_DEST_END, 0x90000000        // an EE destination tag: `cnt` with the
+                                         // interrupt bit, which is what the
+                                         // reference writes (0x90000002)
 
 // What the boot block left for us, at the address `src/boot/iopboot.S` fixes.
     .set BOOT_LIST, 0x001F8100
@@ -89,6 +98,10 @@ _wait_for_ee:
     ori   $t3, $t3, DMA_DPCR2 & 0xFFFF
     lui   $t4, (DMA_DPCR2_ALL >> 16) & 0xFFFF
     ori   $t4, $t4, DMA_DPCR2_ALL & 0xFFFF
+    sw    $t4, 0($t3)
+    lui   $t3, (DMA_DMACEN >> 16) & 0xFFFF
+    ori   $t3, $t3, DMA_DMACEN & 0xFFFF
+    ori   $t4, $zero, 1
     sw    $t4, 0($t3)
 
     // BOOT-10b: answer with an address in our own RAM and a bit of our own,

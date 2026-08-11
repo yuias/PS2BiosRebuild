@@ -86,13 +86,38 @@ the honest response is this document rather than a pretence of fidelity.
 chain, the IOP builds and starts its send, and the EE's channel never reports
 itself finished.
 
-One observation stands out and is the thread to pull next. Reading the SIF
-control register from the EE after the handshake gives `0xF0000102` — the IOP's
-path bits, `0x20` and `0x40`, are **gone**, though the same register read
-`0xF0002162` moments earlier with both present. Something consumes them, which
-is what BOOT-11f records; raising the relevant bit before each transfer was not
-by itself enough to make SIF0 deliver, so either the timing of that write or a
-further condition on the receiving end is still wrong.
+### Narrowing it, one probe at a time
+
+Bounded waits that *report* — one per stage, each printing which stage gave up
+— turned a hang into a bisection. What each round established:
+
+- **The stall was not where it looked.** With the three EE-side waits labelled,
+  the report was `no reply flag from the IOP`, not a transfer failure: the IOP
+  was stuck, not the bus.
+- **What stuck the IOP was our own fix.** Waiting for the IOP channel's busy
+  bit to clear — BOOT-11h applied to that side — never returns under PCSX2.
+  Shortening the wait let the IOP reply, and the stall moved on to SIF0.
+- **`DPCR2`'s value was misread.** The reference leaves `0x0777FF77`, not the
+  `0x07777777` first taken from a trace: each channel has a nibble, its **high
+  bit is the enable**, and a nibble of `7` is priority with the enable clear.
+  Writing the `f` pair for channels 9 and 10 is what made the transfers run at
+  all — after it, no stage stalls.
+- **The destination is not the problem.** `SMCOM` reads back a sane IOP address
+  (`0x00000E10`), so the packet header is addressed correctly. Replying to a
+  hard-coded buffer the EE published at handshake time, with a constant string
+  the IOP built itself, still delivered nothing.
+
+So the state is precise: **SIF1 works, SIF0's channel completes on the EE side
+and yet nothing arrives.** The next thing to establish is whether the IOP's
+channel 9 pushes into the FIFO at all — its busy bit never clearing suggests
+its transfer is not finishing the way the EE's does, and a channel that has not
+finished has not necessarily sent anything.
+
+One observation to carry into that. Reading the SIF control register from the
+EE after the handshake gives `0xF0000102` — the IOP's path bits, `0x20` and
+`0x40`, are **gone**, though the same register read `0xF0002162` moments
+earlier with both present. BOOT-11f records that they are consumed; raising the
+relevant bit before each transfer was not by itself enough.
 
 The debugging technique worth keeping: the EE's serial console is the only
 instrument that reaches inside the running image, and printing a register from
