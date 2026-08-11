@@ -66,6 +66,7 @@ IOP_SIF0, IOP_SIF1 = 0x1F801520, 0x1F801530      # MADR +0, BCR +4, CHCR +8
 EE_START = 0x100                 # CHCR.STR, which the hardware clears when done
 EE_CHAIN = 0x4                   # CHCR.MOD == 1, the chain modes
 IOP_START = 0x01000000           # the IOP's equivalent busy bit
+IOP_FROM_MEMORY = 0x1            # CHCR bit 0: the channel reads RAM, not writes it
 
 QUADWORD = 16
 
@@ -323,7 +324,15 @@ def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
                 return
             super().write(addr, size, value, pc)
             if offset in (IOP_SIF0 + 8, IOP_SIF1 + 8) and value & IOP_START:
-                self.armed[offset - 8] = value
+                # BOOT-11e: the busy bit alone does not start a channel. Each
+                # has a fixed direction and its CHCR has to agree, or nothing
+                # moves -- which is what an emulator enforces and what this
+                # simulator used to let through. A channel started the wrong
+                # way round is left busy, exactly as it would be.
+                channel = offset - 8
+                if bool(value & IOP_FROM_MEMORY) != (channel == IOP_SIF0):
+                    return
+                self.armed[channel] = value
                 self.service()
 
         def word(self, address: int) -> int:

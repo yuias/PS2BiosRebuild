@@ -39,6 +39,17 @@
 // BOOT-11b: both channels run in chain mode -- MOD=chain, TIE and STR, with
 // TTE clear so the tags stay out of the data.
     .set DMA_CHAIN, 0x00000184
+    .set DMA_START, 0x00000100           // CHCR.STR, which the hardware clears
+
+// BOOT-11g: a channel's own STR is not enough. The controller has a master
+// enable of its own and a hold register that starts out holding, and until
+// both are dealt with a started channel simply does not run. A simulator that
+// looks only at STR will not notice; an emulator will move nothing.
+    .set DMA_CTRL,    0xB000E000         // bit 0: the controller is enabled
+    .set DMA_STAT,    0xB000E010
+    .set DMA_ENABLEW, 0xB000F590         // bit 16 holds every channel off
+    .set DMA_ENABLED, 0x00002000         // what the reference leaves there
+    .set DMA_STAT_CLEAR, 0x0000E31F
 
     .set TAG_REFE,      0x00000000       // a source tag pointing elsewhere, last
     .set TAG_END,       0x80000000       // the IOP-facing header's end bit
@@ -55,6 +66,17 @@
 // _sif_handshake(): returns once the IOP has answered, with its published
 // address in $v0.
 _sif_handshake:
+    // BOOT-11g: bring the DMA controller up before anything asks it to move.
+    liw   $t0, DMA_STAT
+    liw   $t1, DMA_STAT_CLEAR
+    sw    $t1, 0($t0)                    // acknowledge whatever reset left
+    liw   $t0, DMA_ENABLEW
+    liw   $t1, DMA_ENABLED
+    sw    $t1, 0($t0)                    // release the hold on every channel
+    liw   $t0, DMA_CTRL
+    ori   $t1, $zero, 1
+    sw    $t1, 0($t0)
+
     liw   $t0, SIF_CTRL
     ori   $t1, $zero, CTRL_OPEN
     sw    $t1, 0($t0)
@@ -92,6 +114,13 @@ _sif_wait:
 // memory, and what comes back is headed by a tag naming an address in ours --
 // which is why the destination travels in the request rather than into MADR.
 _sif_exchange:
+    // BOOT-11i: arm the receiving channel first. A transfer runs only when
+    // both ends are ready, so a side that arms its receiver after asking has
+    // arranged for neither end to move.
+    liw   $t4, DMA_SIF0
+    liw   $t5, DMA_CHAIN
+    sw    $t5, 0($t4)
+
     // Put the ten-byte name, the verb and the destination where the outgoing
     // channel will read them: one quadword past the header.
     la    $t0, _sif_request
@@ -155,6 +184,15 @@ _sif_exchange_named:
     liw   $t5, DMA_CHAIN
     sw    $t5, 0($t4)                    // CHCR: start
 
+    // BOOT-11h: wait for the channel. A transfer is not instantaneous, and
+    // raising the flag before it has drained tells the IOP to read a buffer
+    // the bytes have not reached yet.
+_sif_exchange_sent:
+    lw    $t5, 0($t4)
+    andi  $t5, $t5, DMA_START
+    bne   $t5, $zero, _sif_exchange_sent
+    nop
+
     liw   $t0, SIF_MSFLG
     ori   $t2, $zero, REQUEST_BIT
     sw    $t2, 0($t0)                    // our write sets: it is there for you
@@ -168,11 +206,15 @@ _sif_exchange_wait:
     nop
     sw    $t2, 0($t0)                    // our write to SMFLG clears
 
-    // Nothing is armed here but the mode: the tag the IOP put in front of the
-    // data is what says where it lands and how much of it there is.
+    // The channel was armed before the request went out; all that is left is
+    // to let it finish. The tag the IOP put in front of the data is what says
+    // where it lands and how much of it there is.
     liw   $t4, DMA_SIF0
-    liw   $t5, DMA_CHAIN
-    sw    $t5, 0($t4)                    // CHCR: start
+_sif_exchange_received:
+    lw    $t5, 0($t4)
+    andi  $t5, $t5, DMA_START
+    bne   $t5, $zero, _sif_exchange_received
+    nop
     jr    $ra
     move  $v0, $a2
 

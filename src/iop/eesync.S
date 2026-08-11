@@ -27,14 +27,31 @@
     .set HANDSHAKE_BIT, 0x00010000
     .set REQUEST_BIT,   0x00000002       // the EE has sent us something
     .set REPLY_BIT,     0x00000002       // we have sent it back
-    .set CTRL_ANSWER,   0x00000040
+// BOOT-11f: the control register gates the two data paths, one bit each, and
+// an emulator will move nothing across a path whose bit is clear. They are set
+// one at a time, the way the reference's driver sets them.
+    .set CTRL_SIF0_PATH, 0x00000020
+    .set CTRL_SIF1_PATH, 0x00000040
 
 // The IOP's SIF DMA channels, in the second controller's bank. Which channels
 // these are was derived by watching the reference's driver rather than assumed
 // (docs/analysis/24-sif-data-path.md).
     .set DMA_SIF0, 0xBF801520            // to the EE:   MADR +0, BCR +4, CHCR +8, TADR +0xC
     .set DMA_SIF1, 0xBF801530            // from the EE
-    .set DMA_START, 0x01000000
+
+// BOOT-11e: starting a channel takes more than the busy bit. Each carries its
+// direction and sync mode, and the block size the SIF moves in has to be in
+// BCR -- values read off the reference's own driver, because an emulator
+// enforces them where a lenient simulator does not.
+    .set DMA_SEND_CHCR, 0x01000701       // ch9:  from memory, started
+    .set DMA_RECV_CHCR, 0x41000300       // ch10: to memory, started
+    .set DMA_BLOCK,     0x00000020       // 32 words, the SIF's granularity
+
+// BOOT-11j: and the controller has a per-channel enable of its own, in the
+// second bank's DPCR. A channel whose nibble is clear there does not run,
+// however its own CHCR is programmed.
+    .set DMA_DPCR2,     0xBF801570
+    .set DMA_DPCR2_ALL, 0x07777777       // what the reference leaves there
 
 // BOOT-11: what crosses the bus is framed. An incoming packet carries the
 // address it lands at, so this end supplies none; an outgoing one is described
@@ -67,10 +84,20 @@ _wait_for_ee:
     beq   $t1, $zero, _wait_for_ee
     nop
 
-    // BOOT-10b: answer with an address in our own RAM and a bit of our own.
+    // BOOT-11j: enable the second bank's channels before anything uses them.
+    lui   $t3, (DMA_DPCR2 >> 16) & 0xFFFF
+    ori   $t3, $t3, DMA_DPCR2 & 0xFFFF
+    lui   $t4, (DMA_DPCR2_ALL >> 16) & 0xFFFF
+    ori   $t4, $t4, DMA_DPCR2_ALL & 0xFFFF
+    sw    $t4, 0($t3)
+
+    // BOOT-10b: answer with an address in our own RAM and a bit of our own,
+    // and BOOT-11f: open both data paths first, one bit per write.
     lui   $t3, (SIF_CTRL >> 16) & 0xFFFF
     ori   $t3, $t3, SIF_CTRL & 0xFFFF
-    ori   $t4, $zero, CTRL_ANSWER
+    ori   $t4, $zero, CTRL_SIF0_PATH
+    sw    $t4, 0($t3)
+    ori   $t4, $zero, CTRL_SIF1_PATH
     sw    $t4, 0($t3)
 
     la    $t4, _sif_area
@@ -95,6 +122,24 @@ _wait_for_ee:
 // file's first bytes. The EE cannot write our memory and we cannot write its
 // -- everything crosses through the two SIF channels.
 _serve:
+    // BOOT-11f: the path bit is consumed by the transfer it enables, so it is
+    // raised again for each one rather than once at the start.
+    lui   $t3, (SIF_CTRL >> 16) & 0xFFFF
+    ori   $t3, $t3, SIF_CTRL & 0xFFFF
+    ori   $t4, $zero, CTRL_SIF1_PATH
+    sw    $t4, 0($t3)
+
+    // BOOT-11i: arm the receiving channel before waiting to be told anything.
+    // The EE's transfer runs only once this end is ready for it, so arming
+    // after the flag arrives would leave each side waiting for the other.
+    lui   $t4, (DMA_SIF1 >> 16) & 0xFFFF
+    ori   $t4, $t4, DMA_SIF1 & 0xFFFF
+    ori   $t5, $zero, DMA_BLOCK
+    sw    $t5, 4($t4)                    // BCR
+    lui   $t5, (DMA_RECV_CHCR >> 16) & 0xFFFF
+    ori   $t5, $t5, DMA_RECV_CHCR & 0xFFFF
+    sw    $t5, 8($t4)                    // CHCR: start
+
     lui   $t0, (SIF_MSFLG >> 16) & 0xFFFF
     ori   $t0, $t0, SIF_MSFLG & 0xFFFF
     ori   $t2, $zero, REQUEST_BIT
@@ -105,13 +150,8 @@ _serve_wait:
     nop
     sw    $t2, 0($t0)                    // acknowledge by clearing
 
-    // Take what the EE sent. Only the mode is armed: the packet's own header
-    // says where it lands, which is the address we published in SMCOM.
-    lui   $t4, (DMA_SIF1 >> 16) & 0xFFFF
-    ori   $t4, $t4, DMA_SIF1 & 0xFFFF
-    lui   $t5, (DMA_START >> 16) & 0xFFFF
-    sw    $t5, 8($t4)                    // CHCR: start
-
+    // The request has landed where the packet's own header said, which is the
+    // address we published in SMCOM; the channel was armed above.
     // Resolve the name in the archive, using the table the boot block left.
     la    $a0, _sif_area
     lw    $s0, 16($a0)                   // where the EE wants the answer
@@ -164,6 +204,12 @@ _serve_empty:
 
 // _serve_send: $t8 holds how many words of `_payload` to send.
 _serve_send:
+    // BOOT-11f again, for the other path: this one carries the answer.
+    lui   $t3, (SIF_CTRL >> 16) & 0xFFFF
+    ori   $t3, $t3, SIF_CTRL & 0xFFFF
+    ori   $t9, $zero, CTRL_SIF0_PATH
+    sw    $t9, 0($t3)
+
     la    $t3, _payload
     lui   $t9, (TAG_END >> 16) & 0xFFFF
     or    $t3, $t3, $t9                  // the last packet of this run
@@ -182,7 +228,10 @@ _serve_send:
     lui   $t4, (DMA_SIF0 >> 16) & 0xFFFF
     ori   $t4, $t4, DMA_SIF0 & 0xFFFF
     sw    $t6, 0xC($t4)                  // TADR
-    lui   $t5, (DMA_START >> 16) & 0xFFFF
+    ori   $t5, $zero, DMA_BLOCK
+    sw    $t5, 4($t4)                    // BCR
+    lui   $t5, (DMA_SEND_CHCR >> 16) & 0xFFFF
+    ori   $t5, $t5, DMA_SEND_CHCR & 0xFFFF
     sw    $t5, 8($t4)                    // CHCR: start
 
     lui   $t3, (SIF_SMFLG >> 16) & 0xFFFF

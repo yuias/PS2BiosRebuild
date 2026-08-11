@@ -287,6 +287,43 @@ pops that quadword, and stores what follows at the address in it. A rebuild
 must supply the peer's tag from the sending end; there is nowhere else it can
 come from.
 
+### What a simulator will not tell you
+
+BOOT-11a to BOOT-11d describe the framing, and an image can satisfy all four
+and still move nothing on real hardware. The requirements below were found by
+running our image on PCSX2 after it passed every simulator gate, and each one
+is a thing the simulators were not asking about. They are recorded here because
+a rebuild will otherwise meet them one at a time, in the dark.
+
+**BOOT-11e:** A channel needs more than its busy bit. Its `CHCR` carries the
+direction and sync mode too, and the block size belongs in `BCR`. What the
+reference's IOP driver writes is `CHCR = 0x41000300` with `BCR = 0x20` for the
+receiving channel and `CHCR = 0x01000701` with the same `BCR` for the sending
+one — the low bit being the direction, which is fixed per channel and must
+agree with it.
+
+**BOOT-11f:** The control register's low bits gate the two data paths — `0x20`
+for SIF0 and `0x40` for SIF1 — and **the bit is consumed by the transfer it
+enables**. Setting them once during the handshake is not enough; the IOP raises
+the relevant bit before each transfer.
+
+**BOOT-11g:** On the EE side the DMA controller has a master enable
+(`D_CTRL` bit 0) and a hold register (`D_ENABLEW`, bit 16) that starts out
+holding every channel. Until both are dealt with, starting a channel does
+nothing at all.
+
+**BOOT-11h:** A transfer is not instantaneous. Each side waits for its
+channel's `STR` to clear before treating the transfer as done — before
+signalling the peer that a request is there, and before reading an answer.
+
+**BOOT-11i:** The receiving end must be armed **first**. A transfer runs only
+when both ends are ready, so a side that arms its receiver only after asking
+for something has arranged for neither end to move.
+
+**BOOT-11j:** The IOP's second-bank channels have a per-channel enable in
+`DPCR2` (`0x1F801570`); the reference leaves `0x07777777` there. A channel
+whose nibble is clear does not run however its own `CHCR` is programmed.
+
 **BOOT-11d:** A channel that has been started and cannot yet be satisfied stays
 **busy**. Both sides' drivers arm a receiver before the sender has pushed
 anything and read `CHCR.STR` going clear as the transfer having happened; a

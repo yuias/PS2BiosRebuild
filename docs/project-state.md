@@ -100,6 +100,7 @@ per-file, and the eventual build will assemble the image the same way.
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | SIF data path (framing) | analysed — `docs/analysis/24-sif-data-path.md` |
 | SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
+| First run on PCSX2 | analysed — `docs/analysis/25-first-run-on-pcsx2.md` |
 
 ### What is built
 
@@ -306,13 +307,13 @@ In this order, because each removes what blocks the next.
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real
    heap.
-4. **Try it in PCSX2.** The image boots on our simulators, which model far less
-   than an emulator does; the first run on the working target will find
-   whatever we have modelled too kindly. Nothing is on screen yet — the EE
-   speaks only over the serial port — so read PCSX2's console rather than its
-   window. This is also what replaces further simulator work: the EE's INTC and
-   DMAC, the IOP's vblank and timer, and everything else `24` lists as still
-   unmodelled are things an emulator already has.
+4. **Finish the SIF data path on PCSX2** (`docs/analysis/25`). The image is
+   accepted as a BIOS there and boots through the handshake; EE-to-IOP
+   transfers work and IOP-to-EE ones do not yet. The thread to pull is the
+   control register's path bits, which are gone by the time the first transfer
+   is attempted — BOOT-11f says they are consumed, and raising them per
+   transfer was not by itself enough. The EE's serial console is the
+   instrument: print the register in question from our own kernel.
 5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.

@@ -4,7 +4,7 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS.
 
-Status: **analysis complete; the image boots end to end on the simulators.**
+Status: **analysis complete; the image boots end to end on the simulators, and PCSX2 accepts it as a BIOS.**
 It builds from source, its IOP loads and links its modules, its EE comes up on
 our own kernel, the two meet across the SIF, and the boot ends by fetching
 `rom0:OSDSYS` over that bus — in the packet framing the reference itself uses —
