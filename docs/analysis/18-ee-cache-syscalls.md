@@ -32,6 +32,34 @@ The low three bits of the R5900's `Config` are the cache mode. **Code that
 changes them cannot itself be running cached** — the change would take effect
 underneath the fetches bringing in its own next instructions.
 
+### The `and` is not a typo in this document
+
+Read the sequence as arithmetic and it does not do what its shape suggests. The
+left operand has had its low three bits cleared; the right is at most 3. Their
+`and` is therefore **zero, always**, whatever the caller passed and whatever
+`Config` held. Slot `0x60` does not set the cache mode: it clears the whole
+register.
+
+The instruction word settles it, since a mis-decoded `or` would explain the
+oddity away:
+
+```sh
+python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>   # outside the repo
+python3 -c "import pathlib; k = pathlib.Path('<outdir>/KERNEL').read_bytes(); \
+print(f'{int.from_bytes(k[0x2c10:0x2c14], chr(108)+chr(105)+chr(116)+chr(116)+chr(108)+chr(101)):08x}')"
+# 01044024   ->  funct 0x24 = and, rs $t0, rt $a0, rd $t0
+```
+
+`0x24` is `and`; `or` would be `0x25`. And the same kernel uses `or` in exactly
+the analogous place in slot `0x61` (`80002940`), which is what an intended
+`0x60` would have looked like.
+
+So this is a defect in the shipped ROM, not in the reading of it. It is
+reproduced rather than corrected — `spec/05` SYS-4a — because every retail
+machine behaves this way, and software written for the platform met this
+behaviour and not the intended one. A "fixed" rebuild would be the one that
+behaved differently from every real console.
+
 **Slots `0x61` and `0x62`** (`0xA00028C0`, `0xA0002980`) are a matched pair
 that walk the cache with the `cache` instruction:
 

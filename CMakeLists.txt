@@ -100,6 +100,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/syscall.S
     src/kernel/sif.S
     src/kernel/program.S
+    src/kernel/cache.S
     src/kernel/tables.S)
 
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")

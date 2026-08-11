@@ -10,6 +10,9 @@
     .globl _exception_table
     .globl _interrupt_table
 
+// The distance from a KSEG0 address to the same physical word seen uncached.
+    .set KSEG1, 0x20000000
+
 // EE-8a: 125 slots, numbered 0x00 to 0x7C, indexed by the absolute syscall
 // number. EE-8b: no slot is null -- every number in range resolves to code,
 // which for an unimplemented one means the reporter of EE-8d.
@@ -42,7 +45,18 @@ _syscall_table:
     .word _sys_disable_dmac             // 0x1D
     .word _sys_undefined                // 0x1E
     .word _sys_undefined                // 0x1F
-    .rept 0x54                          // 0x20 .. 0x73
+    .rept 0x40                          // 0x20 .. 0x5F
+    .word _sys_undefined
+    .endr
+    // EE-8e: the cache trio is published through KSEG1, so that each runs
+    // uncached -- every one of them reconfigures or sweeps the cache its own
+    // fetches would otherwise come through. The alias is what makes that true;
+    // a rebuild that normalised these three to KSEG0 would fail intermittently
+    // rather than cleanly.
+    .word _sys_set_cache_mode + KSEG1   // 0x60
+    .word _sys_enable_cache + KSEG1     // 0x61
+    .word _sys_disable_cache + KSEG1    // 0x62
+    .rept 0x11                          // 0x63 .. 0x73
     .word _sys_undefined
     .endr
     .word _sys_set_syscall              // 0x74

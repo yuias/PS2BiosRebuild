@@ -62,8 +62,10 @@ NOT_YET = (
     "the rest of the boot list: three of its twenty-nine modules are built",
     "supersession (spec/02 IRX-11): registration compares versions, but "
     "nothing yet inherits a superseded library's clients",
-    "111 of the 125 syscall slots: they resolve to the reporter of EE-8d "
-    "rather than to their own handlers (spec/05 SYS-1)",
+    # `{}` is filled in from the image's own table -- a hand-maintained count
+    # is exactly the kind of thing that goes quietly stale.
+    "{unserved} of the 125 syscall slots: they resolve to the reporter of "
+    "EE-8d rather than to their own handlers (spec/05 SYS-1)",
     "the scheduler: EE-7e's context save is in place and EE-7g's exit can be "
     "driven from it, but nothing yet chooses a different thread to resume",
     "interrupt-driven SIF service: our exchange is framed as BOOT-11 says, "
@@ -78,10 +80,14 @@ NOT_YET = (
 INTC_SOURCE = 3
 INTC_ALIAS_SOURCE = 4
 DMAC_CHANNEL = 2
+SYSCALL_TABLE = 0x80014F40          # spec/04 EE-8a
 INSTALLED_SLOT, INSTALLED_HANDLER = 0x40, 0xDEADBEEF
 # The empty slot of SYS-3b, and the one register the reference does not bring
 # back whole either -- the vector page hands $t9 through a 64-bit save.
 CONTEXT_PROBE_SLOT, CONTEXT_LOST_T9 = 0x75, 25
+# EE-8e's cache trio, and the two Config bits its pair is named for.
+KSEG1_SLOTS = (0x60, 0x61, 0x62)
+COP0_CONFIG, CACHE_BOTH, CACHE_ENABLE_BITS = 16, 3, 3 << 16
 EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
 UNDEFINED_SLOT = 0x21
 
@@ -189,7 +195,17 @@ def checkIop(image: pathlib.Path) -> list[str]:
     return problems
 
 
-def checkEe(image: pathlib.Path) -> list[str]:
+def unservedSlots(machine: eesim.Machine) -> int:
+    """How many of EE-8a's slots still point at the reporter of EE-8d.
+
+    Counted off the running image's own table rather than tracked by hand, so
+    the closing summary cannot claim progress the table does not show.
+    """
+    table = [machine.word(SYSCALL_TABLE + slot * 4) for slot in range(125)]
+    return table.count(max(set(table), key=table.count))
+
+
+def checkEe(image: pathlib.Path) -> tuple[list[str], int]:
     """The boot block's EE path, and the kernel it hands control to."""
     problems: list[str] = []
     machine = eesim.Machine(image.read_bytes())
@@ -220,8 +236,13 @@ def checkEe(image: pathlib.Path) -> list[str]:
         problems.append(f"EE-4: the kernel did not announce itself; its "
                         f"console held {machine.kernel_console!r}")
     else:
+        # Counted before the syscall checks run: one of them installs a handler
+        # through slot 0x74 (SYS-5a), which would otherwise show up as a slot
+        # the image serves.
+        unserved = unservedSlots(machine)
         problems += checkSyscalls(machine)
-    return problems
+        return problems, unserved
+    return problems, unservedSlots(machine)
 
 
 def checkSyscalls(machine: eesim.Machine) -> list[str]:
@@ -259,7 +280,7 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
             "EE-7b", "a negative syscall number did not reach the same slot")
 
     machine.syscall(0x74, INSTALLED_SLOT, INSTALLED_HANDLER)
-    require(machine.word(0x80014F40 + INSTALLED_SLOT * 4) == INSTALLED_HANDLER,
+    require(machine.word(SYSCALL_TABLE + INSTALLED_SLOT * 4) == INSTALLED_HANDLER,
             "SYS-5a", "slot 0x74 did not install into the syscall table")
 
     installed = machine.syscall(0x0D, EXCEPTION_CODE, EXCEPTION_HANDLER)
@@ -288,6 +309,35 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
                 f"$v1 came back as {scaled:#x}, not the dispatcher's byte "
                 f"index {CONTEXT_PROBE_SLOT * 4:#x}: the reference leaves it "
                 f"scaled and a caller sees that")
+
+    # EE-8e, read off the live table: exactly the cache trio is published
+    # uncached. `tools/eeksys.py` asks the same question of a KERNEL file, but
+    # nothing was asking it of ours, so the alias could have been lost without
+    # a gate noticing.
+    uncached = sorted(slot for slot in range(125)
+                      if machine.word(SYSCALL_TABLE + slot * 4) >> 28 == 0xA)
+    require(uncached == list(KSEG1_SLOTS), "EE-8e",
+            f"slots {[hex(s) for s in uncached]} are published through KSEG1, "
+            f"want {[hex(s) for s in KSEG1_SLOTS]}: each of the three "
+            f"reconfigures the cache its own fetches would come through")
+
+    # SYS-4, called rather than read. The pair has to move the Config bits it
+    # is named for and leave the rest of the register alone: a handler that
+    # wrote the whole word would pass a test that only looked at those two.
+    before = machine.cpu.cop0[COP0_CONFIG]
+    machine.syscall(0x62, CACHE_BOTH)
+    disabled = machine.cpu.cop0[COP0_CONFIG]
+    machine.syscall(0x61, CACHE_BOTH)
+    enabled = machine.cpu.cop0[COP0_CONFIG]
+    require(disabled & CACHE_ENABLE_BITS == 0, "SYS-4",
+            f"syscall 0x62 left Config {disabled:#010x}; its enable bits "
+            f"{CACHE_ENABLE_BITS:#x} should be clear")
+    require(enabled & CACHE_ENABLE_BITS == CACHE_ENABLE_BITS, "SYS-4",
+            f"syscall 0x61 left Config {enabled:#010x}; its enable bits "
+            f"{CACHE_ENABLE_BITS:#x} should be set")
+    require(enabled & ~CACHE_ENABLE_BITS == before & ~CACHE_ENABLE_BITS,
+            "SYS-4", f"the cache pair changed Config outside its own bits: "
+                     f"{before:#010x} became {enabled:#010x}")
 
     before = len(machine.bus.console)
     machine.syscall(UNDEFINED_SLOT)
@@ -354,7 +404,8 @@ def main() -> int:
     problems, names = checkArchive(arguments.image)
     problems += checkModules(arguments.image)
     problems += checkIop(arguments.image)
-    problems += checkEe(arguments.image)
+    ee_problems, unserved = checkEe(arguments.image)
+    problems += ee_problems
     problems += checkTogether(arguments.image)
 
     for problem in problems:
@@ -371,7 +422,7 @@ def main() -> int:
           f"across the SIF, where a file crosses it")
     print("\nnot required of the image yet:")
     for item in NOT_YET:
-        print(f"   {item}")
+        print(f"   {item.format(unserved=unserved)}")
     return 0
 
 

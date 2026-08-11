@@ -10,7 +10,7 @@ the working document and is kept current.
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
 > is thin is *depth*: three of the boot list's twenty-nine modules exist,
-> fourteen of the 125 syscall slots are served, there is no scheduler, and
+> eighteen of the 125 syscall slots are served, there is no scheduler, and
 > neither processor takes an interrupt.
 >
 > Five specifications are written and every one has a gate that has been tested
@@ -117,8 +117,9 @@ reference and the reason for it.
 | SIF data path | **built** — BOOT-11's framing both ways; the EE fetches an archive file |
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
-| EE kernel: vector page, dispatch, syscall table | **built** — 14 slots served, the rest report themselves |
+| EE kernel: vector page, dispatch, syscall table | **built** — 18 slots served, the rest report themselves |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
+| EE cache trio (EE-8e, SYS-4) | **built and gated** — the three KSEG1 slots, called and read back |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -220,6 +221,11 @@ document each cites):
   travel: the packet header the IOP reads is the first quadword of a tag's
   *data*, not the tag. Reading it as the tag puts everything one quadword out.
   (`24`)
+- Syscall `0x60` **zeroes `Config`** rather than setting the cache mode: the
+  reference ANDs the argument into a value whose low three bits it has just
+  cleared, where `0x61` ORs in the analogous place. A defect in the shipped
+  ROM, reproduced deliberately — the raw instruction word is quoted in `18` so
+  the claim does not rest on a disassembler. (`18`, `spec/05` SYS-4a)
 - A syscall returns with `$v1` still holding the **scaled** number — the
   dispatcher's byte index, `number × 4` — on both reference images. `$at`,
   `$sp` and the upper half of `$t9` do not come back at all. Measured by
@@ -290,11 +296,12 @@ In this order, because each removes what blocks the next.
    returns from its entry because there is no thread to put a service on.
    Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
    problem twice.
-2. **Fill in the syscall slots** (`spec/05` SYS-1). 111 of the 125 still resolve
-   to the reporter. The table and the entry are done, so each slot is now an
-   isolated piece of work — and `tools/eeabi.py --check` on our own `KERNEL`
-   measures the distance directly: it currently fails on exactly two counts,
-   the unimplemented slots and the KSEG1 cache trio.
+2. **Fill in the syscall slots** (`spec/05` SYS-1). 107 of the 125 still resolve
+   to the reporter, and `ninja -C build check` counts that off the image's own
+   table rather than from a number kept by hand. The table and the entry are
+   done, so each slot is an isolated piece of work; `tools/eeksys.py --check` on
+   our `KERNEL` now fails on that count alone, EE-8e having closed with the
+   cache trio.
 3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real

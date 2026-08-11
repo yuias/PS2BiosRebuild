@@ -343,6 +343,13 @@ LLVM has no R5900 target, so `lq` and `sq` are assembled the way `sync.p`
 already was — as `.word`s from a macro. They take the two opcodes MIPS III
 leaves unused, `0x1E` and `0x1F`.
 
+**Syscall `0x60` zeroes `Config`, on purpose.** `spec/05` SYS-4a: the reference
+ANDs where it plainly meant to OR, so its cache-mode call writes zero whatever
+it is passed. Reproducing a defect is the deviation-free choice here — a
+corrected `0x60` would be the one thing on the machine behaving unlike every
+retail console — but it is the sort of decision that should not be silent, so
+it is stated in the handler as well as here.
+
 **The bus-configuration table holds only its POST entry.** `spec/03` BOOT-4
 step 1 applies a table of `(register, value)` pairs, and BOOT-5's first code is
 emitted by one of those pairs. The remaining pairs configure the SSBUS and RAM

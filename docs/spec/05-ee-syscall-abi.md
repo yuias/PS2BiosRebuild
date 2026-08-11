@@ -122,6 +122,23 @@ returned a status from them would be harmless to a caller that ignores it and
 wrong for one that does not; they are specified as returning nothing because
 that is what the reference does.
 
+The argument names caches in its low two bits in all three.
+
+**SYS-4a:** Slot `0x60` clears the low three bits of `Config` — the cache mode
+— and then **ANDs** the argument into the result rather than ORing it, so what
+it writes back is **zero, unconditionally**. This is a defect in the shipped
+ROM (`docs/analysis/18`, which quotes the instruction word), and reproducing it
+is deliberate: it is what every retail machine does, so it is what software
+written for the platform encountered.
+
+**SYS-4b:** Slots `0x61` and `0x62` are a matched pair over `Config`'s two
+cache-enable bits, at 16 and 17. `0x61` **sets** the named bits and `0x62`
+**clears** them, and each sweeps a cache first only if the sweep is needed —
+`0x61` invalidates one that is currently off, before letting stale tags answer;
+`0x62` writes back one that is currently on, whose dirty lines are the only
+copy of what they hold. Both leave every other bit of `Config` alone, and both
+are therefore safe to repeat.
+
 ## SYS-5: The syscall table is installable
 
 **SYS-5a:** Slot `0x74` takes `(number, handler)` and writes the handler into
