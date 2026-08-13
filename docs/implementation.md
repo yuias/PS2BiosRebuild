@@ -20,13 +20,15 @@ address it runs from, `llvm-objcopy` lifts the raw bytes back out, and
 The PS2 has two processors and one assembler serves both. `-march=mips3` is
 what the *assembler accepts*, not a statement about who runs the code: the IOP
 is an R3000A and its path must stay within MIPS I, and the reset dispatch both
-processors execute must stay within what both have.
+processors execute must stay within what both have. A *compiler* cannot be
+trusted with that distinction, which is why compiled IOP code would be pinned
+to `-march=mips1`; see "What is written in C++" below.
 
 | Piece | Runs at | Source |
 | --- | --- | --- |
 | `RESET` | `0xBFC00000`, both CPUs | `src/boot/reset.S` |
 | `RDRAM` | wherever the archive puts it | `src/boot/rdram.S` |
-| `KERNEL` | copied to physical 0, entered at `0x80001000` | `src/kernel/*.S` |
+| `KERNEL` | copied to physical 0, entered at `0x80001000` | `src/kernel/*` |
 | `IOPBOOT` | in place from the ROM window | `src/boot/iopboot.S` |
 | `SYSMEM` | relocated to the boot list's base | `src/iop/sysmem.S` |
 | `LOADCORE` | relocated after it | `src/iop/loadcore.S` |
@@ -374,6 +376,75 @@ does not, and the gate cannot see it because our own simulators carry that
 traffic happily. `docs/project-state.md` §4 states what has been ruled out.
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
+## What is written in C++, and what cannot be
+
+The rule is **C++ where the machine allows it, and assembly only where it does
+not.** The toolchain carries a C++ compiler configured for a freestanding image
+— `-fno-exceptions -fno-rtti -fno-threadsafe-statics`, since none of the three
+has a runtime here to stand on — and `src/kernel/program.cpp` is the first file
+to use it.
+
+Assembly is genuinely required in four places, and they are not going to change:
+
+- **the reset path**, which runs before there is a stack to call anything with;
+- **the exception vector page**, whose entries are code at fixed offsets;
+- **the syscall entry's context save** (`spec/04` EE-7e), which stores all 128
+  bits of every register with `sq`/`lq` — a compiler has no type that reaches
+  the upper halves and will not emit those instructions;
+- **the import and export stub encodings** (`spec/02` IRX-8), which are
+  specified as exact instruction words.
+
+Everything else on the EE is ordinary code and belongs in C++.
+
+**The language is available in full; the standard library is not.** There is no
+libc++ built for `mipsel-none-elf`, so `<cstdint>`, `<span>`, `<array>`,
+`<bit>`, `<type_traits>` and the rest do not resolve — `#include <stdint.h>`,
+the compiler's own freestanding header, is the one include the image uses.
+Everything that is a *language* feature
+works at `-std=c++26`: `constexpr`, `consteval`, `enum class`, templates,
+structured bindings, attributes. The standard is set explicitly rather than left
+to the compiler's default.
+
+**IOP modules are the exception, and the reason is not obvious.** An IRX is
+relocated when it is loaded, and `spec/02` IRX-3a records that its `HI16` and
+`LO16` fixups come in equal numbers — which holds for **all 61 ELF files** in
+the reference archive:
+
+```sh
+# counting R_MIPS_HI16 (type 5) against R_MIPS_LO16 (type 6) per file
+# ... 0 of 61 ELF files have unequal counts
+```
+
+Clang does not emit code like that. It keeps one `lui` live across several
+accesses to the same symbol, so one `HI16` serves two or more `LO16`s — at every
+optimisation level, `-O0` included, and whether the source is C or C++:
+
+| | `-O0` | `-O1` | `-O2` | `-Os` |
+| --- | --- | --- | --- | --- |
+| `HI16` | 9 | 7 | 7 | 7 |
+| `LO16` | 10 | 8 | 8 | 8 |
+
+`tools/mkirx.py` rejects the result, and it is right to: a shared `lui` is only
+sound if every `%lo` sharing it keeps the same high half, and a module rebased
+at load time has no such guarantee — two symbols with equal `%hi` at link time
+can straddle a 64 KiB boundary once a run-time delta is added. That is why the
+reference's own compiler never shares, and why relaxing the check would be
+trading a build error for a fault that appears only at some load addresses.
+
+Restructuring the source does not help, because the sharing survives it:
+taking the address of a struct once still folds back into `%hi`/`%lo` per
+access.
+`$gp`-relative addressing would avoid relocations entirely, but IRX-8's stubs do
+not reload `$gp` across a module boundary, so an exported function cannot rely
+on it.
+
+So IOP modules stay in assembly until `mkirx` can pair a shared `HI16` safely,
+and the migration is an EE-side one. `ps2AddModule` already pins compiled IOP
+code to `-march=mips1 -mno-check-zero-division` for when that day comes: the
+toolchain's default is MIPS III, which the EE has and the R3000A does not, and
+at MIPS III a 64-bit type emits `daddu`/`sd` and a division emits `teq` — none
+of which the IOP would execute.
+
 ## Four things that cost time, written down so they cost it once
 
 None of these is in a specification, because none of them is about the PS2.
@@ -405,6 +476,14 @@ set, so exceptions go to the ROM's vectors at `0xBFC00200` — not to the vector
 page the kernel just arrived with. Syscalls did nothing at all until the kernel
 cleared it. The specification does not mention this because the reference
 kernel clears it as a matter of course; a rebuild has to know.
+
+**Two that are about C++ called from assembly.** A `const` object at namespace
+scope has **internal linkage**, so `extern const char kRom0Osdsys[] = "..."`
+needs its `extern` or the assembly that names it will not link. And `constexpr`
+on a function implies `inline`: a `constexpr skipDevice` that this translation
+unit never calls is never emitted, and the same link fails for the same reason
+with a different message. Both are C++ rules rather than anything about the PS2,
+and both cost a link error each.
 
 **And one that is about the assembler**: ten bytes of string followed by code
 leaves the code two bytes out of alignment, and the instruction stream decodes

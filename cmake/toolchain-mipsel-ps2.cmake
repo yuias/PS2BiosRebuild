@@ -35,6 +35,7 @@ function(ps2FindTool out_var name)
 endfunction()
 
 ps2FindTool(PS2_CC clang)
+ps2FindTool(PS2_CXX clang++)
 ps2FindTool(PS2_AR llvm-ar)
 ps2FindTool(PS2_RANLIB llvm-ranlib)
 ps2FindTool(PS2_LD ld.lld)
@@ -42,11 +43,13 @@ ps2FindTool(PS2_OBJCOPY llvm-objcopy)
 ps2FindTool(PS2_OBJDUMP llvm-objdump)
 
 set(CMAKE_C_COMPILER "${PS2_CC}")
+set(CMAKE_CXX_COMPILER "${PS2_CXX}")
 set(CMAKE_ASM_COMPILER "${PS2_CC}")
 set(CMAKE_AR "${PS2_AR}")
 set(CMAKE_RANLIB "${PS2_RANLIB}")
 
 set(CMAKE_C_COMPILER_TARGET mipsel-none-elf)
+set(CMAKE_CXX_COMPILER_TARGET mipsel-none-elf)
 set(CMAKE_ASM_COMPILER_TARGET mipsel-none-elf)
 
 # CMake's default compiler check links an executable, which needs a link script
@@ -74,6 +77,11 @@ string(JOIN " " PS2_COMMON_FLAGS ${PS2_ARCH_FLAGS} ${PS2_FREESTANDING_FLAGS})
 
 set(CMAKE_C_FLAGS_INIT "${PS2_COMMON_FLAGS}")
 set(CMAKE_ASM_FLAGS_INIT "${PS2_COMMON_FLAGS}")
+# The image has no runtime to support them: exceptions and RTTI need tables and
+# a personality routine, and a guarded static needs a lock this machine has no
+# threads for.
+set(CMAKE_CXX_FLAGS_INIT
+    "${PS2_COMMON_FLAGS} -fno-exceptions -fno-rtti -fno-threadsafe-statics")
 
 # Link with ld.lld directly rather than through the clang driver. For
 # mipsel-none-elf the driver delegates to the host gcc, which reaches for the
@@ -85,6 +93,7 @@ set(CMAKE_EXE_LINKER_FLAGS_INIT "--build-id=none")
 set(PS2_LINK_RULE
     "<CMAKE_LINKER> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
 set(CMAKE_C_LINK_EXECUTABLE "${PS2_LINK_RULE}")
+set(CMAKE_CXX_LINK_EXECUTABLE "${PS2_LINK_RULE}")
 set(CMAKE_ASM_LINK_EXECUTABLE "${PS2_LINK_RULE}")
 
 # Only look inside the project; the host sysroot is irrelevant to a bare-metal

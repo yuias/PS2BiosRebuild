@@ -59,6 +59,10 @@
 
     .globl _sif_handshake
     .globl _sif_exchange
+    // The compiled half of the kernel calls this by the project's C++ naming.
+    // The alias goes away when this file follows it.
+    .globl sifExchange
+    .set sifExchange, _sif_exchange
     .globl _sif_peer
 
     .section .text, "ax"

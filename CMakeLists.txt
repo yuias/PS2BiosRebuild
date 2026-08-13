@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(PS2BiosRebuild
         VERSION 0.1.0
         DESCRIPTION "Reimplementation of the PlayStation 2 BIOS"
-        LANGUAGES ASM)
+        LANGUAGES ASM CXX)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
   message(FATAL_ERROR
@@ -11,6 +11,13 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
       "  cmake -B build -G Ninja "
       "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mipsel-ps2.cmake")
 endif()
+
+# The language is available in full; the standard *library* is not, since there
+# is no libc++ for mipsel-none-elf. `<stdint.h>` is the compiler's own
+# freestanding header and is the one include the image uses.
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
@@ -57,6 +64,13 @@ endfunction()
 function(ps2AddModule name)
   cmake_parse_arguments(PARSE_ARGV 1 ARG "" "MODULE;VERSION" "SOURCES")
   add_executable(${name}.elf ${ARG_SOURCES})
+  # The toolchain's default is MIPS III, which the EE has and the IOP does not.
+  # Hand-written assembly is the author's responsibility, but a compiler will
+  # emit `daddu`/`sd` for a 64-bit type and `teq` for a division check, so IOP
+  # compiled code is pinned to what an R3000A implements. See
+  # docs/implementation.md for why there is no compiled IOP code yet.
+  target_compile_options(${name}.elf PRIVATE
+      "$<$<COMPILE_LANGUAGE:CXX>:-march=mips1;-mno-check-zero-division>")
   set(script "${CMAKE_CURRENT_SOURCE_DIR}/src/link/irx.ld")
   target_link_options(${name}.elf PRIVATE "-T${script}" --emit-relocs)
   set_target_properties(${name}.elf PROPERTIES LINK_DEPENDS "${script}")
@@ -101,6 +115,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/syscall.S
     src/kernel/sif.S
     src/kernel/program.S
+    src/kernel/program.cpp
     src/kernel/cache.S
     src/kernel/tables.S)
 

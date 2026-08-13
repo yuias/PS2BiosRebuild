@@ -9,8 +9,8 @@ SECTIONS
     .vectors : { *(.vectors) }
 
     . = 0x80001000;
-    .text : { *(.text) }
-    .rodata : { *(.rodata) }
+    .text : { *(.text .text.*) }
+    .rodata : { *(.rodata .rodata.*) }
 
     . = 0x80014F40;                 /* EE-8a: the syscall table */
     .syscalls : { *(.syscalls) }
@@ -25,7 +25,7 @@ SECTIONS
     .cop0reads : { *(.cop0reads) }
 
     /* Beyond the image: scratch the kernel uses but does not ship. */
-    .bss (NOLOAD) : { *(.bss) *(COMMON) }
+    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) }
 
     /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) }
 }
