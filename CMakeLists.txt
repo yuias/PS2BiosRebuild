@@ -12,6 +12,13 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Generic")
       "-DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mipsel-ps2.cmake")
 endif()
 
+# A BIOS image is judged by what it does and how much room it takes, not by how
+# it debugs, so the default is the size-minimising build rather than none at
+# all. -O0 was never a decision; it was what an unset build type gives.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "" FORCE)
+endif()
+
 # The language is available in full; the standard *library* is not, since there
 # is no libc++ for mipsel-none-elf. `<stdint.h>` is the compiler's own
 # freestanding header and is the one include the image uses.

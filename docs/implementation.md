@@ -12,10 +12,14 @@ ninja -C build
 ninja -C build check
 ```
 
-The toolchain is LLVM: `clang` assembles, `ld.lld` links each component at the
-address it runs from, `llvm-objcopy` lifts the raw bytes back out, and
-`tools/mkromdir.py` assembles those files into the archive of
+The toolchain is LLVM: `clang` assembles, `clang++` compiles, `ld.lld` links
+each component at the address it runs from, `llvm-objcopy` lifts the raw bytes
+back out, and `tools/mkromdir.py` assembles those files into the archive of
 `docs/spec/01-rom-archive.md`. There is no cross-gcc and no vendored toolchain.
+
+Configuring without a build type gives `MinSizeRel`, so the image is built at
+`-Os`. That is a default rather than a demand: `-DCMAKE_BUILD_TYPE=Debug`
+builds the same sources unoptimised, and both boot.
 
 The PS2 has two processors and one assembler serves both. `-march=mips3` is
 what the *assembler accepts*, not a statement about who runs the code: the IOP
@@ -504,6 +508,14 @@ sixteen**, because ARC-4 accepts a candidate table only when the `RESET` entry's
 size is aligned, and nothing had been padding it — it had simply come out
 aligned until the day it did not. And a `.rodata` section had to be added to the
 link script at all, since assembly had never produced one.
+
+**Ordinary stores are not ordered against volatile ones.** Everything the SIF's
+DMA reads is built in plain memory and handed over by a `volatile` write to a
+channel register, and the language does not promise the first happens before the
+second — only that volatile accesses keep their order among themselves. It
+happened to come out right at every optimisation level tried, which is exactly
+the kind of thing that stops being true later, so `sif.cpp` states it with a
+compiler barrier on each side of the transfer.
 
 **A shared header is fine; a shared symbol is not.** Both processors run the
 archive scan of BOOT-6a, and putting it in a header so the two get one written

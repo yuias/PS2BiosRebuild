@@ -62,8 +62,10 @@ extern "C" {
 uint32_t sifHandshake();
 void *sifExchange(const char *name, uint32_t verb, void *destination);
 
-// program.S -- EE-9c, and it does not return.
-[[noreturn]] void bootDefault() asm("_boot_default");
+// program.S -- EE-9c. It does not return when it succeeds, because the program
+// it loads replaces this one; when the archive has nothing to load it comes
+// back with -1, which is why it is not declared `[[noreturn]]`.
+int bootDefault() asm("_boot_default");
 
 // `entry.S` points `$sp` at the top of this before calling `kernelMain`.
 alignas(16) uint8_t kernel_stack[0x1000];
@@ -116,6 +118,10 @@ void printHex8(uint32_t value) {
     // EE-9c: and then the boot ends the way the reference's does, by running
     // the program the archive holds for it.
     bootDefault();
+
+    // Only reached when there was nothing to run. Stop where it can be seen.
+    for (;;) {
+    }
 }
 
 }  // extern "C"

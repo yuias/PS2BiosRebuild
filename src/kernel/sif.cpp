@@ -59,6 +59,14 @@ void writeWord(uintptr_t address, uint32_t value) {
     *reinterpret_cast<volatile uint32_t *>(address) = value;
 }
 
+// Everything the DMA controller is about to read has to be in memory before the
+// channel starts, and everything it has written has to be re-read afterwards.
+// Ordinary stores are not ordered against volatile ones by the language, so the
+// requirement is stated rather than left to what the optimiser happens to do.
+void barrier() {
+    asm volatile("" ::: "memory");
+}
+
 void waitUntilSet(uintptr_t address, uint32_t bits) {
     while ((readWord(address) & bits) == 0) {
     }
@@ -176,6 +184,7 @@ void *sifExchange(const char *name, uint32_t verb, void *destination) {
     sif_tag.reserved[0] = 0;
     sif_tag.reserved[1] = 0;
 
+    barrier();
     writeWord(kDmaSif1 + kTadr, reinterpret_cast<uintptr_t>(&sif_tag));
     writeWord(kDmaSif1 + kChcr, kDmaChain);      // start
     waitForChannel(kDmaSif1);
@@ -188,6 +197,7 @@ void *sifExchange(const char *name, uint32_t verb, void *destination) {
     // let it finish. The tag the IOP put in front of the data is what says where
     // it lands and how much of it there is.
     waitForChannel(kDmaSif0);
+    barrier();
     return destination;
 }
 
