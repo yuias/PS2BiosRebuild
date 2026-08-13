@@ -505,6 +505,16 @@ size is aligned, and nothing had been padding it — it had simply come out
 aligned until the day it did not. And a `.rodata` section had to be added to the
 link script at all, since assembly had never produced one.
 
+**A shared header is fine; a shared symbol is not.** Both processors run the
+archive scan of BOOT-6a, and putting it in a header so the two get one written
+description looked like the tidy answer. As `inline` functions they are weak
+symbols, the linker keeps exactly one, and the IOP found itself executing the
+EE's copy — compiled `-march=mips3`, for a processor that has neither the
+instructions nor any business running EE code. `static` in the header is what
+makes each translation unit keep its own, and it is load-bearing rather than
+stylistic. BOOT-6a says the reference writes the scan out per consumer; this is
+that requirement arriving by a route the specification does not mention.
+
 **Two that are about C++ called from assembly.** A `const` object at namespace
 scope has **internal linkage**, so `extern const char kRom0Osdsys[] = "..."`
 needs its `extern` or the assembly that names it will not link. And `constexpr`

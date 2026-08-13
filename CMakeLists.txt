@@ -87,9 +87,15 @@ function(ps2AddModule name)
       COMMENT "Building the ${ARG_MODULE} module")
 endfunction()
 
+# The boot block serves both processors, so its two compiled halves are not
+# compiled alike: the R3000A has neither MIPS III nor the `teq` a division check
+# emits, and only the IOP's half may be built for it.
+set_source_files_properties(src/boot/reset_iop.cpp PROPERTIES
+    COMPILE_OPTIONS "-march=mips1;-mno-check-zero-division")
 ps2AddComponent(reset  SCRIPT reset.ld  SOURCES
     src/boot/reset.S
-    src/boot/reset_ee.cpp)
+    src/boot/reset_ee.cpp
+    src/boot/reset_iop.cpp)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
 ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
