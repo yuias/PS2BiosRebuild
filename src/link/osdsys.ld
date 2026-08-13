@@ -5,9 +5,9 @@ ENTRY(_osd_start)
 SECTIONS
 {
     . = 0x00200000;
-    .text : { *(.text) }
-    .rodata : { *(.rodata) }
-    .data : { *(.data) }
-    .bss (NOLOAD) : { *(.bss) *(COMMON) }
+    .text : { *(.text .text.*) }
+    .rodata : { *(.rodata .rodata.*) }
+    .data : { *(.data .data.*) }
+    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) }
     /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) }
 }

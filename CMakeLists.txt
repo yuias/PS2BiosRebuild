@@ -99,7 +99,7 @@ ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
 
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
-add_executable(osdsys.elf src/ee/osdsys.S)
+add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp)
 # Without a small page size the linker aligns the segment's file offset to
 # 64 KiB, which would store sixty-odd kilobytes of padding in the archive for
 # a program of a few hundred bytes.
@@ -112,12 +112,13 @@ set_target_properties(osdsys.elf PROPERTIES
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
     src/kernel/entry.S
+    src/kernel/entry.cpp
     src/kernel/syscall.S
     src/kernel/sif.S
     src/kernel/program.S
     src/kernel/program.cpp
-    src/kernel/cache.S
-    src/kernel/tables.S)
+    src/kernel/cache.cpp
+    src/kernel/tables.cpp)
 
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")
 add_custom_command(
