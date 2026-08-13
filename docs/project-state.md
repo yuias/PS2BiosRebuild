@@ -93,6 +93,7 @@ per-file, and the eventual build will assemble the image the same way.
 | EE syscalls: arguments and return values | analysed — `docs/analysis/21-ee-syscall-abi.md` |
 | OSD (`OSDSYS`) | analysed — `docs/analysis/20-osdsys.md` |
 | CDVD NVM words + OSD configuration blocks | analysed — `docs/analysis/26-cdvd-nvm-and-config.md` |
+| `OSDSYS` payload, expanded and read | analysed — `docs/analysis/27-osdsys-payload-and-config.md` |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
@@ -171,6 +172,14 @@ document each cites):
 - `OSDSYS` is 99% one compressed blob behind a 3 KB decompressor. Only its
   container and entry contract need reproducing; the payload is material the
   clean-room policy already excludes. (`20`)
+- `OSDSYS`'s compressed payload never had to be decoded: its `.text.Expand*`
+  group is plain MIPS-III, so `tools/eesim.py --call` **runs** it and the
+  expander returns the size its own header word states. Executing a routine
+  beat reading it, again. (`27`)
+- The OSD's configuration is **two 15-byte blocks**, reached over `CDVDFSV`
+  RPC service `0x80000593` functions 14–17. Block 0 is passed through
+  untouched; block 1's first byte carries flags whose top bits gate whether
+  its second byte is read at all. (`27`)
 - An OSD configuration block is **15 data bytes plus a one-byte sum of them**,
   which `CDVDMAN` verifies on read and generates on write, in two independent
   stretches of code. The driver never interprets the fifteen bytes, so the
@@ -412,14 +421,11 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.
-6. **Expand the `OSDSYS` payload.** `26` took the configuration transport as far
-   as `CDVDMAN` goes; what the fifteen bytes *mean*, and the rule that decides a
-   block is unconfigured, are inside the compressed blob of `20`. The cheaper
-   route is not to decode the format by hand but to **run** the four
-   `.text.Expand*` sections — 484 bytes — under `tools/eesim.py`, which already
-   has the quadword and MMI coverage they need; that wants an ELF-execution mode
-   the simulator does not have yet. The expanded image is derived from the
-   reference and stays outside the repository like any other extract.
+6. **Finish reading the OSD's configuration record.** `27` expanded the payload
+   and got as far as the structure: two 15-byte blocks, block 0 passed through
+   whole and block 1's first two bytes decoded into bit fields. What each field
+   *means* needs the decoded word followed into the menu code. This is the half
+   of the sibling project's question that is still open.
 
 ## 7. Known problems, in one place
 

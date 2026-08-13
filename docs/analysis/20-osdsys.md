@@ -82,7 +82,7 @@ d = open('<outdir>/OSDSYS','rb').read(); print(d[0xe00:0xe10].hex(' ', 4))"
 # d49f0b00 40001820 00c00000 2c00023c
 ```
 
-The first word is `0x000B9FD4` — 761300 — against 332796 bytes stored, a ratio
+The first word is `0x000B9FD4` — 761812 — against 332796 bytes stored, a ratio
 of about 2.3:1. That is consistent with an expanded size, and the byte
 distribution of `.data` supports the reading: all 256 values occur, with the
 commonest (`0x00`) at only 7.6%, which is what compressed data looks like and
@@ -91,6 +91,10 @@ what neither code nor artwork does.
 Both readings are **inferences from shape**, not decoded facts. Establishing
 the compression format would mean working through `ExpandMain`, and the next
 section is the argument for not doing that.
+
+(`docs/analysis/27-osdsys-payload-and-config.md` later confirmed both without
+decoding anything: it *runs* the expander under `tools/eesim.py`, and the size
+it returns is this header word exactly.)
 
 ## What a rebuild actually owes here
 

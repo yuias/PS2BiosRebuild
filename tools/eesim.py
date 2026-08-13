@@ -19,6 +19,13 @@ dispatcher and say whether they behaved as specified.
     tools/eesim.py assets/SCPH-50000.bin --trace 40   # first 40 instructions
     tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 1    # call one syscall
 
+It also runs an EE executable on its own, with no ROM and no kernel under it,
+which is how a self-contained routine inside one can be executed rather than
+read (`docs/analysis/27-osdsys-payload.md`):
+
+    tools/eesim.py <outdir>/OSDSYS --call 0x100af8 0x100d80 0x200000 \
+                   --dump 0x200000 result <outdir>/OSDSYS.expanded
+
 Like `iopsim.py`, the simulator is validated by the reference image: booting it
 must reproduce what the specifications predict. A simulator that cannot do that
 is not trustworthy enough to gate our own image.
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import struct
 import sys
 
 RAM_SIZE = 32 * 1024 * 1024
@@ -770,6 +778,62 @@ class Machine:
         return self.bus.read(address, 4)
 
 
+PROGRAM_STACK = 0x01F00000       # above any ROM executable's image and its BSS
+PROGRAM_RETURN = 0x01FF0000      # the sentinel a called routine returns to
+PROGRAM_STEPS = 200_000_000
+
+
+def loadExecutable(bus: Bus, image: bytes) -> int:
+    """Place an `ET_EXEC`'s loadable segments in RAM and return its entry.
+
+    `spec/02` records four of these in the archive. They are ordinary programs
+    rather than kernel components, so running one needs no ROM under it: the
+    segments go where their headers say, and execution starts wherever the
+    caller asks rather than necessarily at the entry.
+    """
+    if image[:4] != b"\x7fELF":
+        raise ValueError("not an ELF")
+    entry, phoff = struct.unpack_from("<II", image, 0x18)
+    phentsize, phnum = struct.unpack_from("<HH", image, 0x2A)
+    loaded = 0
+    for index in range(phnum):
+        kind, offset, vaddr, _, filesz, memsz, _, _ = struct.unpack_from(
+            "<8I", image, phoff + index * phentsize)
+        if kind != 1:                                       # PT_LOAD
+            continue
+        buffer, start = bus.region(vaddr)
+        if buffer is not bus.ram:
+            raise ValueError(f"segment at {vaddr:#010x} is not in RAM")
+        buffer[start:start + memsz] = (
+            image[offset:offset + filesz].ljust(memsz, b"\0"))
+        loaded += 1
+    if not loaded:
+        raise ValueError("no loadable segment")
+    return entry
+
+
+def callProgram(bus: Bus, address: int, arguments: tuple[int, ...],
+                steps: int = PROGRAM_STEPS) -> tuple[Cpu, int | None]:
+    """Call one routine in a loaded program; return the CPU and its `$v0`.
+
+    The routine returns to a sentinel that holds no code, so arriving there is
+    the run's termination condition. Anything else means the step budget ran
+    out or the CPU stopped, and both are reported rather than hidden.
+    """
+    cpu = Cpu(bus)
+    cpu.set(29, PROGRAM_STACK)
+    cpu.set(31, PROGRAM_RETURN)
+    for index, argument in enumerate(arguments[:4]):
+        cpu.set(4 + index, argument)
+    cpu.pc, cpu.next_pc, cpu.branched = address, address + 4, False
+    while (cpu.pc != PROGRAM_RETURN and cpu.steps < steps
+           and cpu.stop_reason is None):
+        cpu.step()
+    if cpu.pc != PROGRAM_RETURN:
+        return cpu, None
+    return cpu, s32(cpu.get(2))
+
+
 # `spec/04` EE-1: what the reset path must have written before anything else.
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
@@ -898,6 +962,35 @@ def report(machine: Machine) -> None:
                 print(f"   {line}")
 
 
+def callMode(image: bytes, arguments) -> int:
+    """`--call`: run a routine in an EE executable, with nothing under it."""
+    bus = Bus(b"")
+    entry = loadExecutable(bus, image)
+    values = [int(value, 0) for value in arguments.call]
+    address = values[0] if values else entry
+    cpu, result = callProgram(bus, address, tuple(values[1:]))
+    print(f"call {address:#010x}({', '.join(hex(v) for v in values[1:])}): "
+          f"{cpu.steps} instructions, "
+          + (f"returned {result} ({result & MASK32:#010x})"
+             if result is not None else
+             f"did not return -- {cpu.stop_reason or 'step budget exhausted'}"))
+    if result is None:
+        return 1
+    if arguments.dump:
+        where = int(arguments.dump[0], 0)
+        length = (result if arguments.dump[1] == "result"
+                  else int(arguments.dump[1], 0))
+        if length <= 0:
+            print(f"nothing to dump: length is {length}", file=sys.stderr)
+            return 1
+        buffer, start = bus.region(where)
+        pathlib.Path(arguments.dump[2]).write_bytes(
+            bytes(buffer[start:start + length]))
+        print(f"   wrote {length} bytes from {where:#010x} "
+              f"to {arguments.dump[2]}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -912,9 +1005,20 @@ def main() -> int:
                              "number, then up to four arguments")
     parser.add_argument("--io", action="store_true",
                         help="list the I/O addresses the run touched")
+    parser.add_argument("--call", nargs="*", metavar="V",
+                        help="load the image as an EE executable instead of "
+                             "booting it as a ROM, and call an address with up "
+                             "to four arguments; no address calls its entry")
+    parser.add_argument("--dump", nargs=3, metavar=("ADDRESS", "LENGTH", "PATH"),
+                        help="after --call, write memory out; a LENGTH of "
+                             "'result' uses the value the call returned")
     arguments = parser.parse_args()
 
     rom = arguments.image.read_bytes()
+
+    if arguments.call is not None:
+        return callMode(rom, arguments)
+
     machine = Machine(rom)
     machine.boot(trace=arguments.trace)
 
