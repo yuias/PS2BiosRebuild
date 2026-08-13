@@ -494,6 +494,13 @@ page the kernel just arrived with. Syscalls did nothing at all until the kernel
 cleared it. The specification does not mention this because the reference
 kernel clears it as a matter of course; a rebuild has to know.
 
+**An address for the DMAC is not the same as an address for the CPU.** Bit 31
+of `MADR` and `TADR` selects the scratchpad, so a pointer taken in a
+KSEG0-linked kernel means something else entirely to the controller. This was
+the project's blocker for as long as it stood, it survived every simulator
+because they mask addresses on the way into memory, and it is written up in
+`docs/analysis/29-sif0-on-pcsx2.md`.
+
 **The boot block must not contain the bytes it searches for.** Moving the EE's
 half of it to C++ put the literal `"RESET"` in its `.rodata` — and the boot
 block lies inside the very range the archive scan sweeps, sixteen bytes at a

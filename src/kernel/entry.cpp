@@ -74,6 +74,7 @@ alignas(16) uint8_t kernel_stack[0x1000];
 // `program.S` report through these two.
 void print(const char *text) asm("_print");
 void printHex8(uint32_t value) asm("_print_hex8");
+void printHex32(uint32_t value);
 
 void print(const char *text) {
     for (const char *at = text; *at != '\0'; at++) {
@@ -83,6 +84,18 @@ void print(const char *text) {
 
 void printHex8(uint32_t value) {
     for (int shift = 4; shift >= 0; shift -= 4) {
+        const uint32_t nibble = (value >> shift) & 0xF;
+        putByte(static_cast<uint8_t>(nibble < 10 ? '0' + nibble
+                                                 : 'a' + nibble - 10));
+    }
+}
+
+// Kept without a caller on purpose: docs/analysis/29 records that printing a
+// register from the running kernel is the instrument that reaches inside the
+// image on the working target, and it is wanted the moment something else
+// does not behave.
+void printHex32(uint32_t value) {
+    for (int shift = 28; shift >= 0; shift -= 4) {
         const uint32_t nibble = (value >> shift) & 0xF;
         putByte(static_cast<uint8_t>(nibble < 10 ? '0' + nibble
                                                  : 'a' + nibble - 10));

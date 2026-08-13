@@ -19,11 +19,13 @@ the working document and is kept current.
 > image is currently expected to do, printing what it is *not* yet expected to
 > do on every success so the list cannot go stale.
 >
-> **And it now runs on the working target.** PCSX2 accepts the image as a BIOS
-> and boots it: both processors reset, the EE reaches our kernel, the IOP loads
-> and links our modules, and the six-register handshake completes between them.
-> The data path is the live problem — EE-to-IOP transfers work there and
-> IOP-to-EE ones do not. §7 says exactly where that stands.
+> **And it boots end to end on the working target.** PCSX2 accepts the image as
+> a BIOS and runs it through: both processors reset, the IOP loads and links our
+> modules, the two meet across the SIF, a file crosses the bus in each direction
+> and `rom0:OSDSYS` is placed and entered. The blocker that stood there —
+> `docs/analysis/29-sif0-on-pcsx2.md` — was one bit: the EE's DMAC uses bit 31
+> of `MADR`/`TADR` to select the scratchpad, and a KSEG0-linked kernel hands it
+> that bit set on every pointer.
 
 ---
 
@@ -109,7 +111,8 @@ per-file, and the eventual build will assemble the image the same way.
 | SIF data path (framing) | analysed — `docs/analysis/24-sif-data-path.md` |
 | SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
 | First run on PCSX2 | analysed — `docs/analysis/25-first-run-on-pcsx2.md` |
-| PCSX2 as a target | **runs there** — accepted as a BIOS, boots through the handshake; SIF0 open (§4) |
+| SIF0 on PCSX2, and why it delivered nothing | analysed — `docs/analysis/29-sif0-on-pcsx2.md` |
+| PCSX2 as a target | **boots there end to end** — accepted as a BIOS, both CPUs, both directions of the bus, `rom0:OSDSYS` entered |
 
 ### What is built
 
@@ -240,6 +243,10 @@ document each cites):
   upper 64 bits of four registers with `padduw` first. `tools/romdis.py` cannot
   show this, since LLVM has no R5900 target; it surfaced only under execution.
   (`22`)
+- **Bit 31 of the EE's `MADR`/`TADR` selects the scratchpad**, so an address
+  handed to the DMAC must be physical rather than merely untranslated. A
+  KSEG0-linked kernel sets that bit on every pointer, and the simulators mask it
+  away. (`29`)
 - On the SIF **the sender frames the transfer**. A receiving channel is armed
   with a mode and nothing else; the address its data lands at arrives in front
   of that data — in a header quadword going one way, in a peer-facing tag the
@@ -262,34 +269,18 @@ document each cites):
 
 ### Open questions
 
-**One, and it is the live one: why does SIF0 deliver nothing under PCSX2?**
-Stated precisely, because most of the obvious answers are already ruled out.
+**None on the boot path.** The one that stood here — why SIF0 delivered nothing
+under PCSX2 — is answered in `docs/analysis/29-sif0-on-pcsx2.md`: the EE's DMAC
+reads bit 31 of `MADR` and `TADR` as *select the scratchpad*, and a kernel
+linked in KSEG0 sets that bit on every pointer it hands over. The reading that
+EE-to-IOP transfers worked and IOP-to-EE ones did not was the wrong way round:
+the request never left the EE, so the IOP replied, correctly framed, to the
+address zero it had been given.
 
-*The symptom.* Our EE arms channel 5 as a destination chain and waits; the IOP
-builds its send block, starts channel 9 and raises the reply flag; the EE's
-channel then reports itself finished and its buffer is untouched. No stage of
-the exchange stalls. The other direction — the EE's source chain into the IOP —
-completes and is believed good.
-
-*What has been ruled out, each by measurement (`docs/analysis/25`):*
-
-- **The destination.** `SMCOM` reads back a sane IOP address, so the outgoing
-  packet's header is addressed correctly; and replying instead to a buffer the
-  EE published at handshake time, with a constant string the IOP builds itself,
-  delivers nothing either. So it is not that the reply is going to the wrong
-  place because the request failed to arrive.
-- **The channel enables.** `DPCR2`'s per-channel nibbles and the bank's global
-  enable at `0x1F801578` are both now set as the reference leaves them, which
-  is what stopped the stalls.
-- **The destination tag's shape.** Ours is now the value the reference itself
-  writes, `0x90000000 | qwc` — id 1 with the interrupt bit.
-
-*The next thing to establish.* Whether the IOP's channel 9 puts anything into
-the FIFO at all. Its busy bit never clears under PCSX2 — which is why waiting
-on it hangs (BOOT-11h) — and a channel that has not finished has not
-necessarily started. A way to see this from outside the IOP is needed, since
-the IOP has no console of its own; the EE reading the SIF control register
-before and after is the instrument that has worked so far.
+The simulators could not have found it. They resolve an address by masking it
+with `0x1FFFFFFF`, which is right for a CPU access and erases exactly the bit
+the DMAC cares about. Making `tools/ps2sim.py` model that bit would turn this
+into a gate, and is the first item in §6.
 
 Everything else carried since `03` and `06` was settled in `10`.
 
@@ -392,19 +383,13 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 > answer the same question — which is the case for everything left on the
 > simulator side after `24`.
 
-1. **Make SIF0 deliver on PCSX2.** §4's open question states the symptom, what
-   is ruled out and what to establish next. Everything else here is depth; this
-   is the one thing standing between the image and a working boot on the target
-   it is built for.
-
-   The specific suspicion to test first: the IOP's channel 9 may never be
-   putting anything into the FIFO, its busy bit never clearing being the hint.
-   Worth trying — cheaply, in this order — the IOP writing `BCR` as a block
-   *count* rather than a size; the `TADR` value being a physical rather than a
-   `0xBFxxxxxx` address; and whether the reference's own IOP, run under
-   `tools/ps2sim.py` with the DMA interrupt delivered, clears the bit at all
-   (if it does not there either, the bit is simply not the completion signal
-   and our reading of it is wrong).
+1. **Teach `tools/ps2sim.py` the DMAC's addressing.** `29` closed the blocker,
+   and the way it closed says what to do next: the simulator masks every address
+   with `0x1FFFFFFF`, so it cannot distinguish the physical address the DMAC
+   wants from the KSEG0 pointer that broke the boot. Modelling bit 31 as the
+   scratchpad selector makes the fault of `29` a gate failure rather than
+   something only the target can find, and it is the cheapest way to stop the
+   same class of bug arriving again.
 
 2. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
    needs is done — EE-7e's 128-bit save and restore, through a block a handler
@@ -438,8 +423,8 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 
 | Problem | Where it is written up | State |
 | --- | --- | --- |
-| SIF0 delivers nothing on PCSX2 | §4 open question, `docs/analysis/25` | **open, and the blocker** |
 | The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
+| `tools/ps2sim.py` masks addresses, so it cannot see a KSEG0 pointer handed to the DMAC | `docs/analysis/29` | **open** — the fault of `29` is invisible to the gate that should catch it |
 | Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
 | No scheduler, so `EESYNC` never returns from its entry | next step 2 | deliberate |
 | 105 of 125 syscall slots report themselves rather than working | next step 3 | deliberate |

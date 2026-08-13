@@ -59,6 +59,17 @@ void writeWord(uintptr_t address, uint32_t value) {
     *reinterpret_cast<volatile uint32_t *>(address) = value;
 }
 
+// Every address handed to the DMAC has to be a physical one, and not merely
+// because the controller does not walk the TLB: **bit 31 of MADR and TADR
+// selects the scratchpad**. The kernel is linked in KSEG0, so a pointer taken
+// here arrives with that bit set and the controller reads sixteen kilobytes of
+// scratchpad instead of the buffer that was meant. A simulator that masks
+// addresses on its way into memory cannot see the difference; the hardware can.
+[[nodiscard]] uint32_t physical(const void *pointer) {
+    return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pointer))
+           & 0x1FFFFFFF;
+}
+
 // Everything the DMA controller is about to read has to be in memory before the
 // channel starts, and everything it has written has to be re-read afterwards.
 // Ordinary stores are not ordered against volatile ones by the language, so the
@@ -134,7 +145,7 @@ uint32_t sifHandshake() {
     writeWord(kDmaCtrl, 1);
 
     writeWord(kSifCtrl, kCtrlOpen);
-    writeWord(kSifMscom, reinterpret_cast<uintptr_t>(sif_area));  // BOOT-10a
+    writeWord(kSifMscom, physical(sif_area));            // BOOT-10a
     writeWord(kSifMsflg, kHandshakeBit);         // our write sets
 
     waitUntilSet(kSifSmflg, kHandshakeBit);      // BOOT-10b: wait for the answer
@@ -168,7 +179,7 @@ void *sifExchange(const char *name, uint32_t verb, void *destination) {
     }
     sif_message.request.pad = 0;
     sif_message.request.verb = verb;
-    sif_message.request.destination = reinterpret_cast<uintptr_t>(destination);
+    sif_message.request.destination = physical(destination);
     sif_message.request.reserved[0] = 0;
     sif_message.request.reserved[1] = 0;
     sif_message.request.reserved[2] = 0;
@@ -180,12 +191,12 @@ void *sifExchange(const char *name, uint32_t verb, void *destination) {
     sif_message.header.reserved[1] = 0;
 
     sif_tag.control = kTagRefe | kPacketQuads;
-    sif_tag.address = reinterpret_cast<uintptr_t>(&sif_message);
+    sif_tag.address = physical(&sif_message);
     sif_tag.reserved[0] = 0;
     sif_tag.reserved[1] = 0;
 
     barrier();
-    writeWord(kDmaSif1 + kTadr, reinterpret_cast<uintptr_t>(&sif_tag));
+    writeWord(kDmaSif1 + kTadr, physical(&sif_tag));
     writeWord(kDmaSif1 + kChcr, kDmaChain);      // start
     waitForChannel(kDmaSif1);
 
