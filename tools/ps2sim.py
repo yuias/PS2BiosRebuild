@@ -61,6 +61,13 @@ IDLE_POLL = 128                  # how often, in steps, to look for the idle loo
 #
 # SIF0 carries IOP -> EE and SIF1 EE -> IOP, and each side drives its own end.
 EE_SIF0, EE_SIF1 = 0x1000C000, 0x1000C400        # CHCR +0, MADR +0x10, QWC +0x20
+# The EE's DMAC does not read an address the way its CPU does: this bit of MADR
+# and TADR is not part of the address at all, it selects the scratchpad
+# (`docs/analysis/29-sif0-on-pcsx2.md`). Masking a whole address with
+# 0x1FFFFFFF -- which is right for a CPU access, and what this file used to do
+# everywhere -- erases the distinction, and a KSEG0 pointer handed to the
+# controller then looks correct here and moves nothing on hardware.
+EE_DMA_SPR = 1 << 31
 IOP_SIF0, IOP_SIF1 = 0x1F801520, 0x1F801530      # MADR +0, BCR +4, CHCR +8
 
 EE_START = 0x100                 # CHCR.STR, which the hardware clears when done
@@ -232,6 +239,16 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
         def word(self, address: int) -> int:
             return int.from_bytes(self.ram[address:address + 4], "little")
 
+        def dmaMemory(self, address: int):
+            """(buffer, offset) as the DMA controller resolves an address."""
+            if address & EE_DMA_SPR:
+                return self.scratch, address & (len(self.scratch) - 1)
+            return self.ram, address & (len(self.ram) - 1)
+
+        def dmaWord(self, address: int) -> int:
+            memory, offset = self.dmaMemory(address)
+            return int.from_bytes(memory[offset:offset + 4], "little")
+
         def service(self) -> None:
             """Give every armed channel a chance to finish."""
             for channel, chcr in list(self.armed.items()):
@@ -245,8 +262,8 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
             """SIF1, EE -> IOP. Everything the EE sends is already in its RAM,
             so a send always completes; the only question is what it moves."""
             if not chcr & EE_CHAIN:
-                address = self.read(channel + 0x10, 4) & 0x1FFFFFFF
-                dma.send(dma.to_iop, self.ram, address,
+                memory, offset = self.dmaMemory(self.read(channel + 0x10, 4))
+                dma.send(dma.to_iop, memory, offset,
                          self.read(channel + 0x20, 4) * QUADWORD, "EE sent")
                 return True
             # Source chain (BOOT-11b): a list of tags at TADR, each naming a
@@ -254,15 +271,16 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
             # tag quadwords themselves are not sent -- what reaches the FIFO is
             # only the data they point at, and the IOP-facing header of
             # BOOT-11a is the first quadword of that data, not of the tag.
-            tadr = self.read(channel + 0x30, 4) & 0x1FFFFFFF
+            tadr = self.read(channel + 0x30, 4)
             for _ in range(MAX_TAGS):
-                tag = self.word(tadr)
-                pointer = self.word(tadr + 4) & 0x1FFFFFFF
+                tag = self.dmaWord(tadr)
+                pointer = self.dmaWord(tadr + 4)
                 count, identifier = tag & 0xFFFF, (tag >> 28) & 7
                 elsewhere = identifier in (TAG_REFE, TAG_REF)
                 source = pointer if elsewhere else tadr + QUADWORD
                 dma.tags.append(("EE source", tadr, tag, pointer))
-                dma.send(dma.to_iop, self.ram, source, count * QUADWORD,
+                memory, offset = self.dmaMemory(source)
+                dma.send(dma.to_iop, memory, offset, count * QUADWORD,
                          "EE sent")
                 inline_end = tadr + QUADWORD + count * QUADWORD
                 tadr = tadr + QUADWORD if elsewhere else inline_end
@@ -282,18 +300,18 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
                 length = self.read(channel + 0x20, 4) * QUADWORD
                 if len(dma.to_ee) < length:
                     return False
-                dma.receive(dma.to_ee, self.ram,
-                            self.read(channel + 0x10, 4) & 0x1FFFFFFF,
-                            length, "EE received")
+                memory, offset = self.dmaMemory(self.read(channel + 0x10, 4))
+                dma.receive(dma.to_ee, memory, offset, length, "EE received")
                 return True
             while len(dma.to_ee) >= QUADWORD:
                 tag = int.from_bytes(dma.to_ee[0:4], "little")
-                address = int.from_bytes(dma.to_ee[4:8], "little") & 0x1FFFFFFF
+                address = int.from_bytes(dma.to_ee[4:8], "little")
                 count, identifier = tag & 0xFFFF, (tag >> 28) & 7
                 if len(dma.to_ee) < QUADWORD + count * QUADWORD:
                     return False                          # the rest is coming
                 del dma.to_ee[:QUADWORD]
-                dma.receive(dma.to_ee, self.ram, address, count * QUADWORD,
+                memory, offset = self.dmaMemory(address)
+                dma.receive(dma.to_ee, memory, offset, count * QUADWORD,
                             "EE received")
                 dma.packets.append(("IOP -> EE", address, count * 4, tag))
                 self.io[channel + 0x10] = address + count * QUADWORD
@@ -337,6 +355,16 @@ def iopBus(sif: Sif, dma: SifDma, rom: bytes) -> iopsim.Bus:
 
         def word(self, address: int) -> int:
             return int.from_bytes(self.ram[address:address + 4], "little")
+
+        def dmaMemory(self, address: int):
+            """(buffer, offset) as the DMA controller resolves an address."""
+            if address & EE_DMA_SPR:
+                return self.scratch, address & (len(self.scratch) - 1)
+            return self.ram, address & (len(self.ram) - 1)
+
+        def dmaWord(self, address: int) -> int:
+            memory, offset = self.dmaMemory(address)
+            return int.from_bytes(memory[offset:offset + 4], "little")
 
         def service(self) -> None:
             for channel, chcr in list(self.armed.items()):

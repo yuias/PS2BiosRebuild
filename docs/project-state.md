@@ -110,6 +110,7 @@ per-file, and the eventual build will assemble the image the same way.
 | **Residency (IRX-12)** | **executed** — four teardowns in `iopsim`, `SIFINIT` in `ps2sim` |
 | SIF data path (framing) | analysed — `docs/analysis/24-sif-data-path.md` |
 | SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
+| DMAC addressing (BOOT-11k) | **specified and gated** — `tools/ps2sim.py`, tested in both directions |
 | First run on PCSX2 | analysed — `docs/analysis/25-first-run-on-pcsx2.md` |
 | SIF0 on PCSX2, and why it delivered nothing | analysed — `docs/analysis/29-sif0-on-pcsx2.md` |
 | PCSX2 as a target | **boots there end to end** — accepted as a BIOS, both CPUs, both directions of the bus, `rom0:OSDSYS` entered |
@@ -383,13 +384,10 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 > answer the same question — which is the case for everything left on the
 > simulator side after `24`.
 
-1. **Teach `tools/ps2sim.py` the DMAC's addressing.** `29` closed the blocker,
-   and the way it closed says what to do next: the simulator masks every address
-   with `0x1FFFFFFF`, so it cannot distinguish the physical address the DMAC
-   wants from the KSEG0 pointer that broke the boot. Modelling bit 31 as the
-   scratchpad selector makes the fault of `29` a gate failure rather than
-   something only the target can find, and it is the cheapest way to stop the
-   same class of bug arriving again.
+1. **Depth, now that the boot path is done.** `29` closed the blocker and
+   `spec/03` BOOT-11k gates it, so nothing on the path from reset to `OSDSYS` is
+   outstanding. What is left is everything the image does not yet do, and the
+   items below are in the order that buys the most for the least.
 
 2. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
    needs is done — EE-7e's 128-bit save and restore, through a block a handler
@@ -424,7 +422,6 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 | Problem | Where it is written up | State |
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
-| `tools/ps2sim.py` masks addresses, so it cannot see a KSEG0 pointer handed to the DMAC | `docs/analysis/29` | **open** — the fault of `29` is invisible to the gate that should catch it |
 | Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
 | No scheduler, so `EESYNC` never returns from its entry | next step 2 | deliberate |
 | 105 of 125 syscall slots report themselves rather than working | next step 3 | deliberate |

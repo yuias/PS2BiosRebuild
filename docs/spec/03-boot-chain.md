@@ -331,6 +331,15 @@ global enable at `0x1F801578`, which the reference toggles around its critical
 sections and leaves set. A channel missing either does not run however its own
 `CHCR` is programmed.
 
+**BOOT-11k:** Every address handed to the EE's DMA controller is **physical**,
+and bit 31 of `MADR` and `TADR` is not part of it: that bit **selects the
+scratchpad**. A pointer taken in a KSEG0-linked kernel therefore does not merely
+arrive untranslated, it names somewhere else, and a channel given one reads
+sixteen kilobytes of scratchpad and finishes having moved nothing. This applies
+to `TADR`, to the address a side publishes in `MSCOM`, and to any address a
+request carries for the other processor to place in a tag.
+(`docs/analysis/29-sif0-on-pcsx2.md`.)
+
 **BOOT-11d:** A channel that has been started and cannot yet be satisfied stays
 **busy**. Both sides' drivers arm a receiver before the sender has pushed
 anything and read `CHCR.STR` going clear as the transfer having happened; a

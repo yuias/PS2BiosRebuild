@@ -133,7 +133,22 @@ for, rather than on an instrument written alongside it.
   IOP-to-EE ones did not — was the wrong way round. The IOP's reply was framed
   correctly the whole time; it had nowhere to put it because the request that
   named the destination had never crossed.
-- `tools/ps2sim.py` masks addresses on their way into memory and so cannot
-  distinguish a physical address from a KSEG0 one. Modelling the DMAC's bit 31
-  would turn this into a gate, and until it does the class of fault stays
-  invisible to the simulators.
+- The requirement is `docs/spec/03-boot-chain.md` BOOT-11k.
+
+## And it is a gate now
+
+`tools/ps2sim.py` resolves a DMA address through the controller's rules rather
+than the CPU's: bit 31 selects the scratchpad, and the rest is physical. Both
+reference images still boot under it, and putting either KSEG0 pointer back —
+the one in `TADR` or the one a request carries — reproduces the PCSX2 symptom
+exactly:
+
+```sh
+ninja -C build check
+# SIF: the EE never received the archive file it asked the IOP for; its console
+# held '... # ROMVER, fetched from the archive across the SIF: # no program ...'
+```
+
+which is the same failure, from an instrument, that previously only the target
+could show. The gate is therefore tested in both directions, which is what
+`docs/project-state.md` §3 asks of one.
