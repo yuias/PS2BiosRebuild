@@ -194,6 +194,45 @@ The 9-bit field at bits 20–28 is read alongside the timezone at `0x208E6C` and
 passed with it into `0x206DD0`, so it belongs to the same date-and-time group;
 which member of it is not settled here.
 
+## Bit 30 is the 12- or 24-hour clock
+
+Its consumer at `0x20C188` switches on the bit and picks a different format
+string and a different arithmetic path:
+
+| Bit 30 | Format at | Arithmetic |
+| --- | --- | --- |
+| 0 | `0x2B56C8` — `%2d:%02d:%02d` | none |
+| 1 | `0x2B56E0` | `div $zero, $17, $2` with `$2` = **12** |
+
+Dividing the hour by twelve and selecting a table that carries `A`/`M` markers
+settles it without needing a string that says so.
+
+## Bit 3 goes to the kernel
+
+Bit 3 has the narrowest consumer of all. `0x206B50` reads it, returns early if
+it matches a cached copy at `0x276FC0`, and otherwise runs one of two branches
+that differ in exactly one instruction — the argument passed to `0x254850`:
+
+```
+206bd0  jal   0x254850
+206bd4  addiu $4, $zero, 0x1     # the other branch passes $zero
+```
+
+and `0x254850` is a syscall stub:
+
+```
+254850  addiu $3, $zero, 0x4f
+254854  syscall
+```
+
+So **the OSD hands this configuration bit to EE syscall `0x4F`**, whose
+signature `spec/05` already records as `($a0) -> $v0` and which
+`docs/analysis/19-ee-config-syscalls.md` places in the initialisation and
+configuration band. The two documents meet here: `19` had the slot's shape from
+the kernel side, and this is a real caller of it from the other. Both branches
+then repeat the same reconfiguration sequence, so the bit selects a mode the
+kernel holds rather than something the OSD draws.
+
 ## What this pins for the rebuild
 
 - Only block 1 feeds the decoder. Block 0's fifteen bytes reach the caller
@@ -212,5 +251,9 @@ which member of it is not settled here.
   nothing rather than failing.
 - **Struct bits 9–19 are a timezone offset in minutes**, multiplied by 60 where
   used, with **bit 29** selecting a further hour.
-- Fields still unnamed: bit 0, bits 1–2, bit 3, bits 20–28, bit 30, and the
-  second word's bits 0–1 and its bit-reversed 2–5.
+- **Bit 30 chooses the 24- or 12-hour clock**, the latter dividing the hour by
+  twelve.
+- **Bit 3 is passed to EE syscall `0x4F`**, which gives `spec/05`'s recorded
+  signature for that slot a caller and its band a purpose.
+- Fields still unnamed: bit 0, bits 1–2, bits 20–28, and the second word's
+  bits 0–1 and its bit-reversed 2–5.
