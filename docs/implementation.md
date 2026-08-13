@@ -384,15 +384,27 @@ not.** The toolchain carries a C++ compiler configured for a freestanding image
 has a runtime here to stand on — and `src/kernel/program.cpp` is the first file
 to use it.
 
-Assembly is genuinely required in four places, and they are not going to change:
+Assembly is genuinely required in five places, and they are not going to
+change:
 
 - **the reset path**, which runs before there is a stack to call anything with;
+- **an entry point that establishes one** — `entry.S` and `osdsys.S` are four
+  instructions each, a `$sp` and a jump, because a compiled function needs the
+  stack to already exist;
 - **the exception vector page**, whose entries are code at fixed offsets;
 - **the syscall entry's context save** (`spec/04` EE-7e), which stores all 128
   bits of every register with `sq`/`lq` — a compiler has no type that reaches
   the upper halves and will not emit those instructions;
+- **`IOPBOOT`**, which runs from wherever the archive puts it in the ROM window
+  (`spec/03` BOOT-7). Every call in it is `bal` because `jal` encodes a
+  link-time address; a compiler emits `jal` and `%hi`/`%lo`, and would need the
+  file's final address at link time to be correct.
 - **the import and export stub encodings** (`spec/02` IRX-8), which are
   specified as exact instruction words.
+
+Anything that only transcribes what a disassembler already shows does not
+belong in assembly: it makes the rebuild indistinguishable from a copy, which
+is the opposite of what `docs/clean-room-policy.md` is for.
 
 Everything else on the EE is ordinary code and belongs in C++.
 

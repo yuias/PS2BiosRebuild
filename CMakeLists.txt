@@ -114,7 +114,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/entry.S
     src/kernel/entry.cpp
     src/kernel/syscall.S
-    src/kernel/sif.S
+    src/kernel/sif.cpp
     src/kernel/program.S
     src/kernel/program.cpp
     src/kernel/cache.cpp

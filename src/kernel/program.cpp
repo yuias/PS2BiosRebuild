@@ -67,9 +67,9 @@ constexpr void fillZero(uint8_t *to, uint32_t count) {
 
 extern "C" {
 
-// sif.S. BOOT-11: one exchange across the bus. Request 0 asks how large the
+// sif.cpp. BOOT-11: one exchange across the bus. Request 0 asks how large the
 // file is and fills `sif_reply`; request 1 sends the bytes to `destination`.
-void sifExchange(const char *name, int request, void *destination);
+void *sifExchange(const char *name, uint32_t verb, void *destination);
 
 alignas(16) uint32_t sif_reply[4];
 alignas(16) uint8_t staging[0x4000];    // where a program lands before it is one

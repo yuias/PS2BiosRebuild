@@ -59,8 +59,8 @@ alignas(16) uint8_t romver[16];
 extern "C" {
 
 // sif.S
-void sifHandshake() asm("_sif_handshake");
-void sifExchange(const char *name, int request, void *destination);
+uint32_t sifHandshake();
+void *sifExchange(const char *name, uint32_t verb, void *destination);
 
 // program.S -- EE-9c, and it does not return.
 [[noreturn]] void bootDefault() asm("_boot_default");
