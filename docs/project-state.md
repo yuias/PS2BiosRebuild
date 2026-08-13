@@ -128,12 +128,13 @@ reference and the reason for it.
 | IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
-| SIF data path | **built** — BOOT-11's framing both ways; the EE fetches an archive file |
+| SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
 | Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 20 slots served, the rest report themselves |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
+| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, `IOPBOOT` and the IOP modules, each for a reason `docs/implementation.md` states |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -319,12 +320,34 @@ cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mipsel-ps2.cmake
 ninja -C build && ninja -C build check      # build the image and judge it
 ```
 
+Configuring without a build type gives `MinSizeRel`; `-DCMAKE_BUILD_TYPE=Debug`
+builds the same sources unoptimised and both boot.
+
+**What a good run looks like.** Our own image produces exactly these four lines
+on PCSX2. Anything shorter is a regression, and the line it stops at says where:
+
+```
+# PS2BiosRebuild EE kernel: entered at 0x80001000.
+# The IOP answered; the SIF handshake is complete.
+# ROMVER, fetched from the archive across the SIF: 0100XP20260810
+# OSDSYS: loaded from the archive and running. Argument: BootBrowser
+```
+
+```sh
+python3 tools/ps2sim.py build/rom.bin | grep '#'
+```
+
+prints the last three of them — its report is headed *the EE's last words* and
+shows the tail, so the banner's absence there is the display and not a fault.
+
 The reference gates, which must keep passing whatever we change in the tools:
 
 ```sh
 python3 tools/iopsim.py assets/SCPH-50000.bin --check
 python3 tools/eesim.py  assets/SCPH-50000.bin --check
+python3 tools/eesim.py  assets/SCPH-70000.bin --check
 python3 tools/ps2sim.py assets/SCPH-50000.bin --check
+python3 tools/ps2sim.py assets/SCPH-70000.bin --check
 python3 tools/romdir.py assets/SCPH-50000.bin --extract <outdir>   # outside the repo
 python3 tools/eeksys.py <outdir>/KERNEL --check
 python3 tools/eeabi.py  <outdir>/KERNEL --check
@@ -371,23 +394,38 @@ The EE's serial console is the only instrument that reaches inside the running
 image. Printing a register from our own kernel has answered in one run what
 guessing did not in several — and a **bounded** wait that then reports beats an
 unbounded one that hangs, because the value it prints is the diagnosis.
+`printHex32` in `src/kernel/entry.cpp` is kept for exactly that and has no
+caller of its own.
+
+`docs/analysis/29` is the worked example, and it added a second instrument worth
+remembering: **`SMCOM` is a diagnostic channel that needs no working data path.**
+Both processors can read it, the EE has latched what the handshake put there by
+the time any transfer starts, so the IOP can report a value through it and the
+EE can print it — which is the property that matters when the data path is the
+thing under suspicion.
 
 ## 6. Next steps
 
-In this order. The first is a blocker rather than a piece of depth: until it
-closes, everything built afterwards is verified only against instruments we
-wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
+**Nothing on the boot path is outstanding.** `29` closed the blocker,
+`spec/03` BOOT-11k gates it, and the image runs from reset to `OSDSYS` on the
+target. Everything below is depth, in the order that buys the most for the
+least.
 
 > A note on where effort goes. The simulators are instruments, not the product,
 > and it is easy to keep sharpening them: each one buys a real observation, so
 > each next one looks worth it. It stops being worth it where PCSX2 would
-> answer the same question — which is the case for everything left on the
-> simulator side after `24`.
+> answer the same question. `29` is the counter-example that says when it *is*
+> worth it: a gate the target has already proved wrong is worth building, and a
+> gate written before the target has an opinion is worth less than it looks.
 
-1. **Depth, now that the boot path is done.** `29` closed the blocker and
-   `spec/03` BOOT-11k gates it, so nothing on the path from reset to `OSDSYS` is
-   outstanding. What is left is everything the image does not yet do, and the
-   items below are in the order that buys the most for the least.
+1. **Fill in the syscall slots** (`spec/05` SYS-1) — the best ratio on the list.
+   105 of the 125 still resolve to the reporter, and `ninja -C build check`
+   counts that off the image's own table rather than from a number kept by hand.
+   The table, the entry and the 128-bit context save are all done, so each slot
+   is an isolated piece of work with a gate already watching it;
+   `tools/eeksys.py --check` on our `KERNEL` fails on that count alone. The band
+   `0x64`–`0x6A` is the natural next group: `0x65`'s algorithm is already
+   specified (SYS-4d) and `0x64`/`0x66` are the two of the band still unread.
 
 2. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
    needs is done — EE-7e's 128-bit save and restore, through a block a handler
@@ -395,27 +433,27 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
    returns from its entry because there is no thread to put a service on.
    Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
    problem twice.
-3. **Fill in the syscall slots** (`spec/05` SYS-1). 105 of the 125 still resolve
-   to the reporter, and `ninja -C build check` counts that off the image's own
-   table rather than from a number kept by hand. The table and the entry are
-   done, so each slot is an isolated piece of work; `tools/eeksys.py --check` on
-   our `KERNEL` now fails on that count alone, EE-8e having closed with the
-   cache trio. The band `0x64`–`0x6A` is the natural next group: `0x65`'s
-   algorithm is already specified (SYS-4d) and `0x64`/`0x66` are the two of the
-   band still unread.
-4. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
+3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
    twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
    allocator cannot free out of order and everything above it wants a real
    heap.
-5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
+4. **`IOPBOOT` in C++.** The last large piece of assembly that is assembly for a
+   reason that could be removed: it runs from wherever the archive puts it in
+   the ROM window, so every call in it is `bal` and a compiler cannot be used.
+   Linking it at its final archive address instead would let it be compiled, and
+   the address is a fixed point — code size does not depend on it, so a build,
+   a measurement and a relink converge. It costs a two-pass build and a recorded
+   deviation from BOOT-7's "runs in place".
+5. **The rest of the OSD's configuration fields.** `28` named the language
+   (bits 4–8, gated), the timezone (bits 9–19, minutes), its hour flag (bit 29),
+   the clock format (bit 30) and bit 3 as an argument to EE syscall `0x4F`, and
+   mapped every field's position by measurement. Bit 0, bits 1–2, bits 20–28 and
+   the second word are placed but unnamed. The method is cheap now — sweep the
+   decoder under `eesim`, then follow one getter's callers — so this is bounded
+   work rather than an open question.
+6. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.
-6. **The rest of the OSD's configuration fields.** `28` named the language
-   (bits 4–8, gated), the timezone (bits 9–19, minutes) and its hour flag
-   (bit 29), and mapped every field's position by measurement. Bit 0, bits 1–2,
-   bit 3, bits 20–28, bit 30 and the second word are placed but unnamed. The
-   method is cheap now — sweep the decoder, then follow one getter's callers —
-   so this is a bounded piece of work rather than an open question.
 
 ## 7. Known problems, in one place
 
@@ -423,13 +461,15 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
 | Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
-| No scheduler, so `EESYNC` never returns from its entry | next step 2 | deliberate |
-| 105 of 125 syscall slots report themselves rather than working | next step 3 | deliberate |
-| Three of twenty-nine boot-list modules exist | next step 4 | deliberate |
+| No scheduler, so `EESYNC` never returns from its entry | §6 step 2 | deliberate |
+| 105 of 125 syscall slots report themselves rather than working | §6 step 1 | deliberate |
+| Three of twenty-nine boot-list modules exist | §6 step 3 | deliberate |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
 
 The distinction that matters when picking this up: everything marked
 *deliberate* is depth the build has not reached yet and is listed by the gate
-on every successful run. The first two rows are different — they are things
-that do not work and are not yet understood.
+on every successful run. **The first row is the only one that is not** — the
+IOP's busy bit is a thing that does not work and is not understood. It is
+worked around rather than waited on, and the boot completes anyway, which is
+why it sits below the deliberate items rather than above them.
