@@ -101,9 +101,8 @@ Several export slots point at one tiny function rather than distinct code:
 ```
 
 So these are reserved slots kept present so that ordinals stay stable, filled
-with a shared do-nothing return — the same pattern the PS1 project recorded as
-its "published stubs". A rebuild must keep them occupied: the ordinal of every
-later slot depends on it.
+with a shared do-nothing return. A rebuild must keep them occupied: the ordinal
+of every later slot depends on it.
 
 ### Import tables: patchable call stubs
 

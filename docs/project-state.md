@@ -30,8 +30,7 @@ the working document and is kept current.
 ## 1. Goal
 
 A 4 MiB image that an emulator (PCSX2 is the working target) accepts in place
-of a retail PS2 BIOS, produced the way the sibling PS1 project produced its
-512 KiB image: analysis of retail ROMs → behavioural specifications →
+of a retail PS2 BIOS: analysis of retail ROMs → behavioural specifications →
 implementation from the specifications. `docs/clean-room-policy.md` states the
 rules and their current limits.
 
@@ -49,7 +48,7 @@ that keeps observations honest about what is model-specific.
 
 ## 3. Working method
 
-Inherited from the PS1 project, one group of functionality at a time:
+One group of functionality at a time:
 
 1. **Analyse**: read the reference image with the tools in `tools/`, write
    `docs/analysis/NN-*.md`. Every claim names the command that reproduces it.

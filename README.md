@@ -23,11 +23,10 @@ against each other. [`docs/project-state.md`](docs/project-state.md) is the
 working document; [`docs/implementation.md`](docs/implementation.md) is the
 output side.
 
-This project follows the method of its sibling PS1 BIOS reimplementation:
-observations from the reference images go into `docs/analysis/` with the
-command that reproduces each claim, behavioural specifications distilled from
-them go into `docs/spec/`, and the implementation is written from the
-specifications. [`docs/clean-room-policy.md`](docs/clean-room-policy.md) states
+The method is the same at every step: observations from the reference images go
+into `docs/analysis/` with the command that reproduces each claim, behavioural
+specifications distilled from them go into `docs/spec/`, and the implementation
+is written from the specifications. [`docs/clean-room-policy.md`](docs/clean-room-policy.md) states
 the rules — and their current limits — honestly.
 
 ## Requirements
