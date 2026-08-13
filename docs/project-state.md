@@ -92,6 +92,7 @@ per-file, and the eventual build will assemble the image the same way.
 | **EE syscall group survey** | **complete — every band characterised** |
 | EE syscalls: arguments and return values | analysed — `docs/analysis/21-ee-syscall-abi.md` |
 | OSD (`OSDSYS`) | analysed — `docs/analysis/20-osdsys.md` |
+| CDVD NVM words + OSD configuration blocks | analysed — `docs/analysis/26-cdvd-nvm-and-config.md` |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
@@ -170,6 +171,10 @@ document each cites):
 - `OSDSYS` is 99% one compressed blob behind a 3 KB decompressor. Only its
   container and entry contract need reproducing; the payload is material the
   clean-room policy already excludes. (`20`)
+- An OSD configuration block is **15 data bytes plus a one-byte sum of them**,
+  which `CDVDMAN` verifies on read and generates on write, in two independent
+  stretches of code. The driver never interprets the fifteen bytes, so the
+  "is this console configured" rule is above it, in `OSDSYS`. (`26`)
 - A library is identified by **tag + major version**; the minor version is a
   generation counter and a higher one supersedes, inheriting the old library's
   unpinned clients. Modules rewrite their own table versions in RAM to arrange
@@ -294,6 +299,12 @@ would confirm it:
 | SIO2: `CTRL` bit 0 must read back clear with `I_STAT` bit 17 raised, or `SIO2MAN` spins | not yet analysed |
 | `sceSifIopReset`: SIFCMD cid `0x80000003` reboots the IOP without the ROM stub, and in-flight FIFO state must be discarded | `12` |
 
+The traffic goes both ways: the same project asks questions of this one, and
+`docs/analysis/26-cdvd-nvm-and-config.md` was written to answer one — why an
+OSD with a zeroed NVRAM stops on the first-boot screen and rejects a hand-made
+configuration block. Answering it cost nothing extra, since `CDVDMAN` is boot
+list module 24 and owed to next step 4 regardless.
+
 ## 5. Resuming
 
 ```sh
@@ -401,6 +412,14 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.
+6. **Expand the `OSDSYS` payload.** `26` took the configuration transport as far
+   as `CDVDMAN` goes; what the fifteen bytes *mean*, and the rule that decides a
+   block is unconfigured, are inside the compressed blob of `20`. The cheaper
+   route is not to decode the format by hand but to **run** the four
+   `.text.Expand*` sections — 484 bytes — under `tools/eesim.py`, which already
+   has the quadword and MMI coverage they need; that wants an ELF-execution mode
+   the simulator does not have yet. The expanded image is derived from the
+   reference and stays outside the repository like any other extract.
 
 ## 7. Known problems, in one place
 
