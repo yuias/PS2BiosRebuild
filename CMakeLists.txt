@@ -87,7 +87,9 @@ function(ps2AddModule name)
       COMMENT "Building the ${ARG_MODULE} module")
 endfunction()
 
-ps2AddComponent(reset  SCRIPT reset.ld  SOURCES src/boot/reset.S)
+ps2AddComponent(reset  SCRIPT reset.ld  SOURCES
+    src/boot/reset.S
+    src/boot/reset_ee.cpp)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
 ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00

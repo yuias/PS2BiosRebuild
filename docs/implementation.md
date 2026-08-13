@@ -489,6 +489,21 @@ page the kernel just arrived with. Syscalls did nothing at all until the kernel
 cleared it. The specification does not mention this because the reference
 kernel clears it as a matter of course; a rebuild has to know.
 
+**The boot block must not contain the bytes it searches for.** Moving the EE's
+half of it to C++ put the literal `"RESET"` in its `.rodata` — and the boot
+block lies inside the very range the archive scan sweeps, sixteen bytes at a
+time, looking for exactly that. The scan found its own search string first,
+took the bytes after it for a size, and every consumer of the archive runs its
+own copy of that scan over the same region. The names are packed into
+instructions by a `consteval` function now, so they exist nowhere a scan can see
+them, which is also why the reference compares immediates rather than strings.
+
+Two smaller ones came with it: **the file's size has to be a multiple of
+sixteen**, because ARC-4 accepts a candidate table only when the `RESET` entry's
+size is aligned, and nothing had been padding it — it had simply come out
+aligned until the day it did not. And a `.rodata` section had to be added to the
+link script at all, since assembly had never produced one.
+
 **Two that are about C++ called from assembly.** A `const` object at namespace
 scope has **internal linkage**, so `extern const char kRom0Osdsys[] = "..."`
 needs its `extern` or the assembly that names it will not link. And `constexpr`
