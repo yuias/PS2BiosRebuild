@@ -118,7 +118,7 @@ reference and the reason for it.
 
 | Area | State |
 | --- | --- |
-| Build system | **CMake + Ninja + LLVM** — no cross-gcc needed |
+| Build system | **CMake + Ninja + LLVM** — no cross-gcc needed; C++26, assembly only where the machine requires it |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
 | `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list and loads modules from it |
 | IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
