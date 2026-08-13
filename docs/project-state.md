@@ -94,6 +94,7 @@ per-file, and the eventual build will assemble the image the same way.
 | OSD (`OSDSYS`) | analysed — `docs/analysis/20-osdsys.md` |
 | CDVD NVM words + OSD configuration blocks | analysed — `docs/analysis/26-cdvd-nvm-and-config.md` |
 | `OSDSYS` payload, expanded and read | analysed — `docs/analysis/27-osdsys-payload-and-config.md` |
+| OSD configuration fields | analysed — `docs/analysis/28-osd-config-fields.md` |
 | ROM archive format | **specified and proven** — `docs/spec/01-rom-archive.md` |
 | IOP module + link ABI | **specified and checked** — `docs/spec/02-module-abi.md` |
 | Boot chain (reset → boot list) | **specified and executed** — `docs/spec/03-boot-chain.md` |
@@ -180,6 +181,12 @@ document each cites):
   RPC service `0x80000593` functions 14–17. Block 0 is passed through
   untouched; block 1's first byte carries flags whose top bits gate whether
   its second byte is read at all. (`27`)
+- That gate is a **generation marker**: with the top three bits of block 1
+  byte +0 clear, the language is one bit — Japanese or English — and with them
+  set it is a five-bit index into an **eight**-entry table that is **not bounds
+  checked**, so a forged 9 leaves the OSD with a null string table and nothing
+  to draw. The field map was measured by sweeping single bits through the
+  decoder under `eesim`, then confirmed against the accessor bank. (`28`)
 - An OSD configuration block is **15 data bytes plus a one-byte sum of them**,
   which `CDVDMAN` verifies on read and generates on write, in two independent
   stretches of code. The driver never interprets the fifteen bytes, so the
@@ -421,11 +428,12 @@ wrote ourselves, and `docs/analysis/25` is a demonstration of what that misses.
 5. **One loose end in the analysis.** Nine EE slots have an inferred rather than
    observed return (`spec/05` SYS-1c). The other loose end carried here — the
    EE's unmodelled chain-mode DMA — is closed by `24`.
-6. **Finish reading the OSD's configuration record.** `27` expanded the payload
-   and got as far as the structure: two 15-byte blocks, block 0 passed through
-   whole and block 1's first two bytes decoded into bit fields. What each field
-   *means* needs the decoded word followed into the menu code. This is the half
-   of the sibling project's question that is still open.
+6. **The rest of the OSD's configuration fields.** `28` named the language
+   (bits 4–8, gated), the timezone (bits 9–19, minutes) and its hour flag
+   (bit 29), and mapped every field's position by measurement. Bit 0, bits 1–2,
+   bit 3, bits 20–28, bit 30 and the second word are placed but unnamed. The
+   method is cheap now — sweep the decoder, then follow one getter's callers —
+   so this is a bounded piece of work rather than an open question.
 
 ## 7. Known problems, in one place
 
