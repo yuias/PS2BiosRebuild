@@ -158,20 +158,26 @@ def checkModule(irx: Irx) -> list[str]:
     require(e_machine == 8, "IRX-1", f"e_machine is {e_machine}, want 8 (MIPS)")
     require(irx.iopmod_off is not None, "IRX-1", "no PT_IOPMOD segment")
 
-    # IRX-3a: HI16 and LO16 are paired, so their counts agree.
+    # IRX-3a: every HI16 is followed by the LO16 it pairs with. The reference's
+    # modules pair one to one; ours may carry further LO16s that share a paired
+    # high half (`tools/mkirx.py` checks they name the same address), so what is
+    # required here is the pairing, not equal counts.
     (shoff,) = struct.unpack_from("<I", d, 32)
     entsize, count, _ = struct.unpack_from("<HHH", d, 46)
-    hi = lo = 0
+    hi = lo = orphans = 0
     for i in range(count):
         fields = struct.unpack_from("<10I", d, shoff + i * entsize)
         typ, off, size = fields[1], fields[4], fields[5]
         if typ != SHT_REL:
             continue
-        for k in range(size // 8):
-            _, r_info = struct.unpack_from("<II", d, off + k * 8)
-            hi += (r_info & 0xFF) == 5
-            lo += (r_info & 0xFF) == 6
-    require(hi == lo, "IRX-3a", f"{hi} HI16 against {lo} LO16")
+        kinds = [struct.unpack_from("<II", d, off + k * 8)[1] & 0xFF
+                 for k in range(size // 8)]
+        hi += kinds.count(5)
+        lo += kinds.count(6)
+        orphans += sum(1 for k, kind in enumerate(kinds)
+                       if kind == 5 and (k + 1 >= len(kinds) or kinds[k + 1] != 6))
+    require(orphans == 0, "IRX-3a", f"{orphans} HI16 not followed by a LO16")
+    require(hi <= lo, "IRX-3a", f"{hi} HI16 against {lo} LO16")
 
     relocated = irx.relocatedWords()
     for t in irx.tables():

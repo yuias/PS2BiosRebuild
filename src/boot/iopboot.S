@@ -520,6 +520,10 @@ _iopboot_apply_lo:
     addiu $a0, $zero, 6                  // R_MIPS_LO16
     bne   $v0, $a0, _iopboot_apply_done
     nop
+    // A LO16 with no HI16 held is malformed (IRX-3a) and is left alone: its
+    // high half is nowhere to be found, and address zero is not it.
+    beq   $t9, $zero, _iopboot_apply_done
+    nop
     lw    $a1, 0($at)
     sll   $a2, $a1, 16
     sra   $a2, $a2, 16                   // the low half, sign-extended
@@ -531,7 +535,10 @@ _iopboot_apply_lo:
     and   $a1, $a1, $v0
     or    $a1, $a1, $a2
     sw    $a1, 0($at)
-    // The carry out of the low half belongs to the high one.
+    // The carry out of the low half belongs to the high one. The held HI16 is
+    // kept, not dropped, so a compiler's `lui` shared by several LO16s of the
+    // same address (IRX-3a) has its high half recomputed for each -- to the
+    // same value, since $t8 still holds what the file stored.
     srl   $a2, $a3, 16
     andi  $v0, $a3, 0x8000
     beq   $v0, $zero, _iopboot_apply_lo_store

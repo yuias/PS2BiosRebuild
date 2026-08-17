@@ -67,10 +67,24 @@ all resolved against the chosen load base `B`:
 | `R_MIPS_HI16` | high half of an address literal |
 | `R_MIPS_LO16` | low half |
 
-**IRX-3a:** `HI16` and `LO16` are **paired**, and occur in equal counts. A
-loader must hold each `HI16` until its matching `LO16` so the carry from the low
-half is applied to the high half. This is the only non-mechanical part of the
-fixup.
+**IRX-3a:** `HI16` and `LO16` are **paired**: each `HI16` is followed by the
+`LO16` it belongs to, and a loader must hold the `HI16` until that `LO16` so the
+carry from the rebased low half is applied to the high half. This is the only
+non-mechanical part of the fixup. In the reference archive the two occur in
+equal counts — one pair per address — in all 57 modules.
+
+*Deviation, our modules only:* a compiler that keeps one `lui` live across
+several accesses to the same address emits one `HI16` followed by several
+`LO16`, so our modules may carry more `LO16` than `HI16`. This is sound only
+when every `LO16` sharing a high half names the same address — one high half
+cannot serve two addresses once a load-time delta is added — and
+`tools/mkirx.py` refuses a module where it cannot see that: a `HI16` must be
+followed by a `LO16` of its symbol, and a `LO16` with no `HI16` before it must
+repeat, symbol and low half, one that was paired. A loader that keeps the held
+`HI16` after applying it, rather than dropping it, recomputes the same high
+half for each further `LO16` and needs no other change; a `LO16` with nothing
+held is left alone. `tools/irxinfo.py --check` requires the pairing and no
+longer equal counts.
 
 ## IRX-4: Library table header
 

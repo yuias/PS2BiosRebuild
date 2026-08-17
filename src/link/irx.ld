@@ -5,9 +5,12 @@ ENTRY(_module_start)
 SECTIONS
 {
     . = 0;
-    .text : { *(.text) }
-    .rodata : { *(.rodata) }
-    .data : { *(.data) }
-    .bss (NOLOAD) : { *(.bss) *(COMMON) }
-    /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) }
+    .text : { *(.text .text.*) }
+    .rodata : { *(.rodata .rodata.*) }
+    .data : { *(.data .data.*) }
+    .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) }
+    /* What a compiler adds for debuggers and ABI bookkeeping is not part of
+       the module: a fixup into it would point at nothing once loaded. */
+    /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) *(.pdr)
+                  *(.mdebug*) *(.gnu.attributes) *(.llvm_addrsig) }
 }

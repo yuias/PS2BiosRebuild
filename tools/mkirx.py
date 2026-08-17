@@ -97,30 +97,64 @@ def loadImage(data: bytes, sections: list[Section]) -> tuple[bytes, int, int, in
     return bytes(image), data_start, file_end - data_start, bss
 
 
-def readRelocations(data: bytes, sections: list[Section]) -> bytes:
+def readRelocations(data: bytes, sections: list[Section], image: bytes) -> bytes:
     """The REL entries, filtered to the four types IRX-3 allows.
 
     The symbol index is dropped: a loader rebases in place and has no symbol
     table to consult, and leaving indices behind would point at a table this
     file does not carry.
+
+    IRX-3a pairs each `HI16` with the `LO16` that follows it, so the carry out
+    of the rebased low half reaches the high one. The reference's compiler
+    emits one pair per address; a compiler that keeps a `lui` live across
+    several accesses emits one `HI16` followed by several `LO16` -- sound only
+    if every one of them names the same address, since a single high half
+    cannot serve two addresses once a load-time delta is added. That is what
+    is checked here: a `HI16` must be followed by a `LO16` of its symbol, and a
+    `LO16` with no `HI16` before it must repeat, symbol and low half, one that
+    was paired. Anything else is refused rather than left to fault at some load
+    addresses and not others.
     """
     out = bytearray()
-    kinds: dict[str, int] = {}
+    paired: set[tuple[int, int]] = set()
+    unpaired: list[tuple[int, int, str]] = []
     for section in sections:
         if section.type != SHT_REL:
             continue
-        for k in range(section.size // 8):
-            offset, info = struct.unpack_from("<II", data, section.offset + k * 8)
+        # Fixups into a section that is not loaded (debug records, say) are
+        # not the module's business and would point into it after loading.
+        if not sections[section.info].flags & SHF_ALLOC:
+            continue
+        entries = [struct.unpack_from("<II", data, section.offset + k * 8)
+                   for k in range(section.size // 8)]
+        held: int | None = None
+        for k, (offset, info) in enumerate(entries):
             kind = info & 0xFF
+            symbol = info >> 8
             if kind not in ALLOWED_RELOCATIONS:
                 sys.exit(f"mkirx: {section.name} carries relocation type "
                          f"{kind}, which IRX-3 does not allow")
-            kinds[ALLOWED_RELOCATIONS[kind]] = kinds.get(
-                ALLOWED_RELOCATIONS[kind], 0) + 1
             out += struct.pack("<II", offset, kind)
-    if kinds.get("R_MIPS_HI16", 0) != kinds.get("R_MIPS_LO16", 0):
-        sys.exit(f"mkirx: {kinds.get('R_MIPS_HI16', 0)} HI16 against "
-                 f"{kinds.get('R_MIPS_LO16', 0)} LO16, which IRX-3a forbids")
+            low = struct.unpack_from("<H", image, offset)[0] \
+                if kind in (5, 6) else 0
+            if kind == 5:                        # R_MIPS_HI16
+                if k + 1 >= len(entries) or entries[k + 1][1] & 0xFF != 6 \
+                        or entries[k + 1][1] >> 8 != symbol:
+                    sys.exit(f"mkirx: HI16 at {offset:#x} in {section.name} "
+                             "is not followed by a LO16 of its symbol (IRX-3a)")
+                held = symbol
+            elif kind == 6:                      # R_MIPS_LO16
+                if held == symbol:
+                    paired.add((symbol, low))
+                else:
+                    unpaired.append((symbol, low, f"{offset:#x} in {section.name}"))
+                held = None
+            else:
+                held = None
+    for symbol, low, where in unpaired:
+        if (symbol, low) not in paired:
+            sys.exit(f"mkirx: LO16 at {where} shares no HI16 with an address "
+                     "it names, so its high half cannot be rebased (IRX-3a)")
     return bytes(out)
 
 
@@ -149,7 +183,7 @@ def bcdVersion(text: str) -> int:
 def build(elf: bytes, name: str, version: str) -> bytes:
     sections = readSections(elf)
     image, text_size, data_size, bss_size = loadImage(elf, sections)
-    relocations = readRelocations(elf, sections)
+    relocations = readRelocations(elf, sections, image)
 
     entry, = struct.unpack_from("<I", elf, 24)
     gp = symbolValue(elf, sections, "_gp") or 0

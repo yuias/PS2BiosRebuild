@@ -87,7 +87,7 @@ function(ps2AddModule name)
   # Hand-written assembly is the author's responsibility, but a compiler will
   # emit `daddu`/`sd` for a 64-bit type and `teq` for a division check, so IOP
   # compiled code is pinned to what an R3000A implements. See
-  # docs/implementation.md for why there is no compiled IOP code yet.
+  # docs/implementation.md for what compiled IOP code asks of `mkirx`.
   target_compile_options(${name}.elf PRIVATE
       "$<$<COMPILE_LANGUAGE:CXX>:-march=mips1;-mno-check-zero-division>")
   set(script "${CMAKE_CURRENT_SOURCE_DIR}/src/link/irx.ld")
