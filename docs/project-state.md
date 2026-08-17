@@ -281,8 +281,8 @@ address zero it had been given.
 
 The simulators could not have found it. They resolve an address by masking it
 with `0x1FFFFFFF`, which is right for a CPU access and erases exactly the bit
-the DMAC cares about. Making `tools/ps2sim.py` model that bit would turn this
-into a gate, and is the first item in §6.
+the DMAC cares about. `tools/ps2sim.py` now models that bit, so this is a gate
+— `spec/03` BOOT-11k, tested in both directions.
 
 Everything else carried since `03` and `06` was settled in `10`.
 

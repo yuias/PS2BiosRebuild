@@ -369,16 +369,17 @@ it cannot quietly go stale. This copy is the gate's own text:
 
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 111 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- 105 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - The scheduler: EE-7e's context save is in place and EE-7g's exit can be driven from it, but nothing yet chooses a different thread to resume
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
 
-One further thing is *not* on that list because it is a fault rather than
-unbuilt depth: **SIF0 delivers nothing under PCSX2**. The image boots there
-through the handshake and its EE-to-IOP transfers work; the return direction
-does not, and the gate cannot see it because our own simulators carry that
-traffic happily. `docs/project-state.md` §4 states what has been ruled out.
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
+
+The fault that used to sit beside this list — SIF0 delivering nothing under
+PCSX2 — is closed: `docs/analysis/29-sif0-on-pcsx2.md` found the bit, and
+`spec/03` BOOT-11k gates it. What the list does not show is the *order* the
+items are taken in; `docs/project-state.md` §6 states it — pulled by a program
+that needs each piece, not by these counts.
 
 ## What is written in C++, and what cannot be
 
