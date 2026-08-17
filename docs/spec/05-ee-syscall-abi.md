@@ -70,12 +70,14 @@ analysis could not follow. Both do return a value.
 `$a3` and **not** `$a2`. A rebuild that packs the arguments densely would take
 the third argument from the wrong register.
 
-**SYS-1b:** **No slot takes a fifth argument, and none reads the caller's
-stack.** The handler runs on the kernel stack of `spec/04` EE-7d, so the
+**SYS-1b:** **No slot reads the caller's stack, and one slot takes a fifth
+argument.** The handler runs on the kernel stack of `spec/04` EE-7d, so the
 caller's stack is not addressable as an argument channel. Where the kernel
-needs a fifth value it is an internal mode in `$t0`, written by a wrapper
-(slots `0x10` and `0x12` are one operation in two modes); a caller never
-supplies it.
+needs a fifth value it is in `$t0`: for slots `0x10` and `0x12` an internal
+mode written by a wrapper (they are one operation in two modes) that a caller
+never supplies; for slot `0x3C` the caller's fifth argument, `root`
+(SYS-8a; `docs/analysis/30`). SYS-1's table lists `0x3C` as four arguments
+because it was derived from `$a0`–`$a3` alone.
 
 **SYS-1c:** Seven slots — `0x07`, `0x10`, `0x12`, `0x23`, `0x24`, `0x29`,
 `0x3B` — return a value produced by a callee rather than written in the handler
@@ -227,6 +229,44 @@ observable: `0x0A`–`0x0C` accept an index below `16` (a *signed* comparison, s
 negative values pass the guard); `0x2A` accepts `$a0` below `256` and `$a1` in
 `0..127`. A rebuild widening a bound accepts calls the reference rejects; one
 narrowing it rejects calls that were expected to work.
+
+## SYS-8: The main thread's setup
+
+Derived from `docs/analysis/30-ee-thread-setup.md`. These are what a program's
+runtime calls before `main`, and how its arguments reach it.
+
+**SYS-8a — slot `0x3C`, `(gp, stack, stack_size, args, root)`, root in
+`$t0`.** Let `top = stack + stack_size`, except that a `stack` of `-1` —
+compared at 64 bits, so a zero-extended `0xFFFFFFFF` is *not* `-1` — means
+`top = memory_size - 0x1000` with `memory_size` from EE-2b. The slot returns
+`top - 0x2a0` and treats the `0x2a0` bytes above it as a saved context of
+EE-7e's shape, priming `$gp` = gp, `$sp` = `$fp` = `top - 0x20` and `$ra` =
+root, so a thread resumed through that frame starts with them set and returns
+to `root`. It records in the current thread's record the context (the value
+returned), `gp`, the stack base and size, `root` and `args`.
+
+**SYS-8b — the argument block.** Before returning, `0x3C` fills the caller's
+`args` block from the argument list the launcher stored (SYS-8d): word 0 is
+`argc`, words 1–16 are the `argv` pointers, and the strings themselves follow
+from byte `0x44` on, each copied with its NUL. A runtime reads `argc` and
+`argv` from that layout; a rebuild placing the strings elsewhere, or the
+pointers before `argc`, hands it garbage.
+
+**SYS-8c — slots `0x3D` and `0x3E`.** `0x3D(start, size)` stores and returns
+`start + size`, or the current thread's stack base (SYS-8a) when `size` is
+negative — "the heap runs up to the stack". `0x3E()` returns what was stored,
+0 before any `0x3D`.
+
+**SYS-8d — how a program receives its arguments.** A launcher — slot `0x07`,
+and the ROM's own boot through EE-9c — packs the argument strings, NUL
+included, back to back into a kernel buffer and records that list and its
+count in the current thread's record; the program collects them through
+SYS-8b. The launcher enters the program with **the registers it had itself at
+the `syscall`** — for `0x07(entry, gp, argc, argv)` that is `$a0` = entry,
+`$a1` = gp, `$a2` = argc, `$a3` = argv — and `$v0` = the entry point. Nothing
+puts `argc`/`argv` in `$a0`/`$a1` for the program: a runtime that finds
+`argc = 0` in its block may look at `$a0` as a launcher-supplied pointer, and
+one that finds it non-zero does not.
 
 ## Verification
 

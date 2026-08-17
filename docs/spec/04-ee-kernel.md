@@ -45,6 +45,12 @@ way no other file's is. A build that lays the archive out differently must
 either place `RDRAM` at `0x41000` or change this constant to match; the two
 cannot drift.
 
+**EE-2b:** `RDRAM` **returns the size of main memory in bytes**, and a
+negative value means it failed. The reset path stores a non-negative return at
+`0x70003FF0` (EE-4a) and the kernel keeps it as the memory size, which is what
+`spec/05` SYS-8a measures "the top of memory" from. An image whose `RDRAM`
+returns 0 puts the top of memory at zero. (`docs/analysis/30`)
+
 ## EE-3: Locating and loading the kernel
 
 The routine at `0xBFC00BF0`, called through its KSEG0 alias `0x9FC00BF0`,
@@ -71,8 +77,9 @@ Because `KERNEL` lands at physical 0 and is entered at `0x80001000`, its first
 `0x1000` bytes are **the EE exception vector page**, and the entry point is the
 first thing after it.
 
-**EE-4a:** The boot's result is passed to the kernel in the scratchpad word at
-`0x70003FF0`, not in a register. The kernel entry reads it immediately.
+**EE-4a:** The boot's result — `RDRAM`'s return, the memory size (EE-2b) — is
+passed to the kernel in the scratchpad word at `0x70003FF0`, not in a
+register. The kernel entry reads it immediately and keeps it.
 
 ## EE-5: The vector page
 
@@ -257,6 +264,13 @@ remaining arguments along and tail-calls it.
 (`docs/analysis/11`), so this call crosses the SIF and is served by the IOP —
 which means the IOP boot of `spec/03` must have completed before EE-9c can
 succeed.
+
+**EE-9e:** A loaded program is entered the way `spec/05` SYS-8d says: its
+argument strings and count go into the current thread's record for it to
+collect through slot `0x3C`, and its `$a0`–`$a3` are the launcher's own, not
+`argc` and `argv`. `spec/04`'s earlier images entered with `(argc, argv)` in
+registers; that was our own convention, and the SDK's runtime shows why it
+cannot stand.
 
 ## EE-10: Hardware initialisation is a syscall
 
