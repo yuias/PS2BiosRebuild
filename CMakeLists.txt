@@ -200,6 +200,13 @@ add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
 add_custom_target(check
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/imgcheck.py" "${PS2_IMAGE}"
-    DEPENDS "${PS2_IMAGE}"
+    # The R3000A's load delay slot (docs/analysis/31): the one place IOP code
+    # is still written by hand is the boot block's IOP half, so it is the one
+    # place the check is still needed.
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/loaddelay.py"
+            --objdump "${PS2_OBJDUMP}"
+            "$<TARGET_FILE:reset.elf>" --between _iop_reset eeReset
+    DEPENDS "${PS2_IMAGE}" reset.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")
