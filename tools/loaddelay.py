@@ -10,7 +10,7 @@ A compiler targeting MIPS I schedules around it; hand-written assembly and any
 `asm` it inlines does not.
 
     tools/loaddelay.py build/iopboot.elf build/sysmem.elf build/loadcore.elf
-    tools/loaddelay.py build/reset.elf --range 0xBFC02000 0xBFC02130   # the IOP half
+    tools/loaddelay.py build/reset.elf --between _iop_reset eeReset      # the IOP half
 
 Reads an ELF's `.text` and reports every `lb/lbu/lh/lhu/lw/lwl/lwr` whose next
 instruction reads the loaded register, with addresses and both instructions.
@@ -100,6 +100,8 @@ def main() -> int:
                         help="only report addresses in [START, END): the boot "
                              "block holds both CPUs' code and only the IOP's "
                              "has a load delay slot")
+    parser.add_argument("--between", nargs=2, metavar=("SYMBOL", "SYMBOL"),
+                        help="like --range, bounded by two symbols of the ELF")
     parser.add_argument("--objdump", default="llvm-objdump",
                         help="llvm-objdump to use (default: on PATH)")
     arguments = parser.parse_args()
@@ -107,6 +109,17 @@ def main() -> int:
     found = 0
     for elf in arguments.elf:
         code = disassemble(elf)
+        if arguments.between:
+            table = subprocess.run([OBJDUMP, "-t", str(elf)], capture_output=True,
+                                   text=True, check=True).stdout
+            bounds = {}
+            for line in table.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[-1] in arguments.between:
+                    bounds[parts[-1]] = int(parts[0], 16)
+            if len(bounds) != 2:
+                sys.exit(f"loaddelay: {elf}: symbols {arguments.between} not both found")
+            arguments.range = [bounds[arguments.between[0]], bounds[arguments.between[1]]]
         for k in range(len(code) - 1):
             address, word, text = code[k]
             if arguments.range and not arguments.range[0] <= address < arguments.range[1]:

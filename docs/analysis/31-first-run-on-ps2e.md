@@ -62,7 +62,7 @@ instruction reads the loaded register:
 
 ```sh
 python3 tools/loaddelay.py build/iopboot.elf build/sysmem.elf build/loadcore.elf build/eesync.elf
-python3 tools/loaddelay.py build/reset.elf --range 0xBFC02000 0xBFC02130   # the IOP half
+python3 tools/loaddelay.py build/reset.elf --between _iop_reset eeReset      # the IOP half
 ```
 
 Before any fix: **64 hazards** — 40 in `IOPBOOT`, 4 in the boot block's IOP
