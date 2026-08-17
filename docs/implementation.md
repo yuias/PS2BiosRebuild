@@ -33,7 +33,7 @@ to `-march=mips1`; see "What is written in C++" below.
 | `RESET` | `0xBFC00000`, both CPUs | `src/boot/reset.S`, `reset_ee.cpp` |
 | `RDRAM` | wherever the archive puts it | `src/boot/rdram.cpp` |
 | `KERNEL` | copied to physical 0, entered at `0x80001000` | `src/kernel/*` |
-| `IOPBOOT` | in place from the ROM window | `src/boot/iopboot.S` |
+| `IOPBOOT` | linked at its archive address | `src/boot/iopboot.cpp` |
 | `SYSMEM` | relocated to the boot list's base | `src/iop/sysmem.S` |
 | `LOADCORE` | relocated after it | `src/iop/loadcore.S` |
 | `EESYNC` | last in the boot list | `src/iop/eesync.cpp` |
@@ -289,12 +289,16 @@ allows — refusing any other type rather than emitting a module no loader can
 take. It writes the entry's `EXTINFO` from the same arguments, because IRX-2a
 requires the two to agree.
 
-**`IOPBOOT` is position-independent.** The reference is linked at the address
-its archive offset gives it, and the archive keeps a padding entry to hold it
-there (`spec/03` BOOT-7a). Ours computes its own base with a `bal` and uses
-`bal` for every internal call, because `jal` encodes a *link-time* absolute
-target and would jump into nothing once the file moves. No padding entry then
-has to be kept in step with the layout.
+**`IOPBOOT` is linked at its archive address, checked at assembly.** The
+reference is linked at the address its archive offset gives it, and the
+archive keeps a padding entry to hold it there (`spec/03` BOOT-7a). Ours has no
+padding entry to keep in step; instead, `tools/mkromdir.py --offset-of` runs a
+pre-pass over the manifest before `IOPBOOT` itself is built — the offset
+depends only on the entries stored before it, never on `IOPBOOT`'s own size —
+and CMake links it at that address with a generated `--defsym`. Assembling the
+final image re-derives the offset from the real files and fails loudly if it
+disagrees with what `IOPBOOT` was linked at, so a mismatch cannot reach the
+image silently.
 
 **The exception dispatcher restores `$t9` through a stable base.** EE-6 quotes
 the reference restoring it through a register the table lookup has already
@@ -443,7 +447,7 @@ has a runtime here to stand on. Most of the EE side is written in it: the
 kernel apart from its vector page and syscall entry, the boot block's EE half
 from the point a stack exists, and `OSDSYS`.
 
-Assembly is genuinely required in five places, and they are not going to
+Assembly is genuinely required in four places, and they are not going to
 change:
 
 - **the reset path**, which runs before there is a stack to call anything with;
@@ -456,12 +460,15 @@ change:
 - **the syscall entry's context save** (`spec/04` EE-7e), which stores all 128
   bits of every register with `sq`/`lq` — a compiler has no type that reaches
   the upper halves and will not emit those instructions;
-- **`IOPBOOT`**, which runs from wherever the archive puts it in the ROM window
-  (`spec/03` BOOT-7). Every call in it is `bal` because `jal` encodes a
-  link-time address; a compiler emits `jal` and `%hi`/`%lo`, and would need the
-  file's final address at link time to be correct.
 - **the import and export stub encodings** (`spec/02` IRX-8), which are
   specified as exact instruction words.
+
+`IOPBOOT` used to be a sixth: every call in the assembly was `bal` rather than
+`jal`, because `jal` encodes a link-time address and the file ran from
+wherever the archive happened to put it. Once its archive offset is known
+before it is built (`tools/mkromdir.py --offset-of`), that reason is gone —
+`src/boot/iopboot.cpp` links and calls the ordinary way, like any other
+component.
 
 Anything that only transcribes what a disassembler already shows does not
 belong in assembly: it makes the rebuild indistinguishable from a copy, which

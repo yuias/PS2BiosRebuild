@@ -137,7 +137,7 @@ reference and the reason for it.
 | M1 test program (`tests/m1/`) | **runs to its C library's init** — faults on `CreateSema` returning 0; `ps2sim --syscalls` lists what it asks for |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
-| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, `IOPBOOT`, and the two IOP modules not yet rewritten (`SYSMEM`, `LOADCORE`); `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits (`docs/implementation.md`) |
+| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, and the two IOP modules not yet rewritten (`SYSMEM`, `LOADCORE`); `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits, and `IOPBOOT` is compiled since the same day, once its archive offset was knowable before it is built (`docs/implementation.md`) |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
@@ -505,9 +505,8 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 - The lead recorded from PS2e in §4 — block 1 byte +2 bit 7 as the OSD's
   "configured" flag — belongs to M3 and is verified then, by calling the
   decoder under `eesim` the way `28` did with the other fields.
-- *Deferred:* `IOPBOOT` in C++ (hygiene with no consumer), the remaining unnamed
-  OSD configuration fields (M3), the nine inferred returns of `spec/05` SYS-1c
-  (settled as M1 reaches each slot).
+- *Deferred:* the remaining unnamed OSD configuration fields (M3), the nine
+  inferred returns of `spec/05` SYS-1c (settled as M1 reaches each slot).
 - *Dropped as an ordering:* filling syscall slots by band, building modules by
   boot-list position.
 

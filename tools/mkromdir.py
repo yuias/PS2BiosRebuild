@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import struct
 import sys
 
@@ -177,13 +178,62 @@ def assemble(entries: list[Entry], image_size: int | None) -> bytes:
     return bytes(out)
 
 
-def report(entries: list[Entry]) -> None:
+def entryOffsets(entries: list[Entry]) -> dict[str, int]:
+    """Each entry's offset, implied by the aligned sizes of what precedes it
+    (ARC-3) -- the same arithmetic `assemble()` uses to place them."""
+    offsets: dict[str, int] = {}
     offset = 0
+    for e in entries:
+        offsets[e.name] = offset
+        offset += alignUp(len(e.data))
+    return offsets
+
+
+def report(entries: list[Entry]) -> None:
+    offsets = entryOffsets(entries)
     print(f"{'name':<10} {'offset':>9} {'size':>9} {'extinfo':>7}")
     for e in entries:
-        print(f"{e.name:<10} {offset:#9x} {len(e.data):>9} {len(e.extinfo):>7}")
-        offset += alignUp(len(e.data))
-    print(f"# {len(entries)} entries, contents end at {offset:#x}")
+        print(f"{e.name:<10} {offsets[e.name]:#9x} {len(e.data):>9} "
+              f"{len(e.extinfo):>7}")
+    end = offsets[entries[-1].name] + alignUp(len(entries[-1].data)) \
+        if entries else 0
+    print(f"# {len(entries)} entries, contents end at {end:#x}")
+
+
+def loadForOffset(entries: list[Entry], root: pathlib.Path, target: str) -> None:
+    """Load what `entryOffsets` needs to place `target`, and nothing past it.
+
+    An entry's own offset depends on the *data* sizes of every entry before
+    it, but on the *extinfo* of every entry in the manifest -- `EXTINFO`
+    concatenates all of them, wherever it sits (ARC-6a). So every entry's
+    extinfo is read, but a non-generated entry's data only if it comes before
+    `target`, which is what lets the offset be known before `target` itself,
+    or anything after it, has been built.
+    """
+    try:
+        target_index = next(i for i, e in enumerate(entries) if e.name == target)
+    except StopIteration:
+        sys.exit(f"mkromdir: no entry named {target!r} in the manifest")
+    for i, e in enumerate(entries):
+        if e.extinfo_spec.startswith("@"):
+            e.extinfo = buildExtinfo(root / e.extinfo_spec[1:])
+        elif e.extinfo_spec.startswith("%"):
+            e.extinfo = (root / e.extinfo_spec[1:]).read_bytes()
+        elif e.extinfo_spec != "-":
+            sys.exit(f"mkromdir: {e.name}: extinfo must be '-', '@path' "
+                     f"or '%path'")
+        if i < target_index and not e.source.startswith("="):
+            e.data = (root / e.source).read_bytes()
+
+
+def parseDefsym(path: pathlib.Path) -> int:
+    """The address a `--defsym=SYMBOL=0x...` response-file line recorded."""
+    text = path.read_text().strip()
+    match = re.search(r"=(0[xX][0-9a-fA-F]+)\s*$", text)
+    if not match:
+        sys.exit(f"mkromdir: {path}: no '--defsym=SYMBOL=0x...' line found "
+                 f"in {text!r}")
+    return int(match.group(1), 16)
 
 
 def main() -> int:
@@ -191,18 +241,62 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("manifest", type=pathlib.Path)
-    parser.add_argument("-o", "--output", type=pathlib.Path, required=True)
+    parser.add_argument("-o", "--output", type=pathlib.Path)
     parser.add_argument("--size", type=lambda s: int(s, 0),
                         help="pad the image to this size (e.g. 0x400000)")
     parser.add_argument("--list", action="store_true",
                         help="print the resulting layout")
+    parser.add_argument("--offset-of", metavar="NAME",
+                        help="print NAME's offset from the manifest and exit "
+                             "-- needs neither NAME's own file nor any "
+                             "entry's after it to exist")
+    parser.add_argument("--base", type=lambda s: int(s, 0), default=0,
+                        help="with --offset-of, the address the offset is "
+                             "measured from")
+    parser.add_argument("--defsym", metavar="SYMBOL",
+                        help="with --offset-of, write "
+                             "'--defsym=SYMBOL=<base>+<offset>' to --output "
+                             "(or stdout) instead of the bare offset")
+    parser.add_argument("--check", nargs=3, action="append", default=[],
+                        metavar=("NAME", "BASE", "RSPFILE"),
+                        help="after assembling, verify NAME's address (BASE "
+                             "plus its offset in the finished image) equals "
+                             "what RSPFILE's --defsym recorded, or fail")
     args = parser.parse_args()
 
     root = args.manifest.parent
     entries = readManifest(args.manifest)
+
+    if args.offset_of:
+        loadForOffset(entries, root, args.offset_of)
+        solveLayout(entries)
+        offset = entryOffsets(entries)[args.offset_of]
+        if args.defsym:
+            line = f"--defsym={args.defsym}={args.base + offset:#x}\n"
+        else:
+            line = f"{offset:#x}\n"
+        if args.output:
+            args.output.write_text(line)
+        else:
+            sys.stdout.write(line)
+        return 0
+
+    if not args.output:
+        sys.exit("mkromdir: -o/--output is required unless --offset-of is")
+
     loadSources(entries, root)
     solveLayout(entries)
     image = assemble(entries, args.size)
+
+    for name, base_text, rsp in args.check:
+        base = int(base_text, 0)
+        actual = base + entryOffsets(entries)[name]
+        expected = parseDefsym(pathlib.Path(rsp))
+        if actual != expected:
+            sys.exit(f"mkromdir: {name} assembled at {actual:#x}, but "
+                     f"{rsp} linked it at {expected:#x} -- the archive "
+                     f"moved out from under its own link address")
+
     args.output.write_bytes(image)
     if args.list:
         report(entries)

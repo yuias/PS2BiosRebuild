@@ -116,7 +116,6 @@ ps2AddComponent(reset  SCRIPT reset.ld  SOURCES
     src/boot/reset_ee.cpp
     src/boot/reset_iop.cpp)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.cpp)
-ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
     SOURCES src/iop/sysmem.S)
 ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
@@ -147,18 +146,38 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/thread.cpp
     src/kernel/tables.cpp)
 
+# IOPBOOT is linked at the address its own archive offset gives it, so that
+# address has to be known before it is linked -- but the offset depends only
+# on what is stored before it (RESET, ROMDIR, EXTINFO, ROMVER, RDRAM, KERNEL,
+# IOPBTCONF), never on IOPBOOT's own size, so a pre-pass over the manifest can
+# compute it once those are built. `mkromdir.py --offset-of` is that pre-pass;
+# it needs the *data* of the entries before IOPBOOT and the *extinfo* of every
+# entry (EXTINFO concatenates all of them), which is why the built modules'
+# `.extinfo` files are dependencies here despite the modules themselves coming
+# after IOPBOOT in the archive.
+#
+# ROMVER and the pre-pass both live in their own directory (`cmake/iopboot-base`)
+# rather than here: Ninja orders every plain custom command after every target
+# defined in its *same* directory by default, which is fine everywhere else in
+# this project but is exactly backwards for `iopboot.elf` below, which must
+# link *after* the pre-pass runs -- and the pre-pass itself needs ROMVER's
+# built size, so ROMVER's generation has to leave this directory with it, or
+# the same ordering rule would put it after `iopboot.elf` too. A directory
+# with no targets of its own never triggers that ordering, so `iopboot.elf`
+# can depend on the pre-pass's output without Ninja seeing a cycle.
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")
-add_custom_command(
-    OUTPUT "${PS2_ROMVER}"
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromver.py"
-            --version "${PS2_ROMVER_VERSION}"
-            --region "${PS2_ROMVER_REGION}"
-            --type "${PS2_ROMVER_TYPE}"
-            --date "${PS2_ROMVER_DATE}"
-            -o "${PS2_ROMVER}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromver.py"
-    COMMENT "Generating ROMVER")
+set(PS2_IOPBOOT_BASE 0xBFC00000)
+set(PS2_IOPBOOT_BASE_RSP "${CMAKE_CURRENT_BINARY_DIR}/iopboot_base.rsp")
+add_subdirectory(cmake/iopboot-base)
+
+# The R3000A has neither MIPS III nor the `teq` a division check emits, the
+# same reason `reset_iop.cpp` is pinned below.
+set_source_files_properties(src/boot/iopboot.cpp PROPERTIES
+    COMPILE_OPTIONS "-march=mips1;-mno-check-zero-division")
+ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.cpp)
+target_link_options(iopboot.elf PRIVATE "@${PS2_IOPBOOT_BASE_RSP}")
+set_property(TARGET iopboot.elf APPEND PROPERTY
+    LINK_DEPENDS "${PS2_IOPBOOT_BASE_RSP}")
 
 set(PS2_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/rom.bin")
 add_custom_command(
@@ -166,8 +185,10 @@ add_custom_command(
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" -o "${PS2_IMAGE}" --size ${PS2_IMAGE_SIZE}
+            --check IOPBOOT ${PS2_IOPBOOT_BASE} "${PS2_IOPBOOT_BASE_RSP}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
+            "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf eesync.elf osdsys.elf
     COMMENT "Assembling the ROM archive")

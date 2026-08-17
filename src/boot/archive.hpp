@@ -72,6 +72,20 @@ template <uint32_t N>
     return words[0] == want.low && words[1] == want.high && tail == want.tail;
 }
 
+// As above, but the name is ten bytes a caller assembled at run time rather
+// than one folded into instructions by `packName` -- BOOT-9's boot-list
+// tokens are not known until the archive is read, so there is no literal to
+// pack. Those bytes live in RAM the caller owns, never in the ROM window this
+// scans, so ARC-4's self-reference hazard does not apply to them.
+[[nodiscard]] static bool named(const Entry &entry, const char *want) {
+    for (uint32_t i = 0; i < kNameLength; i++) {
+        if (entry.name[i] != want[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ARC-2's terminator: the first eight bytes of the name and the size, all zero.
 [[nodiscard]] static bool terminator(const Entry &entry) {
     const auto *words = reinterpret_cast<const uint32_t *>(entry.name);
@@ -85,7 +99,12 @@ struct Found {
 
 // BOOT-6a: find a candidate table by its `RESET` first entry, then walk the
 // entries accumulating `align16(size)` to recover each file's offset.
-[[nodiscard]] static Found find(uintptr_t start, uintptr_t end, Name name) {
+//
+// A template so one body serves both a compile-time `Name` and a run-time
+// `const char *` -- `named`'s overload set picks the right comparison for
+// whichever a caller passes.
+template <typename Want>
+[[nodiscard]] static Found find(uintptr_t start, uintptr_t end, Want name) {
     for (uintptr_t at = start; at < end; at += sizeof(Entry)) {
         const auto &first = *reinterpret_cast<const Entry *>(at);
         if (!named(first, packName("RESET")) || (first.size & 15) != 0) {
