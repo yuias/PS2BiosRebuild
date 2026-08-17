@@ -36,6 +36,13 @@ void sysNothing() asm("_sys_nothing");
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
 
+// interrupt.cpp, and the entry in syscall.S the interrupt table points at
+void sysAddIntcHandler() asm("_sys_add_intc_handler");
+void sysRemoveIntcHandler() asm("_sys_remove_intc_handler");
+void sysAddDmacHandler() asm("_sys_add_dmac_handler");
+void sysRemoveDmacHandler() asm("_sys_remove_dmac_handler");
+void interruptEntry() asm("_interrupt_entry");
+
 // thread.cpp
 void sysSetupThread() asm("_sys_setup_thread");
 void sysSetupHeap() asm("_sys_setup_heap");
@@ -118,8 +125,9 @@ Handler syscall_table[256] = {
     sysSetExceptionHandler,                                // 0x0D
     sysSetCommonHandler,                                   // 0x0E
     sysSetInterruptHandler,                                // 0x0F
-    // 0x10
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
+    // 0x10  SYS-12a
+    sysAddIntcHandler, sysRemoveIntcHandler,
+    sysAddDmacHandler, sysRemoveDmacHandler,
     sysEnableIntc,                                         // 0x14
     sysDisableIntc,                                        // 0x15
     sysEnableDmac,                                         // 0x16
@@ -243,9 +251,14 @@ ExceptionTable exception_table = {
 };
 
 // EE-6d: eight entries, read by the interrupt vector and indexed by interrupt
-// number. None is installed yet; the vector returns when it finds a zero.
+// number. IP2 (INTC), IP3 (DMAC) and IP7 (timers) go to the interrupt entry,
+// which reads the controllers itself (SYS-12b); the vector returns when it
+// finds a zero.
 [[gnu::section(".inttable"), gnu::used]]
-Handler interrupt_table[8] = {};
+Handler interrupt_table[8] = {
+    nullptr, nullptr, interruptEntry, interruptEntry,
+    nullptr, nullptr, nullptr, interruptEntry,
+};
 
 // EE-6f: the fourth table the kernel publishes, one stub per CP0 register.
 // Slot 0x63 jumps through it because `mfc0` encodes its register number in the

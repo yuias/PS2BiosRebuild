@@ -101,6 +101,10 @@ uint32_t lowest_ready = kPriorities;             // where the pick starts scanni
 uint16_t free_thread = kNone;                    // free lists, LIFO
 uint16_t free_semaphore = kNone;
 bool tables_ready = false;
+// SYS-12c: set when a thread better than the running one is made ready --
+// from an interrupt handler's direct-form call, typically -- and read by the
+// interrupt exit, which switches if it finds it set.
+bool reschedule_requested = false;
 
 [[nodiscard]] ThreadRecord &current() {
     return thread_table[current_thread];
@@ -188,6 +192,9 @@ void makeReady(uint16_t id) {
     if (priority < lowest_ready) {
         lowest_ready = priority;
     }
+    if (static_cast<int32_t>(priority) < current().current_priority) {
+        reschedule_requested = true;
+    }
 }
 
 void takeOffReadyQueue(uint16_t id) {
@@ -234,14 +241,20 @@ void copyWords(uint32_t *to, const uint32_t *from, uint32_t count) {
     }
 }
 
-// Park the caller: its registers into a frame pushed on its own stack, its
-// resume address from the EPC the dispatcher advanced (EE-7c).
-void saveCaller() {
+// Park the caller: its registers -- from `block`, the dispatcher's or an
+// interrupt frame -- into a frame pushed on its own stack, and its resume
+// address: from a syscall the EPC the dispatcher advanced (EE-7c), from an
+// interrupt the interrupted instruction.
+void parkCurrent(const uint32_t *block, uint32_t resume_pc) {
     ThreadRecord &thread = current();
-    thread.resume_pc = readEpc();
-    const uint32_t frame = _syscall_context[kSlotSp / 4] - kFramePush;
-    copyWords(reinterpret_cast<uint32_t *>(frame), _syscall_context, kBlockWords);
+    thread.resume_pc = resume_pc;
+    const uint32_t frame = block[kSlotSp / 4] - kFramePush;
+    copyWords(reinterpret_cast<uint32_t *>(frame), block, kBlockWords);
     thread.context = frame;
+}
+
+void saveCaller() {
+    parkCurrent(_syscall_context, readEpc());
 }
 
 // SYS-10b: the head of the lowest-numbered non-empty queue. Nothing ready is
@@ -352,6 +365,30 @@ void detach(uint16_t id) {
 }  // namespace
 
 extern "C" {
+
+// SYS-12c, for interrupt.cpp: the entry clears the request before handlers
+// run; the exit asks. `frame` is the interrupt frame -- the block's shape,
+// EPC in slot 0 -- and if a switch is due it is rewritten with the picked
+// thread's registers and resume address, which the exit then restores.
+void clearRescheduleRequest() {
+    reschedule_requested = false;
+}
+
+bool interruptReschedule(uint32_t *frame) {
+    if (!reschedule_requested || !tables_ready) {
+        return false;
+    }
+    reschedule_requested = false;
+    parkCurrent(frame, frame[0]);
+    makeReady(static_cast<uint16_t>(current_thread));
+    const uint16_t next = pickNext();
+    ThreadRecord &thread = thread_table[next];
+    current_thread = next;
+    thread.state = Run;
+    copyWords(frame, reinterpret_cast<const uint32_t *>(thread.context), kBlockWords);
+    frame[0] = thread.resume_pc;
+    return true;
+}
 
 // EE-2b / EE-4a: RDRAM's return, kept by the kernel entry (entry.cpp).
 uint32_t memory_size;

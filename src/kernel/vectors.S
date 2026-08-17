@@ -70,20 +70,37 @@ _vector_debug:
     dispatch_exception
 
 // 0x200: interrupt. EE-6d: indexed by interrupt number into its own table.
+// The number is the highest pending and enabled IP bit -- Cause and Status
+// agree on where they keep them -- which is what the reference's leading-zero
+// count amounts to (docs/analysis/35). IP2 is the INTC, IP3 the DMAC and IP7
+// the timers; the table's entries for them are the interrupt entry of
+// syscall.S, which reads the controllers itself.
     .org 0x200
 _vector_interrupt:
     lui   $k1, 0x8001
     sd    $t9, SAVED_T9($k1)
     mfc0  $t9, $13                      // Cause
-    srl   $t9, $t9, 10
-    andi  $t9, $t9, 0x1C                // interrupt number, scaled by 4
-    addu  $k0, $k1, $t9
+    mfc0  $k0, $12                      // Status
+    and   $t9, $t9, $k0
+    andi  $t9, $t9, 0xFF00              // IP7..IP0
+    beq   $t9, $zero, _vector_interrupt_none
+    addiu $k0, $zero, 7 * 4             // scan from IP7 down
+_vector_interrupt_scan:
+    andi  $k1, $t9, 0x8000
+    bne   $k1, $zero, _vector_interrupt_found
+    sll   $t9, $t9, 1                   // next lower bit into 0x8000
+    bne   $k0, $zero, _vector_interrupt_scan
+    addiu $k0, $k0, -4
+_vector_interrupt_found:
+    lui   $k1, 0x8001
+    addu  $k0, $k1, $k0
     lw    $k0, INTERRUPT_TABLE($k0)
     beq   $k0, $zero, _vector_interrupt_none
     nop
     jr    $k0
     ld    $t9, SAVED_T9($k1)
 _vector_interrupt_none:
+    lui   $k1, 0x8001
     ld    $t9, SAVED_T9($k1)
     sync_p
     eret

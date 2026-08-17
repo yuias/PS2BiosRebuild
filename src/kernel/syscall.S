@@ -146,6 +146,75 @@ _undefined_message:
 _newline:
     .asciz "\n"
 
+// The interrupt entry: interrupt_table's INTC, DMAC and timer entries point
+// here (EE-6d, docs/spec/05 SYS-12b). Every register goes into a frame of the
+// syscall block's shape -- 32 slots of 16 bytes -- pushed on the interrupt
+// stack, with EPC in slot 0 ($zero's, which nothing needs) and Status in slot
+// 26 ($k0's); the frame is what interrupt.cpp reads and what the exit restores
+// from. Handlers run with EXL clear, so the syscalls they make (the direct
+// forms) get an EPC of their own, and with EIE clear, so nothing nests unless
+// a handler asks with `ei` -- and if one does, the push makes that safe. A
+// reschedule on the way out (SYS-12c) is done by rewriting this frame with the
+// picked thread's, which the same exit then restores.
+    .set FRAME_BYTES, 0x200
+    .set STATUS_EXL,  0x02
+    .set STATUS_EIE,  0x10000
+
+    .globl _interrupt_entry
+_interrupt_entry:
+    // The frame goes below the interrupt stack's top, or -- when this
+    // interrupt has nested inside a handler that enabled interrupts -- below
+    // that handler's own stack pointer, which is on the same stack.
+    la    $k1, _interrupt_depth
+    lw    $k0, 0($k1)
+    bne   $k0, $zero, _interrupt_nested
+    addiu $k0, $k0, 1
+    sw    $k0, 0($k1)
+    la    $k0, _interrupt_stack_top
+    b     _interrupt_save
+    addiu $k0, $k0, -FRAME_BYTES
+_interrupt_nested:
+    sw    $k0, 0($k1)
+    addiu $k0, $sp, -FRAME_BYTES
+    srl   $k0, $k0, 4
+    sll   $k0, $k0, 4                   // quadword-aligned for sq
+_interrupt_save:
+    .irp reg, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
+    sq_   \reg, \reg * 16, CONTEXT_BASE
+    .endr
+    mfc0  $k1, $14                      // EPC: the interrupted instruction
+    sw    $k1, 0($k0)
+    mfc0  $k1, $12                      // Status, to hand back as it was
+    sw    $k1, 26 * 16($k0)
+    lui   $at, (STATUS_EIE >> 16) & 0xFFFF
+    ori   $at, $at, STATUS_EXL
+    nor   $at, $at, $zero
+    and   $k1, $k1, $at                 // EIE and EXL clear for the handlers
+    mtc0  $k1, $12
+    sync_p
+    move  $sp, $k0                      // the handler's stack starts below the frame
+    addiu $sp, $sp, -32
+    jal   interruptDispatch             // interrupt.cpp: (frame) -> void
+    move  $a0, $k0
+    // Back with the frame possibly rewritten (SYS-12c). Restore Status with
+    // EXL set so that `eret` may clear it, then EPC and every register.
+    addiu $k0, $sp, 32                  // the frame again
+    la    $k1, _interrupt_depth
+    lw    $at, 0($k1)
+    addiu $at, $at, -1
+    sw    $at, 0($k1)
+    lw    $at, 26 * 16($k0)
+    ori   $at, $at, STATUS_EXL
+    mtc0  $at, $12
+    lw    $at, 0($k0)
+    mtc0  $at, $14
+    sync_p
+    .irp reg, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
+    lq_   \reg, \reg * 16, CONTEXT_BASE
+    .endr
+    sync_p
+    eret
+
 // SYS-10i: where a thread function that returns lands. A thread's frame is
 // primed with this as its $ra, so falling off the end of the function exits
 // the thread the way slot 0x23 does.
@@ -157,6 +226,13 @@ _thread_root:
     nop
 
     .section .bss, "aw", @nobits
+    .align 4
+_interrupt_stack:
+    .space 0x2000                       // frames and handler stacks, downwards
+_interrupt_stack_top:
+    .globl _interrupt_depth
+_interrupt_depth:
+    .word 0                             // how many interrupts are being handled
     .align 4
     .globl _syscall_context
 _syscall_context:

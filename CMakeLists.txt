@@ -144,6 +144,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/program.cpp
     src/kernel/cache.cpp
     src/kernel/thread.cpp
+    src/kernel/interrupt.cpp
     src/kernel/tables.cpp)
 
 # IOPBOOT is linked at the address its own archive offset gives it, so that
