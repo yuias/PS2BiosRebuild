@@ -117,9 +117,9 @@ ps2AddComponent(reset  SCRIPT reset.ld  SOURCES
     src/boot/reset_iop.cpp)
 ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.cpp)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
-    SOURCES src/iop/sysmem.S)
+    SOURCES src/iop/sysmem.cpp)
 ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
-    SOURCES src/iop/loadcore.S)
+    SOURCES src/iop/loadcore.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 

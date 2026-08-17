@@ -138,7 +138,7 @@ reference and the reason for it.
 | M1 test program (`tests/m1/`) | **stages 1–2 pass on both emulators** — main, arguments, a semaphore, a second thread; stops in `SifInitRpc` polling `0x7A` for an IOP RPC service |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
-| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, and the two IOP modules not yet rewritten (`SYSMEM`, `LOADCORE`); `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits, and `IOPBOOT` is compiled since the same day, once its archive offset was knowable before it is built (`docs/implementation.md`) |
+| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, and the exact instruction words IRX-8 specifies for an import stub; `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits, `IOPBOOT` is compiled since the same day, once its archive offset was knowable before it is built, and `SYSMEM`/`LOADCORE` followed once IRX-8's stub words could be kept as a small top-level `asm` block (`docs/implementation.md`) |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis
