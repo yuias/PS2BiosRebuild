@@ -316,6 +316,106 @@ not refused.
 dequeued and made ready, the entry is marked free and pushed on the free list.
 Deleting an unallocated id returns `-1`.
 
+## SYS-10: Threads and the scheduler
+
+Derived from `docs/analysis/33-ee-threads.md`, with `17` (the skeleton) and
+`30` (the record). Slots `0x20`–`0x3A`; the reschedule pairs of `17` apply.
+
+**SYS-10a — records and identity.** A thread id is its index in a table of
+**256** records; id 0 is the thread the kernel boots on. `0x2F` returns the
+current id. A record carries: state, resume PC, context (the address of its
+saved frame), `$gp`, initial and current priority, wait type, wait id, a
+wakeup count, attribute and option, the entry point, `argc`/arguments,
+stack base and size, root, and heap end (SYS-8). States: `0` free, `1`
+running, `2` ready, `4` waiting, `8` suspended, `0xC` waiting and suspended,
+`0x10` dormant. Ids are handed out from a free list; a garbage creation block
+is not validated beyond the free list having an entry.
+
+**SYS-10b — priorities and the ready queues.** Priorities `0..127` are
+settable, lower is better; there is one FIFO ready queue per priority and one
+more at `128`, where the boot thread sits (`0x2A(0, 5)` answers its previous
+priority, **128**). The scheduler picks the head of the lowest-numbered
+non-empty queue, keeps a cached lowest-ready priority, and marks the picked
+thread running. A thread made ready is appended to its queue.
+
+**SYS-10c — the switch (EE-7g made concrete).** A rescheduling slot saves the
+caller's registers into the caller's frame — EE-7e's shape, 16 bytes a
+register, `$gp`/`$sp`/`$fp`/`$ra` at `+0x1C0`/`+0x1D0`/`+0x1E0`/`+0x1F0`,
+`$v0` at `+0x20`, `$a0` at `+0x40` — records the post-syscall EPC as its
+resume PC, marks it ready (or waiting), picks the next thread, restores that
+thread's frame and `eret`s to its resume PC. The wrappers of `0x25`, `0x29`,
+`0x2B`, `0x2D`, `0x33`, `0x39`, `0x41`, `0x42` switch on **every** success —
+they check only the operation's `-1` — and rely on the pick to reselect the
+caller when it is still best; `0x23`, `0x24` never come back to their caller;
+`0x32` and `0x44` decide inside their operation. A thread woken by a forced
+release (a delete or a `0x2D`) resumes with **`$v0 = -1`** in its blocking
+call. When nothing is ready the kernel stops with a message; that path is
+not specified further.
+
+**SYS-10d — creating and starting.** `0x20(block) -> id | -1`: pops the free
+list (`-1` when empty); reads `func` (`+0x04`), `stack` (`+0x08`),
+`stack_size` (`+0x0C`), `gp` (`+0x10`), `initial_priority` (`+0x14`,
+halfword); state dormant; primes a frame at `top - 0x2A0` with `$gp`,
+`$sp = $fp = top - 0x20`, and `$ra` = a kernel address a returning thread
+function lands on (SYS-10i). No priority check. `0x22(id, arg) -> id | -1`:
+`id` in `1..255`, not the caller, dormant, else `-1`; writes `arg` into the
+frame's `$a0` slot and the record, makes the thread ready, and switches.
+
+**SYS-10e — ending.** `0x23` (exit) and `0x24` (exit and delete) do not
+return: the caller's record is reset to dormant (`0x23`: resume PC back to
+the entry, priority back to initial, frame re-primed — startable again with
+`0x22`) or freed (`0x24`), and the next thread is picked. `0x21(id) -> id |
+-1`: `id` in `1..255`, not the caller, dormant, else `-1`; frees the record.
+`0x25`/`0x26 (id) -> id | -1`: `id` in `1..255` else `-1`; free or dormant
+`-1`; otherwise the thread is taken out of whatever it is in — the ready
+queue, a wait list — and reset to dormant.
+
+**SYS-10f — priority and rotation.** `0x29`/`0x2A (id, priority) -> previous
+priority | -1`: id 0 is the caller (the fourth register the SDK passes is not
+consulted); `id` below 256, priority `0..127`, thread neither free nor
+dormant, else `-1`; a ready thread is moved to its new queue. `0x2B`/`0x2C
+(priority) -> priority | -1`: below 128 else `-1`; rotates that queue, head to
+tail; an empty queue is a no-op that still yields.
+
+**SYS-10g — sleeping and waking.** `0x32() ->`: with a positive wakeup count,
+decrement it and return the current id without sleeping; otherwise the caller
+waits (wait type 1) until `0x33` wakes it, then returns. `0x33`/`0x34 (id) ->
+id | -1`: `id` below 256 else `-1`; a thread sleeping (waiting, type 1) is
+made ready; a thread that is ready, or waiting on something else, or
+suspended, has its wakeup count **incremented** and `id` returned; a running,
+free or dormant thread returns `-1`. `0x35`/`0x36 (id) -> previous count |
+-1`: resets the wakeup count, no state check beyond the range.
+
+**SYS-10h — suspending and releasing.** `0x37`/`0x38 (id) -> id | -1`: `id`
+in `1..255`; running or ready → suspended (dequeued); waiting → waiting and
+suspended (kept in its wait list); anything else `-1`. `0x39`/`0x3A (id) ->
+id | -1`: `id` in `1..255`, not the caller; suspended → ready; waiting and
+suspended → waiting; else `-1`. `0x2D`/`0x2E (id) -> id | -1`: `id` in
+`1..255`; a waiting thread is released from its wait object and made ready,
+resuming with `-1` (SYS-10c); waiting and suspended → suspended; other states
+are a no-op returning `id`; free `-1`.
+
+**SYS-10i — the root of a thread.** A thread function that returns lands, via
+the `$ra` its frame was primed with, in kernel code that exits it as `0x23`
+does. The reference computes that address from a kernel table; what matters
+is the effect: a returning thread function does not fall off into memory.
+
+**SYS-10j — status.** `0x30`/`0x31 (id, out) -> state | -1`: id 0 is the
+caller; `id` below 256 else `-1`; with `out` null only the state is returned;
+otherwise the SDK's twelve-word status block is filled from the record. The
+boot thread reports **ready** (2), not running, on the reference.
+
+## SYS-11: The table is indexed without a bound
+
+`docs/analysis/33`: the dispatcher computes `table[number]` for any number
+and slot `0x74` stores at `table[number]` for any number; EE-8a's 125 slots
+are how many the reference *fills*, not how many can be reached. The SDK's
+runtime installs handlers at `0x7F` and `0x82` through `0x74` and calls
+them. A rebuild must therefore keep a table that `0x74` can write and the
+dispatcher can read at least that far — ours holds 256 slots, `0x7D` and up
+initially the reporter of EE-8d — and must not corrupt anything when `0x74`
+is given such a number.
+
 ## Verification
 
 `tools/eeabi.py --check` re-derives every signature from a `KERNEL` image by
