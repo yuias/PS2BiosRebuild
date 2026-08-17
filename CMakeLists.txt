@@ -34,6 +34,18 @@ set(PS2_IMAGE_SIZE 0x400000)             # spec/01 ARC-1
 set(PS2_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(PS2_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 set(PS2_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/manifest.txt")
+# The program the boot ends by running is our OSDSYS unless a test program is
+# named instead: an EE ELF built elsewhere (docs/project-state.md §6, M1) is
+# stored in the OSDSYS slot so the boot places and enters it with no further
+# machinery. The ELF is an input like the reference images and is not committed.
+set(PS2_TEST_PROGRAM "" CACHE FILEPATH
+    "EE ELF to store as OSDSYS in place of our own (empty: build/osdsys.elf)")
+if(PS2_TEST_PROGRAM)
+    get_filename_component(PS2_OSDSYS "${PS2_TEST_PROGRAM}" ABSOLUTE)
+    message(STATUS "OSDSYS slot: ${PS2_OSDSYS}")
+else()
+    set(PS2_OSDSYS "${CMAKE_CURRENT_BINARY_DIR}/osdsys.elf")
+endif()
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/rom/manifest.txt.in"
                "${PS2_MANIFEST}" @ONLY)
 
@@ -155,7 +167,7 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" -o "${PS2_IMAGE}" --size ${PS2_IMAGE_SIZE}
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
-            "${PS2_MANIFEST}" "${PS2_ROMVER}"
+            "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf eesync.elf osdsys.elf
     COMMENT "Assembling the ROM archive")
