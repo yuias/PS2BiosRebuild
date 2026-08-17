@@ -654,7 +654,8 @@ STUB_ADDRESS = 0x80700000
 STUB_RETURN = 0x80700100
 
 BOOT_STEPS = 3_000_000           # reset vector to kernel entry costs ~236k
-KERNEL_STEPS = 1_500_000         # kernel entry to its wait for the IOP
+KERNEL_STEPS = 20_000_000        # kernel entry to its wait for the IOP: it clears
+                                 # user memory to the top of RAM on the way
 SYSCALL_STEPS = 400_000
 
 # `spec/04` EE-7e is a claim about *width*: the registers are 128 bits and the
@@ -698,9 +699,10 @@ class Machine:
         The one thing not executed is `RDRAM` itself. It talks a serial
         protocol to the memory controller that no specification requirement
         concerns, and this simulator has its RAM already; the call is observed
-        (EE-2) and then returned from as though it had succeeded. Everything
-        downstream -- EE-3's search and copy, the kernel, the syscalls -- is
-        really executed.
+        (EE-2) and then returned from with what it would have found -- the
+        size of that RAM (EE-2b), which the kernel keeps as the top of memory
+        (SYS-8a). Everything downstream -- EE-3's search and copy, the kernel,
+        the syscalls -- is really executed.
         """
         cpu = self.cpu
         while cpu.steps < BOOT_STEPS and cpu.stop_reason is None:
@@ -710,7 +712,7 @@ class Machine:
             if cpu.pc == self.rdram_entry:
                 self.rdram_called = True
                 self.stack_at_rdram = cpu.get(29) & MASK32
-                cpu.set(2, 0)
+                cpu.set(2, RAM_SIZE)                  # EE-2b
                 cpu.pc = cpu.get(31) & MASK32
                 cpu.next_pc = (cpu.pc + 4) & MASK32
                 cpu.branched = False

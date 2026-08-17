@@ -611,6 +611,27 @@ def report(console: Console) -> None:
             print(f"   {line}")
 
 
+def reportSyscalls(console: Console) -> None:
+    """`--syscalls`: every EE syscall in the order issued, repeats folded.
+
+    The number is what the caller put in `$v1` (negative for the interrupt-
+    context forms, EE-7b), and the address is that of the `syscall` itself --
+    which for a program built with a toolchain is enough to name the stub.
+    """
+    print("\nEE syscalls, in order (number @ caller), repeats folded:")
+    calls = console.ee.cpu.syscalls
+    index = 0
+    while index < len(calls):
+        number, pc = calls[index]
+        count = 1
+        while index + count < len(calls) and calls[index + count] == (number, pc):
+            count += 1
+        times = f"  x{count}" if count > 1 else ""
+        print(f"   {number:#5x} @ {pc:#010x}{times}")
+        index += count
+    print(f"   {len(calls)} in all")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -623,6 +644,8 @@ def main() -> int:
     parser.add_argument("--no-bridge", action="store_true",
                         help="give each CPU its own copy of the SIF registers, "
                              "which is what they had before being joined")
+    parser.add_argument("--syscalls", action="store_true",
+                        help="list every EE syscall in the order it was issued")
     arguments = parser.parse_args()
 
     console = Console(arguments.image.read_bytes(), bridge=not arguments.no_bridge)
@@ -641,6 +664,8 @@ def main() -> int:
         return 0
 
     report(console)
+    if arguments.syscalls:
+        reportSyscalls(console)
     if arguments.traffic:
         if console.dma.tags:
             print("\nchain tags walked (BOOT-11b):")
