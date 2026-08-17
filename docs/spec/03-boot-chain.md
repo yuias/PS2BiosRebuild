@@ -346,6 +346,44 @@ anything and read `CHCR.STR` going clear as the transfer having happened; a
 channel that reported itself idle with nothing moved would be indistinguishable
 from a completed transfer of zero bytes.
 
+## BOOT-12: The SIF command layer
+
+Derived from `docs/analysis/34-sif-command-protocol.md`. On top of BOOT-11's
+framing the two CPUs exchange **commands**: a packet is a sixteen-byte header
+followed by up to 96 bytes of body, and a program's SDK-side library speaks
+this protocol to the IOP's `SIFCMD`, so an image must speak it too.
+
+**BOOT-12a — the header.** `{ psize:8 | dsize:24, dest, cid, opt }`: `psize`
+the packet's size in bytes (header included, so 16..112), `dsize` the size of
+an out-of-band payload the sender delivers separately to `dest`, `cid` the
+command id, `opt` the sender's. A `cid` with bit 31 set is a **system**
+command; the rest are the receiver's registered handlers.
+
+**BOOT-12b — flags and addresses at boot.** After BOOT-10, the IOP publishes
+in `SMCOM` the address of its command receive buffer and raises `0x20000`
+(the SDK's `SIF_STAT_CMDINIT`) in `SMFLG` when the command layer is ready to
+receive; `0x10000` (`SIF_STAT_SIFINIT`) is BOOT-10's own bit. The EE's client
+waits for `0x20000`, reads `SMCOM`, keeps both in its software registers
+(`spec/05` SYS-13a) and sends its packets to that address.
+
+**BOOT-12c — INIT_CMD.** The client's first command is `cid 0x80000002`,
+`psize 0x14`: the header and one word, the address of the **EE's** receive
+buffer. The IOP keeps that address as where every reply and every command of
+its own goes, and answers with **SET_SREG**: `cid 0x80000001`, `psize 0x18`,
+body `{ index 0, value 1 }`, delivered as a BOOT-11c/d packet to that address
+— which raises the EE's DMAC channel-5 interrupt, whose handler (SYS-12b)
+dispatches the packet to the client's SET_SREG handler and so completes
+`SifInitRpc`. Without that reply the client spins forever.
+
+**BOOT-12d — RPC.** `cid 0x80000009` binds a client to a server by id,
+`0x8000000A` calls (function number, arguments as the out-of-band payload,
+result buffer and size), `0x8000000C` reads server data; each is answered
+with `cid 0x80000008` (RPC_END) whose body names the request it answers. A
+server is a registered id with a dispatch function; the SDK's module loader
+binds server `0x80000006`. The bodies are as `docs/analysis/34` §3 recovers
+them; what it leaves unresolved (the loader's function numbers and reply) is
+recovered when that server is built.
+
 ## Verification
 
 Everything in BOOT-1, BOOT-3, BOOT-5 and BOOT-6 is a statement about specific

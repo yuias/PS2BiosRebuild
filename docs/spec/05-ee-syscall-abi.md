@@ -416,6 +416,73 @@ dispatcher can read at least that far — ours holds 256 slots, `0x7D` and up
 initially the reporter of EE-8d — and must not corrupt anything when `0x74`
 is given such a number.
 
+## SYS-12: Interrupt handlers and their delivery
+
+Derived from `docs/analysis/35-ee-interrupts-and-sif-slots.md`, with `16`.
+
+**SYS-12a — installing.** `0x10 (cause, handler, next, arg) -> id | -1`
+accepts INTC causes `0` and `2..14` — `1` is refused — and `0x12 (channel,
+handler, next, arg) -> id | -1` accepts DMAC channels `0..15`. Both draw ids
+from one counter starting at 1; an id is the only handle a caller has, and
+`0x11 (cause, id)` / `0x13 (channel, id) -> id | -1` remove by it, refusing an
+id that is not installed on that cause. A new handler with `next = -1` goes
+to the head of its cause's list; the installer's `$gp` is kept with it.
+
+**SYS-12b — delivery.** On an INTC interrupt the kernel reads
+`INTC_STAT & INTC_MASK`, takes the lowest pending source, **acknowledges it
+in `INTC_STAT` before any handler runs**, and calls each handler installed
+for it, youngest first, with the cause number in `$a0` (and the installed
+argument in `$a1`; the reference passes only `$a0` at the dispatch it was
+read at). DMAC likewise from `D_STAT & D_MASK`, per channel, acknowledged
+in `D_STAT` first. Return values are not consulted by the dispatch. Handlers
+run in kernel mode with `EXL` clear and interrupts masked by `EIE`, so a
+handler may make syscalls — the SDK's SIF handler calls the direct forms and
+`0x78` from inside — and may re-enable interrupts with `ei` at its own risk.
+
+**SYS-12c — rescheduling on the way out.** A handler that makes a thread
+ready — through a direct-form thread or semaphore slot — sets a flag the
+kernel clears before calling handlers and reads after; if it is set on the
+way out, the interrupted thread is parked as SYS-10c parks a caller (its
+resume address the interrupted instruction) and the pick runs. This is how
+an interrupt wakes a higher-priority thread; without it, a woken thread waits
+for the interrupted one to yield.
+
+**SYS-12d — `EIE`.** The R5900's `ei`/`di` set and clear `Status` bit 16,
+the master enable the SDK's `EIntr`/`DIntr` use; a program enables
+interrupts itself, after its runtime is up. The kernel leaves it as the
+program set it when it returns from an interrupt.
+
+## SYS-13: The SIF slots
+
+Derived from `docs/analysis/35` (§3) and `24`; refines SYS-7d.
+
+**SYS-13a — registers, `0x79 (reg, value)` and `0x7A (reg)`.** Hardware
+registers by number: `1` MSCOM, `2` SMCOM (read only; a write returns 0),
+`3` MSFLG, `4` SMFLG — a write returns the value written, a read the
+register. A number with bit 31 set (sign-extended, as `lui`/`ori` produce)
+names a **software register**, index `reg & 0x7FFFFFFF` below 32, stored in
+the kernel: `0x79` stores and `0x7A` reads it back; an index of 32 or more
+reads 0. The SDK keeps its receive addresses and its "RPC initialised" mark
+in software registers 0..2.
+
+**SYS-13b — `0x78`.** Arms channel 5 (`0x1000C000`, SIF0, IOP→EE) as a
+destination chain: `QWC` 0, `CHCR = 0x184`; returns the control register
+read back. `0x6B` is the same without the start.
+
+**SYS-13c — `0x77 (list, count) -> word`.** Each list entry is
+`{src, dest, size, attr}`, sixteen bytes. For each, the kernel puts on the
+wire what BOOT-11a describes: a header quadword naming `dest` in IOP memory
+with the transfer's flags, then `size` bytes from `src`; the last entry ends
+the chain. `attr` bit `0x02` asks the IOP for an interrupt on arrival, and
+is carried in the header's flag bits. Channel 6 (`0x1000C400`, SIF1) is
+restarted with `CHCR = 0x184` on the built chain. The return is a non-zero
+word describing the transfer, which the caller hands to `0x76`; the reference
+packs list positions into it, and 0 means the list was refused.
+
+**SYS-13d — `0x76 (word) -> -1 | 0`.** `-1` once channel 6 has stopped —
+the transfer is complete — and a non-negative value while it is still
+running. The SDK's `SifDmaStat` loop waits for the `-1`.
+
 ## Verification
 
 `tools/eeabi.py --check` re-derives every signature from a `KERNEL` image by
