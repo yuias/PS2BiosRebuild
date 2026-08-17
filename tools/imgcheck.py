@@ -370,6 +370,29 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
     require(f"{UNDEFINED_SLOT:02x}" in reported, "EE-8d",
             f"an unimplemented slot reported {reported!r}, which does not name "
             f"the number")
+
+    # SYS-8, called: the arithmetic of the main thread's setup, on the values
+    # the reference was measured with (docs/analysis/30). The simulator's RDRAM
+    # answers with its RAM size (EE-2b), so -1 has a top of memory to measure
+    # from here too.
+    stack, size, args = 0x300000, 0x1000, 0x310000
+    machine.bus.write(args, 4, 0xDEADBEEF)   # so a written argc is telling
+    require(machine.syscall(0x3C, 0, stack, size, args)
+            == stack + size - 0x2A0, "SYS-8a",
+            "slot 0x3C did not answer top - 0x2a0 for an explicit stack")
+    require(machine.syscall(0x3C, 0, -1 & eesim.MASK64, 0x20000, args)
+            == (eesim.RAM_SIZE - 0x1000 - 0x2A0) & eesim.MASK32, "SYS-8a",
+            "slot 0x3C did not put a stack of -1 at the top of memory")
+    require(machine.bus.read(args, 4) == 0, "SYS-8b",
+            "slot 0x3C did not write argc into the caller's block")
+    machine.syscall(0x3C, 0, stack, size, args)
+    require(machine.syscall(0x3D, 0x130000, 0x10000) == 0x140000, "SYS-8c",
+            "slot 0x3D did not answer start + size")
+    require(machine.syscall(0x3E) == 0x140000, "SYS-8c",
+            "slot 0x3E did not answer what 0x3D stored")
+    require(machine.syscall(0x3D, 0x130000, -1 & eesim.MASK64) == stack,
+            "SYS-8c", "slot 0x3D with a negative size did not answer the "
+                      "stack base 0x3C recorded")
     return problems
 
 

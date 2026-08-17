@@ -41,8 +41,17 @@ void print(const char *text) {
 
 extern "C" {
 
-// `osdsys.S` points `$sp` at the top of this before calling `osdMain`.
+// `osdsys.S` hands these to slot 0x3C: the stack this program runs on, and the
+// block its arguments come back in (spec/05 SYS-8b: argc, sixteen argv words,
+// then the strings).
 alignas(16) uint8_t osd_stack[0x1000];
+alignas(16) uint32_t osd_args[(4 + 16 * 4 + 256) / 4];
+
+// The root 0x3C is given: where a `main` that returned would go.
+[[noreturn]] void osdHalt() {
+    for (;;) {
+    }
+}
 
 [[noreturn]] void osdMain(int argc, const char *const *argv) {
     print("# OSDSYS: loaded from the archive and running. Argument: ");
@@ -52,8 +61,7 @@ alignas(16) uint8_t osd_stack[0x1000];
         print(argv[0]);
         print("\n");
     }
-    for (;;) {
-    }
+    osdHalt();
 }
 
 }  // extern "C"

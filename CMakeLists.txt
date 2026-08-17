@@ -115,7 +115,7 @@ ps2AddComponent(reset  SCRIPT reset.ld  SOURCES
     src/boot/reset.S
     src/boot/reset_ee.cpp
     src/boot/reset_iop.cpp)
-ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.S)
+ps2AddComponent(rdram  SCRIPT rdram.ld  SOURCES src/boot/rdram.cpp)
 ps2AddComponent(iopboot SCRIPT iopboot.ld SOURCES src/boot/iopboot.S)
 ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
     SOURCES src/iop/sysmem.S)
@@ -144,6 +144,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/sif.cpp
     src/kernel/program.cpp
     src/kernel/cache.cpp
+    src/kernel/thread.cpp
     src/kernel/tables.cpp)
 
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")

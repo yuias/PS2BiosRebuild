@@ -36,6 +36,11 @@ void sysNothing() asm("_sys_nothing");
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
 
+// thread.cpp
+void sysSetupThread() asm("_sys_setup_thread");
+void sysSetupHeap() asm("_sys_setup_heap");
+void sysEndOfHeap() asm("_sys_end_of_heap");
+
 // cache.S
 void sysReadCop0() asm("_sys_read_cop0");
 void cop0Read0() asm("_cop0_read_0");
@@ -94,22 +99,23 @@ Handler syscall_table[125] = {
     sysDisableDmac,                                        // 0x1D  = 0x17
     sysUndefined, sysUndefined,
     // 0x20 .. 0x5F
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x20
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x24
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x28
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x2c
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x30
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x34
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x38
+    sysSetupThread, sysSetupHeap, sysEndOfHeap,           // 0x3C..0x3E  SYS-8
+    sysUndefined,                                          // 0x3F  retired
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x40
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x44
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x48
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x4c
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x50
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x54
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x58
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x5c
     // 0x60
     sysSetCacheModeUncached,                               // 0x60  EE-8e
     sysEnableCacheUncached,                                // 0x61  EE-8e

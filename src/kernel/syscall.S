@@ -72,6 +72,11 @@ _syscall_positive:
     sync_p
 
     la    $sp, _syscall_stack_top       // EE-7d
+    // SYS-1b: one slot (0x3C) takes a fifth argument, in $t0. A compiled
+    // handler's ABI looks for a fifth argument at 16($sp), so give every
+    // handler a frame with $t0 there and it can declare the argument or not.
+    addiu $sp, $sp, -32
+    sw    $t0, 16($sp)
 
     sltiu $k0, $v1, SYSCALL_COUNT
     beq   $k0, $zero, _syscall_out_of_range

@@ -63,6 +63,9 @@ uint32_t sifHandshake();
 void *sifExchange(const char *name, uint32_t verb, void *destination,
                   uint32_t offset, uint32_t length);
 
+// thread.cpp
+extern uint32_t memory_size;
+
 // program.cpp -- EE-9c. It does not return when it succeeds, because the
 // program it loads replaces this one; when the archive has nothing to load it
 // comes back with -1, which is why it is not declared `[[noreturn]]`.
@@ -104,9 +107,9 @@ void printHex32(uint32_t value) {
 }
 
 [[noreturn]] void kernelMain() {
-    // Nothing consumes the boot's result yet; reading it where the
-    // specification says it is keeps the dependency recorded in code.
-    [[maybe_unused]] const uint32_t boot_result = readWord(kBootResult);
+    // EE-4a: the boot's result is RDRAM's return, the size of main memory
+    // (EE-2b); SYS-8a measures the top of memory from it.
+    memory_size = readWord(kBootResult);
 
     print("# PS2BiosRebuild EE kernel: entered at 0x80001000.\n");
 

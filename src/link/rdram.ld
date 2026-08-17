@@ -4,6 +4,7 @@ ENTRY(_rdram)
 SECTIONS
 {
     . = 0;
-    .text : { *(.text) }
-    /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) }
+    .text : { *(.text .text.*) }
+    /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.comment) *(.pdr)
+                  *(.mdebug*) *(.gnu.attributes) *(.llvm_addrsig) }
 }

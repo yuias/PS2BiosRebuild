@@ -87,6 +87,9 @@ int sysLoadProgram(const char *path, int argc, char **argv)
 int sysLoadOsd(int argc, char **argv) asm("_sys_load_osd");
 int bootDefault();
 
+// thread.cpp: the record 0x3C hands the arguments over from (SYS-8d).
+void setProgramArguments(uint32_t argc, const char *packed);
+
 alignas(16) uint32_t sif_reply[4];
 alignas(16) uint8_t staging[kHeaderBytes];   // a file's ELF and program headers
 alignas(16) uint8_t bounce[kWindow];         // a window bound for an unaligned address
@@ -158,7 +161,42 @@ void fetchSegment(const char *name, uint8_t *to, uint32_t offset,
     return elf.entry;
 }
 
-using Entry = void (*)(int argc, char **argv);
+// SYS-8d: the strings a program's 0x3C call hands over, packed with a NUL
+// after each. The reference keeps them in a kernel buffer too.
+constexpr uint32_t kArgumentBytes = 256;
+char argument_strings[kArgumentBytes];
+
+// Pack argv into the kernel's own buffer and leave it in the thread record.
+// The caller's strings may be anywhere -- the reference copies rather than
+// points -- and a list that does not fit is cut at the last string that does.
+void storeArguments(int argc, char *const *argv) {
+    uint32_t used = 0;
+    uint32_t stored = 0;
+    for (int k = 0; k < argc; k++) {
+        const char *at = argv[k];
+        uint32_t length = 1;
+        while (at[length - 1] != '\0') {
+            length++;
+        }
+        if (used + length > kArgumentBytes) {
+            break;
+        }
+        for (uint32_t i = 0; i < length; i++) {
+            argument_strings[used + i] = at[i];
+        }
+        used += length;
+        stored++;
+    }
+    setProgramArguments(stored, argument_strings);
+}
+
+// EPC is where the dispatcher's `eret` goes; `sync.p` is a `.word` because
+// LLVM has no R5900 target to assemble it with (syscall.S says the same).
+void setEpc(uint32_t address) {
+    asm volatile("mtc0 %0, $14\n\t.word 0x0000040f" ::"r"(address));
+}
+
+using Entry = void (*)(uint32_t entry, uint32_t gp, int argc, char **argv);
 
 }  // namespace
 
@@ -166,15 +204,24 @@ extern "C" {
 
 // Slot 0x06: load(path, argc, argv). The path is `rom0:NAME`; only the IOP can
 // read that device (EE-9d), and it wants the bare archive name. Comes back
-// only when there was nothing to run, with -1.
+// with -1 when there was nothing to run.
+//
+// On success it comes back too, but not to its caller: SYS-8d has the program
+// entered with the launcher's registers and $v0 = entry, so the handler leaves
+// the arguments in the thread record, points EPC at the entry and returns the
+// entry -- the dispatcher restores the caller's frame around that $v0 and its
+// `eret` lands in the program (EE-7g). Nothing is jumped to from inside the
+// handler, where EXL is still set and the program's first syscall would find
+// no EPC of its own.
 int sysLoadProgram(const char *path, int argc, char **argv) {
     const uint32_t entry = loadProgram(skipDevice(path));
     if (entry == 0) {
         print(kNoProgram);
         return -1;
     }
-    reinterpret_cast<Entry>(entry)(argc, argv);   // EE-9: the program replaces us
-    __builtin_unreachable();
+    storeArguments(argc, argv);
+    setEpc(entry);
+    return static_cast<int>(entry);
 }
 
 // Slot 0x7B: EE-9b, the same call with the path pinned. The reference is a
@@ -183,10 +230,22 @@ int sysLoadOsd(int argc, char **argv) {
     return sysLoadProgram(kRom0Osdsys, argc, argv);
 }
 
-// EE-9c: the default boot runs that program with one argument.
+// EE-9c: the default boot runs that program with one argument. This is called
+// from the kernel's own entry, outside any syscall, so there is no frame to
+// come back through: the program is entered directly, with the registers
+// SYS-8d says a launcher's own call leaves -- entry, gp, argc, argv.
 int bootDefault() {
+    // On the stack, not static: the kernel image carries no `.data`, and this
+    // frame is never left, so the launcher's argv stays where SYS-8d says.
     const char *argv[] = {kBootBrowser};
-    return sysLoadProgram(kRom0Osdsys, 1, const_cast<char **>(argv));
+    const uint32_t entry = loadProgram(skipDevice(kRom0Osdsys));
+    if (entry == 0) {
+        print(kNoProgram);
+        return -1;
+    }
+    storeArguments(1, const_cast<char **>(argv));
+    reinterpret_cast<Entry>(entry)(entry, 0, 1, const_cast<char **>(argv));
+    __builtin_unreachable();
 }
 
 }  // extern "C"

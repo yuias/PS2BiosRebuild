@@ -22,6 +22,9 @@ constexpr uintptr_t kRomEnd = 0x9FC80000;
 constexpr uintptr_t kKernelLoad = 0xA0000000;
 constexpr uintptr_t kKernelEntry = 0x80001000;
 
+// EE-4a: the boot's result reaches the kernel through this scratchpad word.
+constexpr uintptr_t kBootResult = 0x70003FF0;
+
 }  // namespace
 
 extern "C" {
@@ -32,11 +35,18 @@ extern "C" {
     // EE-2a warns must never drift from the layout.
     const Found rdram = find(kRomStart, kRomEnd, packName("RDRAM"));
     if (rdram.address != 0) {
-        reinterpret_cast<void (*)()>(rdram.address)();
+        // EE-2b: it answers with the size of main memory, or a negative value
+        // for failure; a size is passed on to the kernel (EE-4a), which keeps
+        // it as the top of memory.
+        const int32_t memory = reinterpret_cast<int32_t (*)()>(rdram.address)();
+        if (memory >= 0) {
+            *reinterpret_cast<volatile uint32_t *>(kBootResult) =
+                static_cast<uint32_t>(memory);
+        }
 
         // EE-3: resolve KERNEL, copy it to physical zero, enter it.
         const Found kernel = find(kRomStart, kRomEnd, packName("KERNEL"));
-        if (kernel.address != 0) {
+        if (memory >= 0 && kernel.address != 0) {
             // The reference moves sixteen bytes an iteration with `lq`/`sq`;
             // four words land the same bytes and need no R5900-only encoding.
             const auto *from = reinterpret_cast<const uint32_t *>(kernel.address);

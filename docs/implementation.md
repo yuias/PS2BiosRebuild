@@ -31,7 +31,7 @@ to `-march=mips1`; see "What is written in C++" below.
 | Piece | Runs at | Source |
 | --- | --- | --- |
 | `RESET` | `0xBFC00000`, both CPUs | `src/boot/reset.S`, `reset_ee.cpp` |
-| `RDRAM` | wherever the archive puts it | `src/boot/rdram.S` |
+| `RDRAM` | wherever the archive puts it | `src/boot/rdram.cpp` |
 | `KERNEL` | copied to physical 0, entered at `0x80001000` | `src/kernel/*` |
 | `IOPBOOT` | in place from the ROM window | `src/boot/iopboot.S` |
 | `SYSMEM` | relocated to the boot list's base | `src/iop/sysmem.S` |
@@ -245,6 +245,26 @@ quadword count, and one guessed too small would leave the rest of the file in
 the FIFO for whoever asked next. That is EE-9a to EE-9d — the loader, the
 pinned path, the argument and the crossing to the IOP — on our own image.
 
+**And a program is set up the way the reference sets one up.** The argument
+above no longer arrives in a register: the launcher packs it into the thread
+record and the program collects it by calling slot `0x3C` with a block, which
+comes back as `argc`, sixteen `argv` words and the strings (`spec/05` SYS-8,
+`spec/04` EE-9e). `OSDSYS` does exactly that in its entry stub, and so does the
+runtime of a program built with the PS2SDK toolchain — which is how this was
+found to be required (`docs/analysis/30`). Slots `0x3C`, `0x3D` and `0x3E` are
+served and gated by `imgcheck` on the reference's own arithmetic; `RDRAM`
+answers with the size of main memory (EE-2b) so that a stack asked for at the
+top of memory has a top to be at.
+
+**A program built with the PS2SDK toolchain runs to its C library's
+initialisation.** With `-DPS2_TEST_PROGRAM=<elf>` (`tests/m1/`) stored as
+`OSDSYS`, its runtime's `0x3C`, `0x3D` and `0x64` calls come back and
+`_InitSys` runs through — `SetSyscall`, `Copy` and `GetEntryAddress`, the
+interrupt-handler and thread and semaphore slots — until `__fdman_init` gets
+`0` back from `CreateSema` and aborts. `python3 tools/ps2sim.py build-m1/rom.bin
+--syscalls` lists every call it made in order; the scheduler group is what it
+asks for next (`docs/project-state.md` §6).
+
 ## Deviations from the reference, and why
 
 **The scan resolves `RDRAM` by name.** `spec/04` EE-2 records that the
@@ -323,9 +343,28 @@ on — reached a different way. It must change when threads arrive.
 **There is no `EELOAD`.** EE-9a records that the reference's program loader
 uses the archive file `EELOAD` as the stub that replaces the running program.
 Ours loads the program from the kernel directly. The observable contract —
-slot `0x06` loads a path, slot `0x7B` is the same with the path pinned, and the
-default boot passes one argument — is unchanged; what differs is that nothing
-is staged in between.
+slot `0x06` loads a path, slot `0x7B` is the same with the path pinned, the
+default boot passes one argument, and the program is entered with the
+launcher's registers and its arguments in the thread record (EE-9e) — is
+unchanged; what differs is that nothing is staged in between. From a syscall
+the entry is made the reference's way, by pointing EPC at the program and
+letting the dispatcher's `eret` land there; from the kernel's own boot, which
+is not in a syscall, it is a direct call with `(entry, 0, argc, argv)` in the
+argument registers, which is what SYS-8d says a launcher's own call leaves.
+
+**A stack of `0xFFFFFFFF` is a stack of `-1`.** SYS-8a records that the
+reference compares the `stack` argument of slot `0x3C` at 64 bits, so a
+zero-extended `0xFFFFFFFF` is a literal address that wraps. Ours takes 32-bit
+arguments and treats both as "the top of memory"; a caller relying on the wrap
+would be relying on a stack at the top of a 4 GiB space the machine does not
+have.
+
+**`RDRAM` returns 32 MiB without asking.** EE-2b: the reference's `RDRAM`
+negotiates with the memory controller and reports what it found. An emulator
+presents its RAM ready, so ours answers with the size the reference finds on
+the target and does nothing else. The simulators do the same for the
+reference's `RDRAM`, which they skip (`tools/eesim.py`), so both images see the
+same top of memory there.
 
 **The boot's own words live above the modules.** The reference keeps its
 structures in the low RAM the reset path clears. Ours are at `0x001F8000` and
@@ -383,7 +422,7 @@ it cannot quietly go stale. This copy is the gate's own text:
 
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 105 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- 102 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - The scheduler: EE-7e's context save is in place and EE-7g's exit can be driven from it, but nothing yet chooses a different thread to resume
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
 
@@ -408,9 +447,11 @@ Assembly is genuinely required in five places, and they are not going to
 change:
 
 - **the reset path**, which runs before there is a stack to call anything with;
-- **an entry point that establishes one** — `entry.S` and `osdsys.S` are four
-  instructions each, a `$sp` and a jump, because a compiled function needs the
-  stack to already exist;
+- **an entry point that establishes one** — `entry.S` is a `$sp` and a jump,
+  and `osdsys.S` is a program's own runtime start: it calls slot `0x3C`, takes
+  the stack pointer it answers with and reads `argc`/`argv` out of the block,
+  because a compiled function needs the stack to already exist and `0x3C`
+  primes the top of the stack it is given;
 - **the exception vector page**, whose entries are code at fixed offsets;
 - **the syscall entry's context save** (`spec/04` EE-7e), which stores all 128
   bits of every register with `sq`/`lq` — a compiler has no type that reaches
