@@ -66,8 +66,10 @@ NOT_YET = (
     # is exactly the kind of thing that goes quietly stale.
     "{unserved} of the 125 syscall slots: they resolve to the reporter of "
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
-    "the scheduler: EE-7e's context save is in place and EE-7g's exit can be "
-    "driven from it, but nothing yet chooses a different thread to resume",
+    "the scheduler under interrupts: threads switch on syscalls (SYS-10c) but "
+    "no timer or SBUS interrupt preempts or wakes anything yet",
+    "SIF RPC (SIFCMD/SIFRPC on the IOP, slots 0x76-0x7A on the EE): a program's "
+    "SifInitRpc waits forever for an IOP that has no RPC service",
     "interrupt-driven SIF service: our exchange is framed as BOOT-11 says, "
     "but both ends still rendezvous on the flag registers rather than on the "
     "SBUS interrupt the reference's drivers wait for",
@@ -81,7 +83,7 @@ INTC_SOURCE = 3
 INTC_ALIAS_SOURCE = 4
 DMAC_CHANNEL = 2
 SYSCALL_TABLE = 0x80014F40          # spec/04 EE-8a
-INSTALLED_SLOT, INSTALLED_HANDLER = 0x40, 0xDEADBEEF
+INSTALLED_SLOT, INSTALLED_HANDLER = 0x50, 0xDEADBEEF   # a slot nothing else calls
 # The empty slot of SYS-3b, and the one register the reference does not bring
 # back whole either -- the vector page hands $t9 through a 64-bit save.
 CONTEXT_PROBE_SLOT, CONTEXT_LOST_T9 = 0x75, 25
@@ -93,7 +95,7 @@ COP0_READ_TABLE = 0x800154A8
 COP0_STABLE = (2, 3, 0)
 COP0_CONFIG, CACHE_BOTH, CACHE_ENABLE_BITS = 16, 3, 3 << 16
 EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
-UNDEFINED_SLOT = 0x21
+UNDEFINED_SLOT = 0x51            # still the reporter's, until it is not
 
 
 def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
@@ -393,6 +395,51 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
     require(machine.syscall(0x3D, 0x130000, -1 & eesim.MASK64) == stack,
             "SYS-8c", "slot 0x3D with a negative size did not answer the "
                       "stack base 0x3C recorded")
+
+    # SYS-9, called: the semaphore slots on the values docs/analysis/32
+    # measured on the reference -- ids from a LIFO free list, -1 for a bad
+    # id, no max-count check, the status block's +0x08 left alone.
+    block = 0x320000
+    for k, value in enumerate((0, 1, 1, 0, 0x1234, 0x5678)):
+        machine.bus.write(block + 4 * k, 4, value)
+    first = machine.syscall(0x40, block)
+    machine.bus.write(block + 8, 4, 2)          # init 2, max 1: accepted
+    second = machine.syscall(0x40, block)
+    require(first is not None and second == first + 1, "SYS-9a",
+            f"two creations answered {first} and {second}, want consecutive ids")
+    require(machine.syscall(0x45, first) == first
+            and machine.syscall(0x45, first) == -1, "SYS-9e",
+            "polling a semaphore of count 1 did not answer id, then -1")
+    require(machine.syscall(0x43, first) == first
+            and machine.syscall(0x43, first) == first
+            and machine.syscall(0x45, first) == first, "SYS-9c",
+            "signalling past the max count was refused, or not counted")
+    machine.bus.write(block + 0x48, 4, 0xDEADBEEF)   # status +0x08 sentinel
+    machine.syscall(0x47, second, block + 0x40)
+    require(machine.bus.read(block + 0x40, 4) == 2
+            and machine.bus.read(block + 0x44, 4) == 1
+            and machine.bus.read(block + 0x48, 4) == 0xDEADBEEF, "SYS-9f",
+            "the status block did not carry count 2, max 1 and an untouched +0x08")
+    require(machine.syscall(0x49, 200) == -1
+            and machine.syscall(0x49, first) == first
+            and machine.syscall(0x40, block) == first, "SYS-9g",
+            "deleting a bad id, then a good one, then re-creating did not "
+            "answer -1, id, and the same id again")
+
+    # SYS-10, called where one thread can observe it: the boot thread's id
+    # and priority, and a created thread's status.
+    require(machine.syscall(0x2F) == 0, "SYS-10a", "the boot thread is not id 0")
+    require(machine.syscall(0x2A, 0, 5) == 128, "SYS-10b",
+            "changing the boot thread's priority did not answer 128")
+    for k, value in enumerate((0, 0x400000, 0x330000, 0x1000, 0, 7, 0, 0, 0)):
+        machine.bus.write(block + 4 * k, 4, value)
+    created = machine.syscall(0x20, block)
+    require(created == 1, "SYS-10d", f"the first created thread is {created}, want 1")
+    require(machine.syscall(0x30, created, 0) == 0x10, "SYS-10j",
+            "a created thread is not reported dormant")
+    require(machine.syscall(0x21, created) == created
+            and machine.syscall(0x21, created) == -1, "SYS-10e",
+            "deleting a dormant thread twice did not answer id, then -1")
     return problems
 
 

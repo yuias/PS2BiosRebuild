@@ -125,6 +125,10 @@ class Bus:
             return self.rom, physical - ROM_BASE
         return None, physical
 
+    def sifReads(self) -> int:
+        """How many reads the SIF flag registers have had, in all."""
+        return sum(self.io_reads.get(offset, 0) for offset in SIF_FLAGS)
+
     def read(self, address: int, size: int) -> int:
         buffer, offset = self.region(address & 0xFFFFFFFF)
         if buffer is None:
@@ -657,6 +661,9 @@ BOOT_STEPS = 3_000_000           # reset vector to kernel entry costs ~236k
 KERNEL_STEPS = 20_000_000        # kernel entry to its wait for the IOP: it clears
                                  # user memory to the top of RAM on the way
 SYSCALL_STEPS = 400_000
+SIF_WAIT_WINDOW = 4096           # steps between looks at whether the kernel is
+                                 # only polling the SIF flags now
+SIF_FLAGS = (0x1000F220, 0x1000F230)   # MSFLG, SMFLG (physical, as the bus keys them)
 
 # `spec/04` EE-7e is a claim about *width*: the registers are 128 bits and the
 # upper halves have to survive a syscall. A marker with something in both
@@ -726,9 +733,19 @@ class Machine:
                 f"did not reach {KERNEL_ENTRY:#010x} in {BOOT_STEPS} steps")
             return
 
+        # The kernel's boot ends waiting on the IOP, which it does by reading
+        # the SIF flag registers over and over. Once a stretch of steps has
+        # touched nothing but those, the boot has arrived there and the rest of
+        # the budget would be spent watching it wait.
         start = cpu.steps
+        sif_reads = self.bus.sifReads()
         while cpu.steps - start < KERNEL_STEPS and cpu.stop_reason is None:
             cpu.step()
+            if (cpu.steps - start) % SIF_WAIT_WINDOW == 0:
+                now = self.bus.sifReads()
+                if now - sif_reads >= SIF_WAIT_WINDOW // 32:
+                    break
+                sif_reads = now
         self.kernel_console = self.bus.console.decode("ascii", "replace")
 
     def syscall(self, number: int, *arguments: int) -> int | None:

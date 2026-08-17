@@ -217,7 +217,7 @@ _sys_nothing:
     .org 0x520
     .globl _sys_set_syscall
 _sys_set_syscall:
-    sltiu $t0, $a0, 0x7D
+    sltiu $t0, $a0, 0x100               // SYS-11: the table reaches 0xFF
     beq   $t0, $zero, _sys_set_syscall_done
     nop
     sll   $t0, $a0, 2

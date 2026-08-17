@@ -220,8 +220,12 @@ def eeBus(sif: Sif, dma: SifDma, rom: bytes) -> eesim.Bus:
             self.armed: dict[int, int] = {}
 
         def read(self, address: int, size: int) -> int:
-            which = EE_REGISTERS.get(address & 0x1FFFFFFF)
+            offset = address & 0x1FFFFFFF
+            which = EE_REGISTERS.get(offset)
             if which is not None:
+                # Counted as the plain bus counts them, so eesim's boot can
+                # tell when the kernel is only waiting on the IOP.
+                self.io_reads[offset] = self.io_reads.get(offset, 0) + 1
                 return sif.read(which, True)
             return super().read(address, size)
 
@@ -506,7 +510,10 @@ class Console:
             # the bus falls silent -- both sides waiting on something neither
             # can produce. Stopping at the idle loop instead would cut the
             # conversation off at its first packet.
-            progress = (len(self.dma.transfers), len(self.watcher.frees))
+            # A program on the EE that talks to the kernel but not yet to the
+            # bus is still going somewhere; only silence on both counts is over.
+            progress = (len(self.dma.transfers), len(self.watcher.frees),
+                        len(self.ee.cpu.syscalls))
             quiet = quiet + 1 if progress == previous else 0
             previous = progress
             if self.reached_idle and quiet >= QUIET_TURNS:

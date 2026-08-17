@@ -256,14 +256,28 @@ served and gated by `imgcheck` on the reference's own arithmetic; `RDRAM`
 answers with the size of main memory (EE-2b) so that a stack asked for at the
 top of memory has a top to be at.
 
+**Threads and semaphores, and the switch between them.** `spec/05` SYS-9
+and SYS-10 are served: 256 thread records and 256 semaphores, a ready queue
+per priority with the boot thread at 128, and the switch of `spec/04` EE-7g
+done the way our dispatcher makes natural — a rescheduling handler copies the
+dispatcher's saved block into the outgoing thread's frame (a push of 0x280
+bytes below its stack pointer, which is where slot `0x3C` primes one), picks
+the next thread, copies its frame back, points EPC at its resume address and
+returns what its frame's `$v0` says. `imgcheck` calls the slots one thread
+can observe: consecutive ids, `-1` for bad ids, a signal past the max count
+that counts, a status block's `+0x08` left alone, the boot thread's priority
+128, a created thread reported dormant. The table runs to 256 slots (SYS-11).
+
 **A program built with the PS2SDK toolchain runs to its C library's
-initialisation.** With `-DPS2_TEST_PROGRAM=<elf>` (`tests/m1/`) stored as
-`OSDSYS`, its runtime's `0x3C`, `0x3D` and `0x64` calls come back and
-`_InitSys` runs through — `SetSyscall`, `Copy` and `GetEntryAddress`, the
-interrupt-handler and thread and semaphore slots — until `__fdman_init` gets
-`0` back from `CreateSema` and aborts. `python3 tools/ps2sim.py build-m1/rom.bin
---syscalls` lists every call it made in order; the scheduler group is what it
-asks for next (`docs/project-state.md` §6).
+initialisation, and through it.** With `-DPS2_TEST_PROGRAM=<elf>`
+(`tests/m1/`) stored as `OSDSYS`, its runtime's `0x3C`, `0x3D` and `0x64`
+calls come back, `_InitSys` runs through — `SetSyscall`, `Copy` and
+`GetEntryAddress`, the interrupt-handler, thread and semaphore slots — the C
+library creates its semaphores and takes and releases them around `malloc`,
+and the program stops in `_libcglue_rtc_update`, whose `SifInitRpc` polls
+slot `0x7A` for an IOP RPC service that does not exist yet.
+`python3 tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call it
+made in order; SIF RPC is what it asks for next (`docs/project-state.md` §6).
 
 ## Deviations from the reference, and why
 
@@ -426,8 +440,9 @@ it cannot quietly go stale. This copy is the gate's own text:
 
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 102 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
-- The scheduler: EE-7e's context save is in place and EE-7g's exit can be driven from it, but nothing yet chooses a different thread to resume
+- 67 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- The scheduler under interrupts: threads switch on syscalls (SYS-10c) but no timer or SBUS interrupt preempts or wakes anything yet
+- SIF RPC (SIFCMD/SIFRPC on the IOP, slots 0x76-0x7A on the EE): a program's SifInitRpc waits forever for an IOP that has no RPC service
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
 
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself

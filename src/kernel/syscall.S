@@ -31,7 +31,7 @@
 .endm
 
     .set SYSCALL_TABLE, 0x4F40          // 0x80014F40, from a 0x8001 base
-    .set SYSCALL_COUNT, 0x7D
+    .set SYSCALL_COUNT, 0x100          // SYS-11: reachable, not filled
 
     .set CONTEXT_BASE, 26               // $k0 addresses the context block
 
@@ -109,7 +109,7 @@ _syscall_return:
     eret
 
 _syscall_out_of_range:
-    // A number outside 0..0x7C never reaches the table. EE-8b makes every
+    // A number outside 0..0xFF never reaches the table. EE-8b makes every
     // number *in* range resolve to code, so this is the only unreachable case.
     sll   $v1, $v1, 2
     jal   _sys_undefined
@@ -146,8 +146,19 @@ _undefined_message:
 _newline:
     .asciz "\n"
 
+// SYS-10i: where a thread function that returns lands. A thread's frame is
+// primed with this as its $ra, so falling off the end of the function exits
+// the thread the way slot 0x23 does.
+    .globl _thread_root
+_thread_root:
+    addiu $v1, $zero, 0x23
+    syscall
+    b     _thread_root                  // 0x23 does not come back
+    nop
+
     .section .bss, "aw", @nobits
     .align 4
+    .globl _syscall_context
 _syscall_context:
     .space 32 * 16                      // one 128-bit slot per register
     .align 4

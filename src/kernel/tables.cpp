@@ -40,6 +40,36 @@ void sysLoadOsd() asm("_sys_load_osd");
 void sysSetupThread() asm("_sys_setup_thread");
 void sysSetupHeap() asm("_sys_setup_heap");
 void sysEndOfHeap() asm("_sys_end_of_heap");
+void sysCreateThread() asm("_sys_create_thread");
+void sysDeleteThread() asm("_sys_delete_thread");
+void sysStartThread() asm("_sys_start_thread");
+void sysExitThread() asm("_sys_exit_thread");
+void sysExitDeleteThread() asm("_sys_exit_delete_thread");
+void sysTerminateThread() asm("_sys_terminate_thread");
+void sysTerminateThreadDirect() asm("_sys_terminate_thread_direct");
+void sysChangeThreadPriority() asm("_sys_change_thread_priority");
+void sysChangeThreadPriorityDirect() asm("_sys_change_thread_priority_direct");
+void sysRotateThreadReadyQueue() asm("_sys_rotate_thread_ready_queue");
+void sysRotateThreadReadyQueueDirect() asm("_sys_rotate_thread_ready_queue_direct");
+void sysReleaseWaitThread() asm("_sys_release_wait_thread");
+void sysReleaseWaitThreadDirect() asm("_sys_release_wait_thread_direct");
+void sysGetThreadId() asm("_sys_get_thread_id");
+void sysReferThreadStatus() asm("_sys_refer_thread_status");
+void sysSleepThread() asm("_sys_sleep_thread");
+void sysWakeupThread() asm("_sys_wakeup_thread");
+void sysWakeupThreadDirect() asm("_sys_wakeup_thread_direct");
+void sysCancelWakeupThread() asm("_sys_cancel_wakeup_thread");
+void sysSuspendThread() asm("_sys_suspend_thread");
+void sysResumeThread() asm("_sys_resume_thread");
+void sysResumeThreadDirect() asm("_sys_resume_thread_direct");
+void sysCreateSema() asm("_sys_create_sema");
+void sysDeleteSema() asm("_sys_delete_sema");
+void sysDeleteSemaDirect() asm("_sys_delete_sema_direct");
+void sysSignalSema() asm("_sys_signal_sema");
+void sysSignalSemaDirect() asm("_sys_signal_sema_direct");
+void sysWaitSema() asm("_sys_wait_sema");
+void sysPollSema() asm("_sys_poll_sema");
+void sysReferSemaStatus() asm("_sys_refer_sema_status");
 
 // cache.S
 void sysReadCop0() asm("_sys_read_cop0");
@@ -67,13 +97,16 @@ void sysDisableCacheUncached() asm("_sys_disable_cache_kseg1");
 
 // EE-8a: 125 slots, numbered 0x00 to 0x7C, indexed by the absolute syscall
 // number. EE-8b: no slot is null -- every number in range resolves to code,
-// which for an unimplemented one means the reporter of EE-8d.
+// which for an unimplemented one means the reporter of EE-8d. SYS-11: the
+// reference indexes and writes the table without a bound, and the SDK's
+// runtime installs its own handlers at 0x7F and 0x82 that way, so the table
+// runs to 0xFF -- the reporter from 0x7D on until something is installed.
 //
 // EE-8c: two blocks are published twice, at 0x14..0x19 -> 0x1A..0x1F and
 // 0x63..0x66 -> 0x67..0x6A. Collapsing either would break callers that use the
 // higher numbers, so the repetition is deliberate.
 [[gnu::section(".syscalls"), gnu::used]]
-Handler syscall_table[125] = {
+Handler syscall_table[256] = {
     // 0x00
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,
     sysUndefined, sysUndefined,
@@ -99,18 +132,24 @@ Handler syscall_table[125] = {
     sysDisableDmac,                                        // 0x1D  = 0x17
     sysUndefined, sysUndefined,
     // 0x20 .. 0x5F
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x20
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x24
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x28
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x2c
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x30
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x34
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x38
+    sysCreateThread, sysDeleteThread, sysStartThread, sysExitThread,   // 0x20  SYS-10
+    sysExitDeleteThread, sysTerminateThread, sysTerminateThreadDirect,
+    sysUndefined,                                          // 0x24..0x27
+    sysUndefined, sysChangeThreadPriority, sysChangeThreadPriorityDirect,
+    sysRotateThreadReadyQueue,                             // 0x28..0x2B
+    sysRotateThreadReadyQueueDirect, sysReleaseWaitThread,
+    sysReleaseWaitThreadDirect, sysGetThreadId,           // 0x2C..0x2F
+    sysReferThreadStatus, sysReferThreadStatus, sysSleepThread,
+    sysWakeupThread,                                       // 0x30..0x33
+    sysWakeupThreadDirect, sysCancelWakeupThread, sysCancelWakeupThread,
+    sysSuspendThread,                                      // 0x34..0x37
+    sysSuspendThread, sysResumeThread, sysResumeThreadDirect,
+    sysUndefined,                                          // 0x38..0x3B
     sysSetupThread, sysSetupHeap, sysEndOfHeap,           // 0x3C..0x3E  SYS-8
     sysUndefined,                                          // 0x3F  retired
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x40
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x44
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x48
+    sysCreateSema, sysDeleteSema, sysSignalSema, sysSignalSemaDirect,   // 0x40  SYS-9
+    sysWaitSema, sysPollSema, sysPollSema, sysReferSemaStatus,   // 0x44..0x47
+    sysReferSemaStatus, sysDeleteSemaDirect, sysUndefined, sysUndefined,   // 0x48..0x4B
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x4c
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x50
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x54
@@ -135,6 +174,40 @@ Handler syscall_table[125] = {
     sysUndefined, sysUndefined, sysUndefined,
     sysLoadOsd,                                            // 0x7B  EE-9b
     sysUndefined,                                          // 0x7C
+    // 0x7D .. 0xFF: reachable (SYS-11), nothing installed
+    sysUndefined, sysUndefined, sysUndefined,              // 0x7D..0x7F
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x80
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x84
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x88
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x8c
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x90
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x94
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x98
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x9c
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xa0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xa4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xa8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xac
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xb0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xb4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xb8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xbc
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xc0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xc4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xc8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xcc
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xd0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xd4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xd8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xdc
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xe0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xe4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xe8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xec
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xf0
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xf4
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xf8
+    sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0xfc
 };
 
 // EE-6a: fourteen entries, for ExcCode 0 to 13, indexed by `Cause & 0x7C`
