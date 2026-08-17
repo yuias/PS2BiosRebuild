@@ -268,6 +268,54 @@ puts `argc`/`argv` in `$a0`/`$a1` for the program: a runtime that finds
 `argc = 0` in its block may look at `$a0` as a launcher-supplied pointer, and
 one that finds it non-zero does not.
 
+## SYS-9: Semaphores
+
+Derived from `docs/analysis/32-ee-semaphores.md`. Ten slots: `0x40` creates,
+`0x41`/`0x49` delete, `0x42`/`0x43` signal, `0x44` waits, `0x45`/`0x46` poll,
+`0x47`/`0x48` report. Where a pair exists the lower number reschedules on the
+skeleton of `docs/analysis/17` and the higher returns to its caller; `0x45`,
+`0x46`, `0x47` and `0x48` are literally the same code twice, since neither
+polling nor reporting can block.
+
+**SYS-9a — identity and range.** A semaphore id is its index in a table of
+**256**; every id-taking slot returns `-1` for an id outside `0..255` and for
+an id that is not allocated. Ids are handed out from a **LIFO free list**, so
+the first creation after a deletion reuses the deleted id.
+
+**SYS-9b — `0x40` create, `(block) -> id | -1`.** The block is read at
+`+0x04` (max count), `+0x08` (initial count), `+0x10` (attribute) and `+0x14`
+(option); `+0x00` and `+0x0C` are not read. A negative initial count returns
+`-1`; an exhausted table returns `-1`. **Nothing else is validated**: an
+initial count above the max count, a zero max count, an all-zero block are all
+accepted. The count starts at the initial count; the wait list starts empty.
+
+**SYS-9c — `0x42`/`0x43` signal, `(id) -> id | -1`.** With no thread
+waiting, the count is incremented **without regard to the max count** — the
+reference never reads it here, and a full semaphore signalled again counts
+higher. With a waiter, the count is left alone and the first waiter is handed
+the signal: taken off the wait list and made ready (a waiting thread that had
+also been suspended is marked ready without being queued).
+
+**SYS-9d — `0x44` wait, `(id) -> id | -1`, or blocks.** A positive count is
+decremented and the call returns `id`. A zero count queues the calling thread
+on the semaphore's wait list, records the id in the thread, and reschedules;
+the call returns to that thread only when a signal or a deletion hands it
+back. There is no non-rescheduling form.
+
+**SYS-9e — `0x45`/`0x46` poll, `(id) -> id | -1`.** A positive count is
+decremented and `id` returned; a zero count returns `-1` — indistinguishable
+from an unallocated id.
+
+**SYS-9f — `0x47`/`0x48` report, `(id, out) -> id | -1`.** Writes `out+0x00`
+count, `+0x04` max count, `+0x0C` waiting threads, `+0x10` attribute, `+0x14`
+option; **`out+0x08` is not written** (the SDK's `init_count` slot keeps what
+the caller had there). An allocated semaphore with a zero count is reported,
+not refused.
+
+**SYS-9g — `0x41`/`0x49` delete, `(id) -> id | -1`.** Every waiting thread is
+dequeued and made ready, the entry is marked free and pushed on the free list.
+Deleting an unallocated id returns `-1`.
+
 ## Verification
 
 `tools/eeabi.py --check` re-derives every signature from a `KERNEL` image by
