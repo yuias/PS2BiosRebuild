@@ -122,7 +122,7 @@ ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
 ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
     SOURCES src/iop/loadcore.S)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
-    SOURCES src/iop/eesync.S)
+    SOURCES src/iop/eesync.cpp)
 
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
@@ -142,7 +142,6 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/entry.cpp
     src/kernel/syscall.S
     src/kernel/sif.cpp
-    src/kernel/program.S
     src/kernel/program.cpp
     src/kernel/cache.cpp
     src/kernel/tables.cpp)

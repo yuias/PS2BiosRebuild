@@ -58,20 +58,21 @@ alignas(16) uint8_t romver[16];
 
 extern "C" {
 
-// sif.S
+// sif.cpp
 uint32_t sifHandshake();
-void *sifExchange(const char *name, uint32_t verb, void *destination);
+void *sifExchange(const char *name, uint32_t verb, void *destination,
+                  uint32_t offset, uint32_t length);
 
-// program.S -- EE-9c. It does not return when it succeeds, because the program
-// it loads replaces this one; when the archive has nothing to load it comes
-// back with -1, which is why it is not declared `[[noreturn]]`.
-int bootDefault() asm("_boot_default");
+// program.cpp -- EE-9c. It does not return when it succeeds, because the
+// program it loads replaces this one; when the archive has nothing to load it
+// comes back with -1, which is why it is not declared `[[noreturn]]`.
+int bootDefault();
 
 // `entry.S` points `$sp` at the top of this before calling `kernelMain`.
 alignas(16) uint8_t kernel_stack[0x1000];
 
-// Written in C++ but named for the assembly that calls it: `syscall.S` and
-// `program.S` report through these two.
+// Written in C++ but named for the assembly that calls it: `syscall.S`
+// reports through these two.
 void print(const char *text) asm("_print");
 void printHex8(uint32_t value) asm("_print_hex8");
 void printHex32(uint32_t value);
@@ -124,7 +125,7 @@ void printHex32(uint32_t value) {
     // Ask the IOP for a file out of the archive. Only the IOP can read the
     // ROM's file table on its side of the bus, so this is the shape every later
     // `rom0:` read has: a name out, bytes back.
-    sifExchange(kWanted, 1, romver);
+    sifExchange(kWanted, 1, romver, 0, sizeof(romver));
     print("# ROMVER, fetched from the archive across the SIF: ");
     print(reinterpret_cast<const char *>(romver));
 

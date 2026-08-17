@@ -92,13 +92,17 @@ void waitForChannel(uintptr_t channel) {
 }
 
 // The request the IOP reads: an entry name in its fixed-width field, what to do
-// with it, and where the answer is to land back here.
+// with it, where the answer is to land back here, and -- for a content request
+// -- which window of the file. The IOP answers at most one window (16 KiB) per
+// exchange, so a file larger than that is fetched by more than one.
 struct Request {
     char name[kNameLength];
     uint16_t pad;
     uint32_t verb;
     uint32_t destination;
-    uint32_t reserved[3];
+    uint32_t offset;
+    uint32_t length;        // 0: as much as fits
+    uint32_t reserved;
 };
 static_assert(sizeof(Request) == 32);
 
@@ -162,7 +166,8 @@ uint32_t sifHandshake() {
 // What goes out is a packet headed by a quadword naming an address in *IOP*
 // memory, and what comes back is headed by a tag naming an address in ours --
 // which is why the destination travels in the request rather than into MADR.
-void *sifExchange(const char *name, uint32_t verb, void *destination) {
+void *sifExchange(const char *name, uint32_t verb, void *destination,
+                  uint32_t offset, uint32_t length) {
     // BOOT-11i: arm the receiving channel first. A transfer runs only when both
     // ends are ready, so a side that arms its receiver after asking has arranged
     // for neither end to move.
@@ -180,9 +185,9 @@ void *sifExchange(const char *name, uint32_t verb, void *destination) {
     sif_message.request.pad = 0;
     sif_message.request.verb = verb;
     sif_message.request.destination = physical(destination);
-    sif_message.request.reserved[0] = 0;
-    sif_message.request.reserved[1] = 0;
-    sif_message.request.reserved[2] = 0;
+    sif_message.request.offset = offset;
+    sif_message.request.length = length;
+    sif_message.request.reserved = 0;
 
     // The end bit stops the IOP's channel after this packet.
     sif_message.header.header = sif_peer | kTagEnd;

@@ -134,7 +134,7 @@ reference and the reason for it.
 | EE kernel: vector page, dispatch, syscall table | **built** — 20 slots served, the rest report themselves |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
-| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, `IOPBOOT` and the IOP modules, each for a reason `docs/implementation.md` states |
+| Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, `IOPBOOT`, and the two IOP modules not yet rewritten (`SYSMEM`, `LOADCORE`); `EESYNC` is compiled, since 2026-08-17 `mkirx` accepts what the compiler emits (`docs/implementation.md`) |
 | Everything else in the image | not started — `docs/implementation.md` lists what and why |
 
 Notable observations to keep in mind (details and repro commands in the analysis

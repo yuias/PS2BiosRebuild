@@ -32,7 +32,7 @@ void sysDisableDmac() asm("_sys_disable_dmac");
 void sysSetSyscall() asm("_sys_set_syscall");
 void sysNothing() asm("_sys_nothing");
 
-// program.S
+// program.cpp
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
 
