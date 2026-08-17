@@ -2,7 +2,7 @@
 
 A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
-emulator accepts in place of a retail BIOS.
+emulator accepts in place of a retail BIOS and boots software with.
 
 Status: **analysis complete; the image boots end to end on the simulators, and PCSX2 accepts it as a BIOS.**
 It builds from source, its IOP loads and links its modules, its EE comes up on

@@ -32,8 +32,8 @@ the working document and is kept current.
 ## 1. Goal
 
 A 4 MiB image that an emulator (PCSX2 is the working target) accepts in place
-of a retail PS2 BIOS: analysis of retail ROMs → behavioural specifications →
-implementation from the specifications. `docs/clean-room-policy.md` states the
+of a retail PS2 BIOS and boots software with: analysis of retail ROMs →
+behavioural specifications → implementation from the specifications. `docs/clean-room-policy.md` states the
 rules and their current limits.
 
 ## 2. Reference images
@@ -306,12 +306,13 @@ would confirm it:
 | `ROMGSCRT` command interface, and the value that makes the ROM deliberately hang | not yet analysed |
 | SIO2: `CTRL` bit 0 must read back clear with `I_STAT` bit 17 raised, or `SIO2MAN` spins | not yet analysed |
 | `sceSifIopReset`: SIFCMD cid `0x80000003` reboots the IOP without the ROM stub, and in-flight FIFO state must be discarded | `12` |
+| OSD configuration: block 1 byte +2 bit 7 is the "configured" flag — clear sends the OSD to first-boot setup, set to the browser. Found by disassembling the expanded decoder in EE RAM (`0x203698`), which returns the bit inverted and never stores it in the configuration struct, so `28`'s bit sweep of the struct could not see it | `28`; verify by calling the decoder under `eesim`, as `28` did for the other fields |
 
 The traffic goes both ways: the same project asks questions of this one, and
 `docs/analysis/26-cdvd-nvm-and-config.md` was written to answer one — why an
 OSD with a zeroed NVRAM stops on the first-boot screen and rejects a hand-made
 configuration block. Answering it cost nothing extra, since `CDVDMAN` is boot
-list module 24 and owed to next step 4 regardless.
+list module 24 and owed to §6's M2 regardless.
 
 ## 5. Resuming
 
@@ -406,54 +407,97 @@ thing under suspicion.
 
 ## 6. Next steps
 
-**Nothing on the boot path is outstanding.** `29` closed the blocker,
-`spec/03` BOOT-11k gates it, and the image runs from reset to `OSDSYS` on the
-target. Everything below is depth, in the order that buys the most for the
-least.
+**The plan was restated on 2026-08-17**, and this section is the restatement.
+What prompted it: the boot reaching `OSDSYS` made §1's target — *an emulator
+accepts the image* — true to the letter and empty in substance, since the
+program the boot ends in is a stub that prints one line and spins. The list
+that followed ordered work by counts (slots served, modules built) that no
+consumer was asking for and no gate could finish, and the days after the boot
+went to the OSD's configuration bits and a language rewrite — depth with no
+program waiting on it. The corrective is the one that carried a smaller project
+of the same shape to its end: **the image is done when it boots software**, and
+from here work is *pulled* by a program that needs it, not pushed by a table.
 
-> A note on where effort goes. The simulators are instruments, not the product,
-> and it is easy to keep sharpening them: each one buys a real observation, so
-> each next one looks worth it. It stops being worth it where PCSX2 would
-> answer the same question. `29` is the counter-example that says when it *is*
-> worth it: a gate the target has already proved wrong is worth building, and a
-> gate written before the target has an opinion is worth less than it looks.
+### The finish line
 
-1. **Fill in the syscall slots** (`spec/05` SYS-1) — the best ratio on the list.
-   105 of the 125 still resolve to the reporter, and `ninja -C build check`
-   counts that off the image's own table rather than from a number kept by hand.
-   The table, the entry and the 128-bit context save are all done, so each slot
-   is an isolated piece of work with a gate already watching it;
-   `tools/eeksys.py --check` on our `KERNEL` fails on that count alone. The band
-   `0x64`–`0x6A` is the natural next group: `0x65`'s algorithm is already
-   specified (SYS-4d) and `0x64`/`0x66` are the two of the band still unread.
+Two milestones, each with a gate that runs on the target rather than a
+simulator, in this order:
 
-2. **The scheduler** (`spec/04` EE-7g; `spec/05` SYS-2a). The context save it
-   needs is done — EE-7e's 128-bit save and restore, through a block a handler
-   can rewrite — so what is left is the part that chooses: `EESYNC` still never
-   returns from its entry because there is no thread to put a service on.
-   Threads on the IOP (`THREADMAN`) and the EE's scheduling group are the same
-   problem twice.
-3. **More of the boot list.** `SYSMEM`, `LOADCORE` and `EESYNC` exist; the other
-   twenty-six do not. `HEAPLIB` is the natural next one, since `SYSMEM`'s bump
-   allocator cannot free out of order and everything above it wants a real
-   heap.
-4. **`IOPBOOT` in C++.** The last large piece of assembly that is assembly for a
-   reason that could be removed: it runs from wherever the archive puts it in
-   the ROM window, so every call in it is `bal` and a compiler cannot be used.
-   Linking it at its final archive address instead would let it be compiled, and
-   the address is a fixed point — code size does not depend on it, so a build,
-   a measurement and a relink converge. It costs a two-pass build and a recorded
-   deviation from BOOT-7's "runs in place".
-5. **The rest of the OSD's configuration fields.** `28` named the language
-   (bits 4–8, gated), the timezone (bits 9–19, minutes), its hour flag (bit 29),
-   the clock format (bit 30) and bit 3 as an argument to EE syscall `0x4F`, and
-   mapped every field's position by measurement. Bit 0, bits 1–2, bits 20–28 and
-   the second word are placed but unnamed. The method is cheap now — sweep the
-   decoder under `eesim`, then follow one getter's callers — so this is bounded
-   work rather than an open question.
-6. **One loose end in the analysis.** Nine EE slots have an inferred rather than
-   observed return (`spec/05` SYS-1c). The other loose end carried here — the
-   EE's unmodelled chain-mode DMA — is closed by `24`.
+- **M1 — an independently built program runs on our image.** A small program
+  written here in a few lines of C, but built with the PS2SDK toolchain and
+  linked against its runtime (`ps2dev/ps2dev`, run through the container; the
+  daemon on the working machine is up), so its start-up is *someone else's*
+  idea of what a PS2 kernel provides: the C runtime's syscalls, `SifInitRpc`,
+  `SifLoadModule` of a `rom0:` module, a thread and a semaphore, and output the
+  harness can read. It stands in for `OSDSYS` in the manifest — the boot already
+  places and enters that slot, so no new machinery is needed to run it — and is
+  never committed, like the reference images. Gate: PCSX2 prints the program's
+  own final line.
+- **M2 — a retail title boots from disc.** Our `OSDSYS` reads `SYSTEM.CNF`
+  from `cdrom0:` and runs `BOOT2` through the loader; the title reaches its own
+  steady state on PCSX2. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
+  loads from `rom0:`, plus `EELOAD` at the address PCSX2's fast boot hooks
+  (read off PCSX2's source when this starts, not assumed) so its `-elf` and
+  fast-boot paths work with our image as well.
+
+**M3 — an OSD that draws** (GS initialisation, a freely-licensed font, and the
+configuration field map of `26`–`28`) is real work but comes *after* M2, since a
+BIOS that boots titles is useful without a menu and a menu without titles is
+not.
+
+### How M1 is worked
+
+The order inside M1 is the order the program faults in, first fault first, and
+each fault names its own next piece: a syscall slot the program calls, an IOP
+module it needs across the SIF, the scheduler when it blocks on a semaphore.
+Every piece is still done analysis → spec → implementation, and the analysis is
+already there — `spec/05` covers all 125 slots and `spec/02`/`spec/03` all 29
+modules — so what remains per piece is implementation and its gate. The
+expected shape of the pull, for orientation only:
+
+1. The runtime's start-up syscalls (a bounded set, readable off the SDK's
+   `kernel.h` against `spec/05`'s table).
+2. SIF RPC on both sides — `SIFMAN`/`SIFCMD` with the RPC layer on the IOP,
+   `SifSetDma`/`SifDmaStat`/`SifSetReg`/`SifGetReg` on the EE — which is also
+   where interrupt-driven SIF service (`spec/03` BOOT-11, currently a flag
+   rendezvous) becomes required rather than deferred.
+3. `LOADFILE`, `MODLOAD`, `IOMAN`, `ROMDRV` for `SifLoadModule`, and
+   `THREADMAN`/`INTRMAN`/`DMACMAN` underneath them.
+4. The EE scheduler (`spec/04` EE-7g, `spec/05` SYS-2a), the first time the
+   program blocks.
+
+The gate keeps printing the slot and module counts, but they are no longer the
+ordering. New analysis documents are written only for what M1 or M2 faults on
+— the analysis phase is complete and stays that way.
+
+### Instruments
+
+- **PCSX2** remains the acceptance target; §5 is its harness.
+- **PS2e**, the same author's emulator (the sibling project §4 draws its leads
+  from; not part of this repository), becomes the *debugging* target. It exposes a gdb-remote server per CPU
+  (`--debug-ee <port>`, `--debug-iop <port>`, `--wait-debugger` to hold at the
+  reset vector), with breakpoints, write watchpoints that also see DMA, single
+  step and memory peek — which replaces print-and-rerun on PCSX2 as the way to
+  find out what a fault is. It runs the retail image through the boot to a
+  drawing `OSDSYS`, so it is mature enough for the boot path; it is also under
+  construction, so where it and PCSX2 disagree the disagreement is a question
+  to settle, not a verdict.
+- **The simulators** are regression gates and stay so. They are extended only
+  when a target has proved a gate wrong — the rule `29` established — and not
+  because the next observation looks cheap.
+
+### Carried, dropped, deferred
+
+- The busy-bit workaround (§7, first row) stays until M1's SIF work reaches the
+  IOP's DMA interrupt, which is where it will be understood or made moot.
+- The lead recorded from PS2e in §4 — block 1 byte +2 bit 7 as the OSD's
+  "configured" flag — belongs to M3 and is verified then, by calling the
+  decoder under `eesim` the way `28` did with the other fields.
+- *Deferred:* `IOPBOOT` in C++ (hygiene with no consumer), the remaining unnamed
+  OSD configuration fields (M3), the nine inferred returns of `spec/05` SYS-1c
+  (settled as M1 reaches each slot).
+- *Dropped as an ordering:* filling syscall slots by band, building modules by
+  boot-list position.
 
 ## 7. Known problems, in one place
 
@@ -461,9 +505,9 @@ least.
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
 | Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
-| No scheduler, so `EESYNC` never returns from its entry | §6 step 2 | deliberate |
-| 105 of 125 syscall slots report themselves rather than working | §6 step 1 | deliberate |
-| Three of twenty-nine boot-list modules exist | §6 step 3 | deliberate |
+| No scheduler, so `EESYNC` never returns from its entry | §6, M1 step 4 | deliberate |
+| 105 of 125 syscall slots report themselves rather than working | §6, pulled by M1 | deliberate |
+| Three of twenty-nine boot-list modules exist | §6, pulled by M1 and M2 | deliberate |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
 
