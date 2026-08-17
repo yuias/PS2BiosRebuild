@@ -453,7 +453,7 @@ it cannot quietly go stale. This copy is the gate's own text:
 
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 67 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- 63 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - The scheduler under interrupts: threads switch on syscalls (SYS-10c) but no timer or SBUS interrupt preempts or wakes anything yet
 - SIF RPC (SIFCMD/SIFRPC on the IOP, slots 0x76-0x7A on the EE): a program's SifInitRpc waits forever for an IOP that has no RPC service
 - Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
