@@ -12,6 +12,13 @@
 
 static int sema_id;
 
+// The C library's start-up reads the clock over CDVD's RPC before main, which
+// would stop the program in SifInitRpc before it has printed a line. Both
+// hooks are weak in the SDK so a program can opt out; this one does, so that
+// the thread and semaphore stages report before the SIF stage is asked for.
+void _libcglue_rtc_update(void) {}
+void _libcglue_timezone_update(void) {}
+
 static void worker(void *arg) {
     (void)arg;
     sio_puts("# m1: worker thread running\n");

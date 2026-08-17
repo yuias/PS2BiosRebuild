@@ -135,7 +135,7 @@ reference and the reason for it.
 | EE kernel: vector page, dispatch, syscall table | **built** — 58 slots served, the rest report themselves |
 | EE main-thread setup (SYS-8) | **built and gated** — `0x3C`/`0x3D`/`0x3E`, the argument block, entry with the launcher's registers |
 | EE threads and semaphores (SYS-9, SYS-10, SYS-11) | **built and gated** — records, ready queues, the switch through the dispatcher's block; 256-slot table |
-| M1 test program (`tests/m1/`) | **runs through its C library's init** — stops in `SifInitRpc`, polling `0x7A` for an IOP RPC service; `ps2sim --syscalls` lists what it asks for |
+| M1 test program (`tests/m1/`) | **stages 1–2 pass on both emulators** — main, arguments, a semaphore, a second thread; stops in `SifInitRpc` polling `0x7A` for an IOP RPC service |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
 | Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, and the two IOP modules not yet rewritten (`SYSMEM`, `LOADCORE`); `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits, and `IOPBOOT` is compiled since the same day, once its archive offset was knowable before it is built (`docs/implementation.md`) |
@@ -470,13 +470,29 @@ expected shape of the pull, for orientation only:
 4. The EE scheduler (`spec/04` EE-7g, `spec/05` SYS-2a), the first time the
    program blocks.
 
-*Where M1 stands (2026-08-17, later):* the program loads whole (the transfer
-was the first fault, `implementation.md`), its runtime's `0x3C`/`0x3D` come
-back right (SYS-8), `_InitSys` runs through, the C library creates and takes
-its semaphores (SYS-9, SYS-10 — step 4 arrived early and is built), and the
-program stops in `_libcglue_rtc_update`, whose `SifInitRpc` polls slot `0x7A`
-for the IOP's RPC service. The pull is now at step 2, SIF RPC on both sides
-— and behind it the CDVD RPC the RTC read wants. `python3 tools/ps2sim.py
+*Where M1 stands (2026-08-17, end of day):* the program loads whole (the
+transfer was the first fault, `implementation.md`), its runtime's
+`0x3C`/`0x3D` come back right (SYS-8), `_InitSys` runs through, and on both
+emulators the program prints its first stages —
+
+```
+# m1: main entered
+# m1: argc = 1
+# m1: argv[0] = BootBrowser
+# m1: CreateSema -> 18
+# m1: CreateThread -> 2
+# m1: worker thread running
+# m1: thread and semaphore ok
+```
+
+— which is SYS-8, SYS-9 and SYS-10 exercised by someone else's runtime: step
+4 arrived early and is built. It then stops in `SifInitRpc`, polling slot
+`0x7A` for the IOP's RPC service. (The C library's own start-up would have
+stopped there earlier, reading the clock over CDVD's RPC; the test program
+opts out of that weak hook so the stages before it can report.) The pull is
+now at step 2, SIF RPC on both sides, which drags in the EE's DMAC interrupt
+— the SDK dispatches incoming SIF commands from a channel-5 handler installed
+with slot `0x12` — and the IOP's `SIFCMD` protocol. `python3 tools/ps2sim.py
 build-m1/rom.bin --syscalls` prints the exact list; both emulators agree with
 it since `docs/analysis/31`.
 

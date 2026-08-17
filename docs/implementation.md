@@ -274,10 +274,23 @@ initialisation, and through it.** With `-DPS2_TEST_PROGRAM=<elf>`
 calls come back, `_InitSys` runs through — `SetSyscall`, `Copy` and
 `GetEntryAddress`, the interrupt-handler, thread and semaphore slots — the C
 library creates its semaphores and takes and releases them around `malloc`,
-and the program stops in `_libcglue_rtc_update`, whose `SifInitRpc` polls
-slot `0x7A` for an IOP RPC service that does not exist yet.
-`python3 tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call it
-made in order; SIF RPC is what it asks for next (`docs/project-state.md` §6).
+and `main` runs: it prints its arguments, creates a semaphore and a thread,
+the thread runs, signals and exits, and `WaitSema` comes back —
+
+```
+# m1: main entered
+# m1: argc = 1
+# m1: argv[0] = BootBrowser
+# m1: CreateSema -> 18
+# m1: CreateThread -> 2
+# m1: worker thread running
+# m1: thread and semaphore ok
+```
+
+— on PCSX2 and PS2e alike. It then stops in `SifInitRpc`, polling slot
+`0x7A` for an IOP RPC service that does not exist yet. `python3
+tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call it made in
+order; SIF RPC is what it asks for next (`docs/project-state.md` §6).
 
 ## Deviations from the reference, and why
 
