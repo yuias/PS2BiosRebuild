@@ -118,6 +118,7 @@ _iop_reset:
     nop
     liw   $t0, 0xBF801450
     lw    $t0, 0($t0)
+    nop                             // R3000: a load's value is not there yet
     andi  $t0, $t0, 8               // BOOT-3: or the alternate-machine bit
     bne   $t0, $zero, _iop_dev
     nop
@@ -129,22 +130,25 @@ _iop_dev:
 _iop_bus_apply:
     // BOOT-4 step 1: the first pair keeps bit 0x1000 of the register's current
     // value; every later pair is written verbatim.
+    // The R3000A has a load delay slot: the instruction after a load still
+    // sees the register's old value (`tools/loaddelay.py` checks the IOP's
+    // assembly for exactly this), so a loaded value is used one instruction
+    // later than it is loaded, throughout.
     lw    $t1, 0($t0)               // register address
     lw    $t2, 4($t0)               // value
+    nop
     lw    $t3, 0($t1)
+    addiu $t0, $t0, 8
     andi  $t3, $t3, 0x1000
     or    $t2, $t2, $t3
     sw    $t2, 0($t1)
-    addiu $t0, $t0, 8
 _iop_bus_pair:
     lw    $t1, 0($t0)
-    beq   $t1, $zero, _iop_bus_done
-    nop
     lw    $t2, 4($t0)
-    sw    $t2, 0($t1)
+    beq   $t1, $zero, _iop_bus_done
     addiu $t0, $t0, 8
     b     _iop_bus_pair
-    nop
+    sw    $t2, 0($t1)
 _iop_bus_done:
     liw   $t0, 0xBF802070
     ori   $t1, $zero, 0x02          // POST 2: bus table applied
