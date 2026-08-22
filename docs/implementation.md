@@ -457,6 +457,15 @@ the reschedule syscall uses here; the saved frame is a shape of our own,
 shared with `THREADMAN` (`src/iop/context.hpp`), since the reference's is
 only partly read and both sides are ours.
 
+**The alarms come from a pool of 32, and the clock runs at 36.864 MHz
+only.** IOP-3k's records are carved from a heap in the reference; ours are a
+fixed array, like its other records. The reference's entry also consults the
+boot parameters for a 25 MHz clock (`docs/analysis/44` §4) and would scale
+`USec2SysClock` to it; no emulator's boot record asks for that, so ours does
+not look. `GetSystemTime` implements the pointer convention every reference
+caller uses (IOP-3j); a caller expecting the 64-bit value in `$v0:$v1` gets 0,
+as it would from the reference.
+
 **`THREADMAN`'s records come from fixed pools, and an id is an index with a
 generation.** The reference allocates records from a heap and forms an id
 from the record's address (IOP-3c); ours has 48 of each kind and numbers
@@ -586,7 +595,6 @@ it cannot quietly go stale. This copy is the gate's own text:
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
-- The IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 until a timer manager exists
 - The modules a title loads on request: SIO2MAN is the one the archive holds; PADMAN, MCMAN and the rest are not built
 - EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); the reference's own switches and its KELF path (docs/analysis/41 §3) are not parsed
 

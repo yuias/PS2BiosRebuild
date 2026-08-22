@@ -323,8 +323,8 @@ list).
 | 20 | `GetThreadId() -> id \| KE_*` | 21 | `CheckThreadStack() -> bytes` |
 | 22/23 | `(i)ReferThreadStatus(id, info*) -> 0 \| KE_*` | 24 | `SleepThread() -> 0` |
 | 25/26 | `(i)WakeupThread(id) -> 0 \| KE_*` | 27/28 | `(i)CancelWakeupThread(id) -> prevCount \| KE_*` |
-| 29–32 | `(i)SuspendThread`/`(i)ResumeThread(...) -> KE_ERROR` **(stubs)** | 33 | `DelayThread(usec) -> 0 \| KE_*` |
-| 34 | `GetSystemTime() -> u64` | 35/36 | `(i)SetAlarm(clock, cb, arg) -> 0 \| KE_*` |
+| 29–32 | `(i)SuspendThread`/`(i)ResumeThread(...) -> KE_ERROR` **(stubs)** | 33 | `DelayThread(usec) -> 0 \| KE_*` (IOP-3j) |
+| 34 | `GetSystemTime(out*) -> 0` (IOP-3j) | 35/36 | `(i)SetAlarm(clock, cb, arg) -> 0 \| KE_*` (IOP-3k) |
 | 37/38 | `(i)CancelAlarm(cb, arg) -> 0 \| KE_*` | 39 | `USec2SysClock(usec, out*) -> void` |
 | 40 | `SysClock2USec(clock*, sec*, usec*) -> void` | 41 | `GetSystemStatusFlag() -> u32` |
 
@@ -494,15 +494,49 @@ internal `EA_MULTI` event flag for THREADMAN's own use; and, as one of the
 very last steps, call `CpuEnableIntr` — interrupts are turned on only after
 every piece of THREADMAN's own state is in place.
 
-**IOP-3j — `DelayThread` needs a real timer.** `DelayThread(usec)` converts
-`usec` (`USec2SysClock`, ordinal 39) and arms a hardware-timer-backed alarm
-(`SetAlarm`, ordinal 35, reaching `timrman`'s `AllocHardTimer`/
-`SetTimerCompare`/`SetTimerCounter`/`SetTimerMode`/`GetTimerCounter`/
-`GetHardTimerIntrCode` [header]) before blocking (`waitType = TSW_DELAY`,
-`2`); the alarm's own expiry callback unlinks the woken thread, ready-enqueues
-it and clears the pending-next global. A rebuild without a working
-`timrman`/alarm mechanism breaks `DelayThread` silently — it simply never
-returns — which several modules' own init/retry loops depend on completing.
+**IOP-3j — the clock, and `DelayThread`.** Derived from `docs/analysis/44`.
+`THREADMAN`'s entry asks `timrman` for a 32-bit SYSCLOCK timer at prescale 1
+(`AllocHardTimer(1, 32, 1)`, ordinal 4), which IOP-7b's scan answers with
+RTC5 (`0xBF8014A0`, IRQ 16), and programs it as the reference does, in this
+order: `RegisterIntrHandler(16, mode 1, handler)`, `SetTimerCounter(0)`,
+`SetTimerCompare(100 us of ticks)`, `SetTimerMode(0x70)` (interrupt on
+target and on overflow, no reset on target: the counter free-runs), then
+`EnableIntr(16)`. The system clock is that counter with a software high word
+advanced whenever the counter is seen to have wrapped — the overflow
+interrupt guarantees that at least once per wrap. `USec2SysClock` (ordinal
+39) is `usec * 4608 / 125` in 64 bits (36.864 MHz); `SysClock2USec` (40) is
+the inverse, split into seconds and the remainder. `GetSystemTime(out*)`
+(34) stores the 64-bit clock through its pointer and returns 0 — the
+reference's own callers all use the pointer. `DelayThread(usec)` (33)
+refuses an interrupt context (`-100`), converts `usec`, sets an alarm on
+its own thread record (IOP-3k) and blocks with `waitType = TSW_DELAY` (`2`);
+the alarm's callback wakes it from interrupt context and returns 0. A
+thread released from a delay by any other path (`TerminateThread`,
+`ReleaseWaitThread`) has its alarm cancelled with it.
+
+**IOP-3k — the alarms.** One queue of records `{ deadline (64 bits),
+callback, arg }`, sorted ascending by deadline with ties behind the existing
+entry. `SetAlarm(clock*, cb, arg)` (35) and `CancelAlarm(cb, arg)` (37) want
+a thread context, `iSetAlarm` (36) and `iCancelAlarm` (38) an interrupt
+context, `-100` otherwise; the `i` forms do not take the critical section
+their caller already holds. `SetAlarm` refuses a second record with the same
+`(cb, arg)` (`-104`), answers `-400` when the pool is exhausted, raises a
+delay shorter than 100 us to 100 us, computes `deadline = now + delay`,
+inserts, and re-arms the timer; `CancelAlarm` unlinks and frees, answers
+`-105` for no match, and does not touch the timer — a stale compare value
+merely makes the next interrupt find nothing due and re-arm. Arming writes
+the compare register with the low word of the head's deadline — or of the
+last of a run of heads within 200 us of one another, so they share one
+interrupt — and, for a deadline already past, with the counter plus 200 us.
+The interrupt handler reads the timer's status (which clears it), advances
+the clock, and if the target bit was set walks the queue from the head while
+`deadline <= now`: a permanent record, seeded 2 ms overdue at the entry and
+never freed, is re-queued one counter period (`2^32` ticks) later and keeps
+the clock fresh when nothing else is pending; every other record's callback
+runs with its `arg`, a return of 0 frees the record and a nonzero return
+re-queues it `min(return, 200 us)` after its old deadline. No periodic
+scheduling tick exists: the timer interrupt never preempts by itself beyond
+what any interrupt's return path does (IOP-3h).
 
 ## IOP-4: Files (IOMAN, ROMDRV)
 
@@ -778,6 +812,48 @@ line. It answers `13` — the module after the boot list's twelve — on PS2e an
 PCSX2, with the module parked as IOP-6c says. What the emulators do not show
 is the exactness of the individual calls: PS2e's `--debug-iop` (single-step,
 watchpoints) is the instrument for that when a later module disagrees.
+
+## IOP-7: Timers (TIMRMAN)
+
+Derived from `docs/analysis/44` §1–§3.
+
+**IOP-7a — the six timers.** The library is `timrman` v1.01, 17 ordinals
+(0–16, the reference has no 17 or 18): 3 `GetTimersTable`, 4
+`AllocHardTimer(source, size, prescale)`, 5 `ReferHardTimer(source, size,
+mode, modemask)`, 6 `FreeHardTimer(id)`, 7 `SetTimerMode(id, mode)`, 8
+`GetTimerStatus(id)`, 9 `SetTimerCounter(id, count)`, 10
+`GetTimerCounter(id)`, 11 `SetTimerCompare(id, compare)`, 12
+`GetTimerCompare(id)`, 13 `SetHoldMode(n, mode)`, 14 `GetHoldMode(n)`, 15
+`GetHoldReg(n)`, 16 `GetHardTimerIntrCode(id)` [header]. A timer id is its
+register base shifted right by two, and every accessor recovers the
+register from the id with that shift alone. The table, in the allocator's
+scan order, is RTC2 `0xBF801120` (SYSCLOCK, 16 bits, prescale 8, IRQ 6), RTC5
+`0xBF8014A0` (SYSCLOCK, 32, 256, IRQ 16), RTC4 `0xBF801490` (SYSCLOCK, 32,
+256, IRQ 15), RTC3 `0xBF801480` (SYSCLOCK|HLINE, 32, 1, IRQ 14), RTC0
+`0xBF801100` (SYSCLOCK|PIXEL|HOLD, 16, 1, IRQ 4), RTC1 `0xBF801110`
+(SYSCLOCK|HLINE|HOLD, 16, 1, IRQ 5); source bits are 1 SYSCLOCK, 2 PIXEL, 4
+HLINE, 8 HOLD [header].
+
+**IOP-7b — allocation.** `AllocHardTimer` walks the table in that order and
+claims the first timer not in use whose sources intersect the request, whose
+size equals it, and whose prescale is **at least** the one asked for — not
+equal to it — answering the id, or `-1`. In-use is a count: `FreeHardTimer`
+decrements it and answers 0, or `-150` for a timer not held. `ReferHardTimer`
+is the same scan without the claim.
+
+**IOP-7c — what the kernel gets.** `AllocHardTimer(1, 32, 1)` therefore
+answers RTC5: RTC2 fails on size, RTC5's prescale of 256 satisfies `>= 1`.
+That is the timer `THREADMAN` programs (IOP-3j), and IRQ 16 is the line its
+handler is registered on.
+
+**IOP-7d — the registers.** Count at `+0`, mode at `+4` (16 bits), compare
+at `+8`; count and compare are 16 bits for RTC0–2 and 32 bits for RTC3–5
+(every register at or above `0xBF801480`). `GetTimerStatus` reads the mode
+register, which the hardware clears of its target and overflow bits on the
+read — the reference acknowledges a timer interrupt no other way.
+
+**IOP-7e — the hold block.** Ordinals 13–15 address `0xBF8014C0 + 4n`
+(mode) and `0xBF8014B0 + 4n` (value); nothing on the boot path uses them.
 
 No gate for IOP-1's Block-A/HDB path (IOP-1c) or IOP-2's priority-3 cause-0
 handler (IOP-2d) is anticipated at all: neither affects anything the M1 or M2

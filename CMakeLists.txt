@@ -128,6 +128,8 @@ ps2AddModule(excepman MODULE Exception_Manager VERSION 1.00
     SOURCES src/iop/excepman.cpp)
 ps2AddModule(intrman MODULE Interrupt_Manager VERSION 1.00
     SOURCES src/iop/intrman.S src/iop/intrman.cpp)
+ps2AddModule(timrman MODULE Timer_Manager VERSION 1.00
+    SOURCES src/iop/timrman.cpp)
 ps2AddModule(threadman MODULE Multi_Thread_Manager VERSION 1.00
     SOURCES src/iop/threadman.cpp)
 ps2AddModule(dmacman MODULE DMA_Controller_Manager VERSION 1.00
@@ -221,7 +223,7 @@ add_custom_command(
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf excepman.elf intrman.elf threadman.elf dmacman.elf
+            loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf dmacman.elf
             ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
             sio2man.elf osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")

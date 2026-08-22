@@ -142,6 +142,15 @@ int _import_intrman_cpu_enable();
 int _import_intrman_suspend(uint32_t *state);
 int _import_intrman_resume(uint32_t state);
 int _import_intrman_query_context();
+int _import_intrman_register(uint32_t irq, uint32_t mode, int (*handler)(void *), void *arg);
+int _import_intrman_enable(uint32_t irq);
+int _import_timrman_alloc(uint32_t source, uint32_t size, uint32_t prescale);
+void _import_timrman_set_mode(uint32_t timer_id, uint32_t mode);
+uint32_t _import_timrman_get_status(uint32_t timer_id);
+void _import_timrman_set_counter(uint32_t timer_id, uint32_t count);
+uint32_t _import_timrman_get_counter(uint32_t timer_id);
+void _import_timrman_set_compare(uint32_t timer_id, uint32_t compare);
+int _import_timrman_intr_code(uint32_t timer_id);
 void _import_intrman_set_new_ctx(uint32_t *(*callback)(uint32_t *));
 void _import_intrman_set_should_preempt(int (*callback)());
 }
@@ -326,8 +335,13 @@ Queue *waitQueueOf(Thread &thread) {
     }
 }
 
+void cancelDelay(Thread &thread);
+
 void leaveWait(uint32_t index) {
     Thread &thread = threads[index];
+    if (thread.wait_type == Delay) {
+        cancelDelay(thread);                    // IOP-3k: its alarm goes with it
+    }
     Queue *queue = waitQueueOf(thread);
     if (queue != nullptr) {
         unlink(*queue, index);
@@ -858,32 +872,379 @@ int cancelWakeupThread(uint32_t id) {
     return previous;
 }
 
-int notYet() {
-    return kError;                              // IOP-3j: no timer manager yet
+// --- IOP-3j and IOP-3k: the clock and the alarms (docs/analysis/44) ---------
+
+// The clock is timer 5's 32-bit counter, which the reference's allocation of
+// a 32-bit SYSCLOCK timer yields (IOP-7c), counting at 36.864 MHz, with a
+// software high word advanced whenever the counter is seen to have wrapped.
+// The overflow interrupt (mode 0x70) guarantees that it is seen at least once
+// per wrap.
+constexpr uint32_t kClockSource = 1;            // TC_SYSCLOCK [header]
+constexpr uint32_t kClockNumerator = 4608;      // ticks = usec * 4608 / 125
+constexpr uint32_t kClockDenominator = 125;
+constexpr uint32_t kTimerMode = 0x70;           // interrupt on target and overflow, no reset
+constexpr uint32_t kStatusTarget = 0x800;
+constexpr uint32_t kGranularityUsec = 100;      // IOP-3k: the shortest alarm
+constexpr uint32_t kSeedUsec = 2000;            // the permanent record starts overdue
+constexpr uint32_t kAlarms = 32;
+constexpr uint16_t kAlarmNone = 0xFFFF;
+constexpr int kAlarmDuplicate = -104;           // KE_FOUND_HANDLER [header]
+constexpr int kAlarmUnknown = -105;             // KE_NOTFOUND_HANDLER [header]
+
+struct Clock {
+    uint32_t lo;
+    uint32_t hi;
+};
+
+[[nodiscard]] bool clockBefore(const Clock &a, const Clock &b) {
+    return a.hi < b.hi || (a.hi == b.hi && a.lo < b.lo);
 }
 
-// IOP-3j: the reference's clock counts at 36.864 MHz. These are kept for
-// callers that only carry the value to SetAlarm, which answers -1 until a
-// timer manager exists; the IOP has no 64-bit divide, so the conversion is
-// done in 32-bit pieces and the high word stays zero.
-constexpr uint32_t kTicksPerMillisecond = 36864;
+[[nodiscard]] Clock clockAdd(const Clock &a, const Clock &b) {
+    Clock sum{a.lo + b.lo, a.hi + b.hi};
+    if (sum.lo < a.lo) {
+        sum.hi++;
+    }
+    return sum;
+}
 
+[[nodiscard]] Clock clockSubtract(const Clock &a, const Clock &b) {
+    Clock difference{a.lo - b.lo, a.hi - b.hi};
+    if (a.lo < b.lo) {
+        difference.hi--;
+    }
+    return difference;
+}
+
+// (hi:lo) / divisor, a bit at a time: the R3000 has no 64-bit divide, and
+// the library one is not linked here.
+[[nodiscard]] Clock clockDivide(Clock value, uint32_t divisor, uint32_t *remainder_out) {
+    Clock quotient{0, 0};
+    uint32_t remainder = 0;
+    for (int bit = 63; bit >= 0; bit--) {
+        const uint32_t top = bit >= 32 ? (value.hi >> (bit - 32)) & 1 : (value.lo >> bit) & 1;
+        remainder = (remainder << 1) | top;
+        if (remainder >= divisor) {
+            remainder -= divisor;
+            if (bit >= 32) {
+                quotient.hi |= 1u << (bit - 32);
+            } else {
+                quotient.lo |= 1u << bit;
+            }
+        }
+    }
+    if (remainder_out != nullptr) {
+        *remainder_out = remainder;
+    }
+    return quotient;
+}
+
+[[nodiscard]] Clock clockMultiply(const Clock &value, uint32_t factor) {
+    const unsigned long long low = static_cast<unsigned long long>(value.lo) * factor;
+    Clock product{static_cast<uint32_t>(low), static_cast<uint32_t>(low >> 32)};
+    product.hi += value.hi * factor;
+    return product;
+}
+
+// Ordinal 39: usec * 4608 / 125, in 64 bits.
 void usecToSysClock(uint32_t usec, uint32_t *clock) {
-    clock[0] = (usec / 1000) * kTicksPerMillisecond
-               + (usec % 1000) * kTicksPerMillisecond / 1000;
-    clock[1] = 0;
+    const Clock ticks = clockDivide(clockMultiply({usec, 0}, kClockNumerator),
+                                    kClockDenominator, nullptr);
+    clock[0] = ticks.lo;
+    clock[1] = ticks.hi;
 }
 
+// Ordinal 40: the inverse, split into seconds and the rest.
 void sysClockToUsec(const uint32_t *clock, uint32_t *sec, uint32_t *usec) {
-    const uint32_t ticks = clock[0];
-    const uint32_t total_usec = (ticks / kTicksPerMillisecond) * 1000
-                                + (ticks % kTicksPerMillisecond) * 1000 / kTicksPerMillisecond;
+    const Clock total = clockDivide(clockMultiply({clock[0], clock[1]}, kClockDenominator),
+                                    kClockNumerator, nullptr);
+    uint32_t rest;
+    const Clock seconds = clockDivide(total, 1000000, &rest);
     if (sec != nullptr) {
-        *sec = total_usec / 1000000;
+        *sec = seconds.lo;
     }
     if (usec != nullptr) {
-        *usec = total_usec % 1000000;
+        *usec = rest;
     }
+}
+
+struct Alarm {
+    Clock deadline;
+    int (*callback)(void *);
+    void *arg;
+    uint16_t next;
+    uint16_t prev;
+    bool in_use;
+    bool permanent;         // IOP-3k: the record that keeps the clock fresh
+};
+
+Alarm alarms[kAlarms];
+uint16_t alarm_head = kAlarmNone;
+uint32_t timer_id;
+Clock clock_seen;                               // the last reading: its high word is ours
+uint32_t ticks_granularity;                     // 100 us of ticks
+uint32_t ticks_coalesce;                        // 200 us: alarms closer than this share one target
+
+// Now, as (hi:lo): the counter and the wraps counted so far.
+[[nodiscard]] Clock readClock() {
+    const uint32_t low = _import_timrman_get_counter(timer_id);
+    if (low < clock_seen.lo) {
+        clock_seen.hi++;
+    }
+    clock_seen.lo = low;
+    return clock_seen;
+}
+
+// Ordinal 34: GetSystemTime(out). The reference's own callers all pass the
+// pointer and take the value from it; the return is 0 (docs/analysis/44 §7).
+int getSystemTime(uint32_t *out) {
+    Critical critical;
+    const Clock now = readClock();
+    if (out != nullptr) {
+        out[0] = now.lo;
+        out[1] = now.hi;
+    }
+    return kOk;
+}
+
+void unlinkAlarm(uint16_t index) {
+    Alarm &alarm = alarms[index];
+    if (alarm.prev == kAlarmNone) {
+        alarm_head = alarm.next;
+    } else {
+        alarms[alarm.prev].next = alarm.next;
+    }
+    if (alarm.next != kAlarmNone) {
+        alarms[alarm.next].prev = alarm.prev;
+    }
+    alarm.next = kAlarmNone;
+    alarm.prev = kAlarmNone;
+}
+
+// IOP-3k: ascending by deadline, after any equal one.
+void insertAlarm(uint16_t index) {
+    Alarm &alarm = alarms[index];
+    uint16_t after = kAlarmNone;
+    for (uint16_t at = alarm_head; at != kAlarmNone; at = alarms[at].next) {
+        if (clockBefore(alarm.deadline, alarms[at].deadline)) {
+            break;
+        }
+        after = at;
+    }
+    alarm.prev = after;
+    if (after == kAlarmNone) {
+        alarm.next = alarm_head;
+        alarm_head = index;
+    } else {
+        alarm.next = alarms[after].next;
+        alarms[after].next = index;
+    }
+    if (alarm.next != kAlarmNone) {
+        alarms[alarm.next].prev = index;
+    }
+}
+
+[[nodiscard]] uint16_t findAlarm(int (*callback)(void *), void *arg) {
+    for (uint16_t at = alarm_head; at != kAlarmNone; at = alarms[at].next) {
+        if (alarms[at].callback == callback && alarms[at].arg == arg) {
+            return at;
+        }
+    }
+    return kAlarmNone;
+}
+
+[[nodiscard]] uint16_t allocateAlarm() {
+    for (uint16_t k = 0; k < kAlarms; k++) {
+        if (!alarms[k].in_use) {
+            alarms[k].in_use = true;
+            alarms[k].permanent = false;
+            return k;
+        }
+    }
+    return kAlarmNone;
+}
+
+// IOP-3k: the compare register follows the queue's head -- or the last of a
+// run of heads within 200 us of each other, so that they share one
+// interrupt -- and a deadline already passed is replaced by 200 us from now.
+void armTimer() {
+    if (alarm_head == kAlarmNone) {
+        return;
+    }
+    uint16_t target = alarm_head;
+    const Clock window{ticks_coalesce, 0};
+    while (alarms[target].next != kAlarmNone
+           && !clockBefore(clockAdd(alarms[target].deadline, window),
+                           alarms[alarms[target].next].deadline)) {
+        target = alarms[target].next;
+    }
+    const Clock now = readClock();
+    uint32_t compare;
+    if (clockBefore(now, alarms[target].deadline)) {
+        compare = alarms[target].deadline.lo;
+    } else {
+        compare = _import_timrman_get_counter(timer_id) + ticks_coalesce;
+    }
+    _import_timrman_set_compare(timer_id, compare);
+}
+
+// The shared insert: `delta` from now, the 100 us floor applied.
+[[nodiscard]] int addAlarm(const uint32_t *delta, int (*callback)(void *), void *arg) {
+    if (findAlarm(callback, arg) != kAlarmNone) {
+        return kAlarmDuplicate;
+    }
+    const uint16_t index = allocateAlarm();
+    if (index == kAlarmNone) {
+        return kNoMemory;
+    }
+    Clock wait{delta[0], delta[1]};
+    if (wait.hi == 0 && wait.lo < ticks_granularity) {
+        wait.lo = ticks_granularity;
+    }
+    Alarm &alarm = alarms[index];
+    alarm.deadline = clockAdd(readClock(), wait);
+    alarm.callback = callback;
+    alarm.arg = arg;
+    insertAlarm(index);
+    armTimer();
+    return kOk;
+}
+
+[[nodiscard]] int removeAlarm(int (*callback)(void *), void *arg) {
+    const uint16_t index = findAlarm(callback, arg);
+    if (index == kAlarmNone) {
+        return kAlarmUnknown;
+    }
+    unlinkAlarm(index);
+    alarms[index].in_use = false;
+    return kOk;
+}
+
+// Ordinals 35-38. SetAlarm and CancelAlarm want a thread; their i-forms
+// want an interrupt (IOP-3k), and skip the critical section their caller
+// already holds.
+int setAlarm(const uint32_t *clock, int (*callback)(void *), void *arg) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    Critical critical;
+    return addAlarm(clock, callback, arg);
+}
+
+int setAlarmInterrupt(const uint32_t *clock, int (*callback)(void *), void *arg) {
+    if (!_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    return addAlarm(clock, callback, arg);
+}
+
+int cancelAlarm(int (*callback)(void *), void *arg) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    Critical critical;
+    return removeAlarm(callback, arg);
+}
+
+int cancelAlarmInterrupt(int (*callback)(void *), void *arg) {
+    if (!_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    return removeAlarm(callback, arg);
+}
+
+// IOP-3j: the delayed thread's alarm, and what expires it.
+int delayExpired(void *arg) {
+    auto *thread = static_cast<Thread *>(arg);
+    if (thread->state == Wait && thread->wait_type == Delay) {
+        wake(static_cast<uint32_t>(thread - threads), kOk, true);
+    }
+    return 0;                                   // one shot: the record is freed
+}
+
+void cancelDelay(Thread &thread) {
+    (void)removeAlarm(delayExpired, &thread);
+}
+
+int delayThread(uint32_t usec) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    Critical critical;
+    uint32_t clock[2];
+    usecToSysClock(usec, clock);
+    const int added = addAlarm(clock, delayExpired, &threads[current]);
+    if (added != kOk) {
+        return added;
+    }
+    return blockCurrent(Delay, 0);
+}
+
+// IOP-3k: the timer's interrupt. The overflow half is answered by reading
+// the clock; the target half walks the due alarms in order, re-arming the
+// permanent record a counter period on, calling the others and keeping
+// those whose callback asks for more -- at most 200 us more per call.
+int timerHandler(void *) {
+    const uint32_t status = _import_timrman_get_status(timer_id);
+    (void)readClock();
+    if ((status & kStatusTarget) == 0) {
+        return 1;
+    }
+    while (alarm_head != kAlarmNone) {
+        const uint16_t index = alarm_head;
+        Alarm &alarm = alarms[index];
+        if (clockBefore(readClock(), alarm.deadline)) {
+            break;
+        }
+        unlinkAlarm(index);
+        if (alarm.permanent) {
+            alarm.deadline.hi++;
+            insertAlarm(index);
+            continue;
+        }
+        const int again = alarm.callback(alarm.arg);
+        if (again == 0) {
+            alarm.in_use = false;
+            continue;
+        }
+        const uint32_t more = static_cast<uint32_t>(again) < ticks_coalesce
+                                  ? static_cast<uint32_t>(again)
+                                  : ticks_coalesce;
+        alarm.deadline = clockAdd(alarm.deadline, {more, 0});
+        insertAlarm(index);
+    }
+    armTimer();
+    return 1;
+}
+
+// IOP-3j: at the entry -- the timer THREADMAN's own boot takes, programmed
+// as the reference programs it: counter 0, the first target 100 us out,
+// mode 0x70, and the permanent record seeded 2 ms overdue so the first
+// interrupt walks the queue.
+void startClock() {
+    timer_id = static_cast<uint32_t>(_import_timrman_alloc(kClockSource, 32, 1));
+    uint32_t clock[2];
+    usecToSysClock(kGranularityUsec, clock);
+    ticks_granularity = clock[0];
+    ticks_coalesce = clock[0] * 2;
+    clock_seen = {0, 0};
+    for (Alarm &alarm : alarms) {
+        alarm.in_use = false;
+    }
+    alarm_head = kAlarmNone;
+    const uint16_t permanent = allocateAlarm();
+    alarms[permanent].permanent = true;
+    alarms[permanent].callback = nullptr;
+    alarms[permanent].arg = nullptr;
+    usecToSysClock(kSeedUsec, clock);
+    alarms[permanent].deadline = clockSubtract({0, 0}, {clock[0], clock[1]});
+    insertAlarm(permanent);
+    const int irq = _import_timrman_intr_code(timer_id);
+    _import_intrman_register(static_cast<uint32_t>(irq), 1, timerHandler, nullptr);
+    _import_timrman_set_counter(timer_id, 0);
+    _import_timrman_set_compare(timer_id, ticks_granularity);
+    _import_timrman_set_mode(timer_id, kTimerMode);
+    _import_intrman_enable(static_cast<uint32_t>(irq));
 }
 
 uint32_t getSystemStatusFlag() {
@@ -1243,12 +1604,12 @@ void *getThreadmanData() {
         slot(stubError),                // 30 iSuspendThread
         slot(stubError),                // 31 ResumeThread
         slot(stubError),                // 32 iResumeThread
-        slot(notYet),                   // 33 DelayThread (IOP-3j)
-        slot(notYet),                   // 34 GetSystemTime
-        slot(notYet),                   // 35 SetAlarm
-        slot(notYet),                   // 36 iSetAlarm
-        slot(notYet),                   // 37 CancelAlarm
-        slot(notYet),                   // 38 iCancelAlarm
+        slot(delayThread),              // 33 (IOP-3j)
+        slot(getSystemTime),            // 34
+        slot(setAlarm),                 // 35 (IOP-3k)
+        slot(setAlarmInterrupt),        // 36
+        slot(cancelAlarm),              // 37
+        slot(cancelAlarmInterrupt),     // 38
         slot(usecToSysClock),           // 39
         slot(sysClockToUsec),           // 40
         slot(getSystemStatusFlag),      // 41
@@ -1313,12 +1674,24 @@ PS2_IMPORT(_import_sysmem_allocate, 4)
 PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("intrman\0", 0x0102)
+PS2_IMPORT(_import_intrman_register, 4)
+PS2_IMPORT(_import_intrman_enable, 6)
 PS2_IMPORT(_import_intrman_cpu_enable, 9)
 PS2_IMPORT(_import_intrman_suspend, 17)
 PS2_IMPORT(_import_intrman_resume, 18)
 PS2_IMPORT(_import_intrman_query_context, 23)
 PS2_IMPORT(_import_intrman_set_new_ctx, 28)
 PS2_IMPORT(_import_intrman_set_should_preempt, 30)
+PS2_IMPORTS_END()
+
+PS2_IMPORTS_BEGIN("timrman\0", 0x0101)
+PS2_IMPORT(_import_timrman_alloc, 4)
+PS2_IMPORT(_import_timrman_set_mode, 7)
+PS2_IMPORT(_import_timrman_get_status, 8)
+PS2_IMPORT(_import_timrman_set_counter, 9)
+PS2_IMPORT(_import_timrman_get_counter, 10)
+PS2_IMPORT(_import_timrman_set_compare, 11)
+PS2_IMPORT(_import_timrman_intr_code, 16)
 PS2_IMPORTS_END()
 
 extern "C" {
@@ -1366,6 +1739,7 @@ int _module_start(int, char **) {
 
     _import_intrman_set_new_ctx(newContext);
     _import_intrman_set_should_preempt(shouldPreempt);
+    startClock();
     _import_intrman_cpu_enable();
     return 0;                                   // resident
 }

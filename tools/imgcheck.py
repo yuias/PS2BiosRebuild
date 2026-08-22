@@ -88,8 +88,6 @@ NOT_YET = (
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
     "preemption: threads switch on syscalls (SYS-10c) and on the SIF's "
     "interrupt (SYS-12c), but no timer interrupt preempts a running one yet",
-    "the IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 "
-    "until a timer manager exists",
     "the modules a title loads on request: SIO2MAN is the one the archive "
     "holds; PADMAN, MCMAN and the rest are not built",
     "EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); "

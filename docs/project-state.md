@@ -130,6 +130,7 @@ reference and the reason for it.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
+| IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 62 slots served, the rest report themselves |
@@ -585,8 +586,8 @@ line after its label there.
 (`IOMAN` over the SIF), and running `BOOT2` needs the EE kernel's
 `LoadExecPS2` over the `EELOAD` path that now exists; a title's own start-up
 will pull `PADMAN`, `MCMAN` and whatever else it loads with `SifLoadModule`,
-which works. `TIMRMAN` (`DelayThread`, IOP-3j) will come early, since drivers'
-retry loops use it.
+which works. `TIMRMAN` and the alarms behind `DelayThread` (IOP-3j, IOP-3k,
+IOP-7) are built, since drivers' retry loops use them.
 
 The gate keeps printing the slot and module counts, but they are no longer the
 ordering. New analysis documents are written only for what M1 or M2 faults on
@@ -625,7 +626,6 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 | Problem | Where it is written up | State |
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2 | `spec/03` BOOT-11h, `docs/analysis/25` | no longer waited on anywhere: the IOP takes the channel's interrupt instead; cause still unknown |
-| `DelayThread` and the alarms answer -1: no timer manager | `spec/06` IOP-3j, printed by `ninja -C build check` | deliberate |
 | 57 of 125 syscall slots report themselves rather than working | §6, pulled by M2 | deliberate |
 | Twelve of twenty-nine boot-list modules exist, and one loadable on request | §6, pulled by M2 | deliberate |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
