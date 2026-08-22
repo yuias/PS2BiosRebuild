@@ -92,7 +92,10 @@ function(ps2AddModule name)
       "$<$<COMPILE_LANGUAGE:CXX>:-march=mips1;-mno-check-zero-division>")
   set(script "${CMAKE_CURRENT_SOURCE_DIR}/src/link/irx.ld")
   target_link_options(${name}.elf PRIVATE "-T${script}" --emit-relocs)
-  set_target_properties(${name}.elf PROPERTIES LINK_DEPENDS "${script}")
+  # The container is made after the link; a change to the tool that makes it
+  # has to make it again, which a relink is the one way to ask for.
+  set_target_properties(${name}.elf PROPERTIES LINK_DEPENDS
+      "${script};${CMAKE_CURRENT_SOURCE_DIR}/tools/mkirx.py")
   add_custom_command(TARGET ${name}.elf POST_BUILD
       COMMAND "${Python3_EXECUTABLE}"
               "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkirx.py"

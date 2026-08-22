@@ -88,11 +88,10 @@ NOT_YET = (
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
     "preemption: threads switch on syscalls (SYS-10c) and on the SIF's "
     "interrupt (SYS-12c), but no timer interrupt preempts a running one yet",
-    "loading a module over the SIF (spec/03 BOOT-12e): the loader's server "
-    "answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not "
-    "exist on the IOP yet",
     "the IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 "
     "until a timer manager exists",
+    "the modules a title loads on request: SIO2MAN is the one the archive "
+    "holds; PADMAN, MCMAN and the rest are not built",
     "EELOAD: the reference replaces the running program through that stub "
     "(spec/04 EE-9a), where our kernel loads the program itself",
 )
