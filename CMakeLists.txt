@@ -138,6 +138,9 @@ ps2AddModule(stdio MODULE Standard_IO VERSION 1.00
     SOURCES src/iop/stdio.cpp)
 ps2AddModule(loadfile MODULE Load_Module_By_EE VERSION 1.00
     SOURCES src/iop/loadfile.cpp)
+# Not on the boot list: the first module a program loads on request.
+ps2AddModule(sio2man MODULE sio2man VERSION 1.00
+    SOURCES src/iop/sio2man.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
@@ -212,7 +215,7 @@ add_custom_command(
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf threadman.elf dmacman.elf
             ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
-            osdsys.elf
+            sio2man.elf osdsys.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

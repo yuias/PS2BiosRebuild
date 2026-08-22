@@ -33,7 +33,7 @@ add_custom_command(
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
             sysmem.elf loadcore.elf excepman.elf intrman.elf threadman.elf
             dmacman.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf
-            loadfile.elf
+            loadfile.elf sio2man.elf
     COMMENT "Computing IOPBOOT's archive-relative link address")
 
 # A bare OUTPUT command with no consumer in its own directory is pruned from

@@ -77,7 +77,18 @@ static_assert(sizeof(LibraryTable) == 0x14);
 [[nodiscard]] int registerVersioned(void *table_ptr) {
     auto *table = reinterpret_cast<LibraryTable *>(table_ptr);
     if (table->link != kExportMagic) {
-        return -1;                     // not an export table
+        // Already in: the loader registers a table when it places the module
+        // (IOP-5b), so a module registering itself from its entry -- the
+        // reference's way -- finds its own table there and is told yes
+        // (docs/implementation.md). Anything else is not an export table.
+        for (auto *walk = reinterpret_cast<LibraryTable *>(registryHead());
+             walk != nullptr;
+             walk = reinterpret_cast<LibraryTable *>(walk->link)) {
+            if (walk == table) {
+                return 0;
+            }
+        }
+        return -1;
     }
     const auto *candidate_tag = reinterpret_cast<const uint32_t *>(table->tag);
     const auto major = static_cast<uint8_t>(table->version >> 8);
