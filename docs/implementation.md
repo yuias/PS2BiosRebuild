@@ -309,11 +309,28 @@ kernel mapped the TLB the reference maps (`spec/04` EE-12,
 `docs/analysis/36`) — the client reads its packet through the uncached window
 at `0x20000000`, which PCSX2 answers with zeroes when nothing maps it. And an
 IOP module that hoists its `lui` met `mkirx`'s pairing rule, which now accepts
-the shape (`spec/02` IRX-3a, below). The program then calls `SifLoadModule`,
-whose `SifBindRpc` sends `RPC_BIND` and waits on a semaphore for an answer no
-server gives, and the kernel reports `no thread is ready to run`. `python3
-tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call it made in
-order; `docs/project-state.md` §6 says what it asks for next.
+the shape (`spec/02` IRX-3a, below).
+
+**Its `SifLoadModule` is answered, and the program runs to its end.** The
+program's `SifBindRpc` sends `RPC_BIND` and waits on a semaphore; with its
+other thread waiting too, the kernel has nothing to run — and does what the
+reference does (`spec/05` SYS-10k): the program was started on a thread of
+its own, and the boot thread, left ready at priority 128, idles with
+interrupts enabled until the IOP's `RPC_END` lands, the SDK's handler signals
+the semaphore from the interrupt, and the exit of that interrupt switches
+back (SYS-12c, its first real run). `EESYNC` answers the bind with a loader
+server and the call with what the reference answers for a file it has not
+got (`spec/03` BOOT-12e):
+
+```
+# m1: SifLoadModule rom0:SIO2MAN -> -203
+# m1: done
+```
+
+— on PCSX2 and PS2e. The `-203` is honest: the archive has no `SIO2MAN`
+and the IOP has no loader to hand one to; `docs/project-state.md` §6 says
+what comes next. `python3 tools/ps2sim.py build-m1/rom.bin --syscalls` lists
+every call the program made, in order.
 
 ## Deviations from the reference, and why
 
@@ -444,6 +461,21 @@ command id `0x10` — a user command in BOOT-12a's terms, the only one the
 service knows — whose body names the file, a window of it, and where the
 answer goes (`src/kernel/sif.cpp`, `src/iop/eesync.cpp`).
 
+**The boot thread waits in a queue of its own.** `spec/05` SYS-10k has it
+ready at priority 128 while a program runs, and a program's main thread
+starts at 128 too (SYS-10b). In one queue the two would take turns, and the
+boot thread's turn is an idle loop that nothing but an interrupt ends — so
+it is kept in a 130th queue below every priority, reporting 128 as the
+reference does, and is picked only when no program thread can be. Where the
+reference keeps its boot thread, and what it runs there, was not read; the
+observable behaviour (`docs/analysis/34` §6) is what is matched.
+
+**The loader's server answers every name with -203.** `spec/03` BOOT-12e's
+server exists so that the SDK's `SifLoadModule` binds, calls and returns;
+what it cannot yet do is load, since the IOP has no `MODLOAD`, `IOMAN` or
+`ROMDRV`. -203 is the reference's answer for a file it has not got, which is
+true of every name here until those exist.
+
 **Slot `0x76` reports a transfer running until channel 6 idles**, where the
 reference decodes the word `0x77` returned against the channel's position in
 its tag list (`spec/05` SYS-13d). The SDK's `SifDmaStat` loop asks the same
@@ -488,8 +520,8 @@ it cannot quietly go stale. This copy is the gate's own text:
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
-- The scheduler under interrupts: threads switch on syscalls (SYS-10c) but no timer or SBUS interrupt preempts or wakes anything yet
-- SIF RPC servers (spec/03 BOOT-12d): the IOP answers the command layer's INIT_CMD, so a program's SifInitRpc returns, but no server is bound — SifBindRpc waits forever
+- Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
+- Loading a module over the SIF (spec/03 BOOT-12e): the loader's server answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not exist on the IOP yet
 - The IOP's DMA interrupt: the command service polls the packet's size byte where the reference's SIFCMD is woken by the channel; the EE side is interrupt-driven as the reference's is
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
