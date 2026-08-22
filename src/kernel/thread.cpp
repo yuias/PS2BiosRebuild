@@ -95,9 +95,15 @@ struct Queue {
 
 ThreadRecord thread_table[kThreads];
 Semaphore semaphore_table[kSemaphores];
-Queue ready_queue[kPriorities];
+// SYS-10k: one queue more than the priorities, below them all, for the boot
+// thread once a program has a thread of its own. It keeps -- and reports --
+// priority 128, but a program's thread at 128 must come first, so it waits
+// where only an empty machine reaches.
+constexpr uint32_t kIdleQueue = kPriorities;
+constexpr uint32_t kQueues = kPriorities + 1;
+Queue ready_queue[kQueues];
 uint32_t current_thread = 0;
-uint32_t lowest_ready = kPriorities;             // where the pick starts scanning
+uint32_t lowest_ready = kQueues;                 // where the pick starts scanning
 uint16_t free_thread = kNone;                    // free lists, LIFO
 uint16_t free_semaphore = kNone;
 bool tables_ready = false;
@@ -127,7 +133,7 @@ void prepareTables() {
         return;
     }
     tables_ready = true;
-    for (uint32_t k = 0; k < kPriorities; k++) {
+    for (uint32_t k = 0; k < kQueues; k++) {
         ready_queue[k] = {kNone, kNone};
     }
     for (uint32_t k = kThreads - 1; k >= 1; k--) {
@@ -183,22 +189,31 @@ void unlink(Queue &queue, uint16_t id) {
     return id;
 }
 
+// Which queue a thread is ready in: its priority's, except the boot thread
+// once it has become the idle one (SYS-10k).
+[[nodiscard]] uint32_t queueOf(uint32_t id) {
+    if (id == 0 && thread_table[0].context != 0) {
+        return kIdleQueue;
+    }
+    return static_cast<uint16_t>(thread_table[id].current_priority);
+}
+
 // SYS-10b: a thread made ready goes to the tail of its priority's queue.
 void makeReady(uint16_t id) {
     ThreadRecord &thread = thread_table[id];
     thread.state = Ready;
-    const uint32_t priority = static_cast<uint16_t>(thread.current_priority);
-    enqueue(ready_queue[priority], id);
-    if (priority < lowest_ready) {
-        lowest_ready = priority;
+    const uint32_t queue = queueOf(id);
+    enqueue(ready_queue[queue], id);
+    if (queue < lowest_ready) {
+        lowest_ready = queue;
     }
-    if (static_cast<int32_t>(priority) < current().current_priority) {
+    if (queue < queueOf(current_thread)) {
         reschedule_requested = true;
     }
 }
 
 void takeOffReadyQueue(uint16_t id) {
-    unlink(ready_queue[static_cast<uint16_t>(thread_table[id].current_priority)], id);
+    unlink(ready_queue[queueOf(id)], id);
 }
 
 // A thread waiting on a semaphore is on that semaphore's list; taking it off
@@ -258,12 +273,13 @@ void saveCaller() {
 }
 
 // SYS-10b: the head of the lowest-numbered non-empty queue. Nothing ready is
-// a stop the reference makes with a message too.
+// a stop -- the reference's is a message and a reboot to the OSD -- and is
+// not reached while the boot thread waits in queue 128 (SYS-10k).
 [[nodiscard]] uint16_t pickNext() {
-    for (uint32_t priority = lowest_ready; priority < kPriorities; priority++) {
-        if (ready_queue[priority].head != kNone) {
-            lowest_ready = priority;
-            return popFront(ready_queue[priority]);
+    for (uint32_t queue = lowest_ready; queue < kQueues; queue++) {
+        if (ready_queue[queue].head != kNone) {
+            lowest_ready = queue;
+            return popFront(ready_queue[queue]);
         }
     }
     print("# no thread is ready to run: the kernel stops here.\n");
@@ -314,6 +330,24 @@ void setResumeValue(uint16_t id, uint32_t value) {
 
 // SYS-10i: where a thread function that returns lands (syscall.S).
 extern "C" void threadRoot() asm("_thread_root");
+
+// --- SYS-10k: the boot thread as what runs when nothing else can -----------
+
+// When the boot thread hands the first program a thread of its own, it stays
+// behind in queue 128 with this as its continuation: nothing, with interrupts
+// enabled, until a handler makes a better thread ready and the interrupt exit
+// switches to it (SYS-12c). The reference reboots to the OSD when its scan
+// finds no thread at all -- "No active threads" -- and never does while this
+// one is there.
+alignas(16) uint8_t idle_stack[0x400];
+alignas(16) uint32_t idle_frame[kBlockWords];
+
+extern "C" [[noreturn]] void idleLoop() asm("_idle_loop");
+extern "C" [[noreturn]] void idleLoop() {
+    for (;;) {
+        asm volatile("" ::: "memory");
+    }
+}
 
 // SYS-10d/SYS-10e: a fresh frame for a thread about to be started -- or
 // started again after exiting -- primed the way 0x3C primes the main one.
@@ -398,6 +432,51 @@ bool interruptReschedule(uint32_t *frame) {
 
 // EE-2b / EE-4a: RDRAM's return, kept by the kernel entry (entry.cpp).
 uint32_t memory_size;
+
+// SYS-10k, for program.cpp's boot: the first program gets the first free
+// record -- thread 1, at the boot priority, running from now -- and the boot
+// thread retreats to queue 128 behind it. Returns the program's thread id.
+uint32_t startProgramThread(uint32_t gp, uint32_t entry) {
+    prepareTables();
+    ThreadRecord &boot = thread_table[0];
+    for (uint32_t k = 0; k < kBlockWords; k++) {
+        idle_frame[k] = 0;
+    }
+    const uint32_t top = reinterpret_cast<uintptr_t>(idle_stack) + sizeof(idle_stack);
+    idle_frame[kSlotSp / 4] = top - 0x20;
+    idle_frame[kSlotFp / 4] = top - 0x20;
+    idle_frame[kSlotRa / 4] = reinterpret_cast<uintptr_t>(idleLoop);
+    boot.context = reinterpret_cast<uintptr_t>(idle_frame);
+    boot.resume_pc = reinterpret_cast<uintptr_t>(idleLoop);
+    makeReady(0);
+
+    const uint16_t id = free_thread;
+    ThreadRecord &thread = thread_table[id];
+    free_thread = thread.next;
+    thread.state = Run;
+    thread.resume_pc = entry;
+    thread.context = 0;
+    thread.entry = entry;
+    thread.gp = gp;
+    thread.initial_priority = kBootPriority;
+    thread.current_priority = kBootPriority;
+    thread.wait_type = NotWaiting;
+    thread.wait_id = 0;
+    thread.wakeup_count = 0;
+    thread.attr = 0;
+    thread.option = 0;
+    thread.argc = 0;
+    thread.args = nullptr;
+    thread.stack = 0;
+    thread.stack_size = 0;
+    thread.root = 0;
+    thread.heap_end = 0;
+    thread.start_arg = 0;
+    thread.next = kNone;
+    thread.prev = kNone;
+    current_thread = id;
+    return id;
+}
 
 // The launcher's half of SYS-8d: record what 0x3C will hand over.
 void setProgramArguments(uint32_t argc, const char *packed) {

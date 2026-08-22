@@ -230,10 +230,15 @@ int sysLoadOsd(int argc, char **argv) {
     return sysLoadProgram(kRom0Osdsys, argc, argv);
 }
 
+// thread.cpp: SYS-10k, the program's own thread and the boot thread's retreat.
+uint32_t startProgramThread(uint32_t gp, uint32_t entry);
+
 // EE-9c: the default boot runs that program with one argument. This is called
 // from the kernel's own entry, outside any syscall, so there is no frame to
 // come back through: the program is entered directly, with the registers
-// SYS-8d says a launcher's own call leaves -- entry, gp, argc, argv.
+// SYS-8d says a launcher's own call leaves -- entry, gp, argc, argv -- but on
+// a thread of its own (SYS-10k): the boot thread stays behind, ready at
+// priority 128, as what runs when nothing else can.
 int bootDefault() {
     // On the stack, not static: the kernel image carries no `.data`, and this
     // frame is never left, so the launcher's argv stays where SYS-8d says.
@@ -243,6 +248,7 @@ int bootDefault() {
         print(kNoProgram);
         return -1;
     }
+    startProgramThread(0, entry);
     storeArguments(1, const_cast<char **>(argv));
     reinterpret_cast<Entry>(entry)(entry, 0, 1, const_cast<char **>(argv));
     __builtin_unreachable();

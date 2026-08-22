@@ -405,6 +405,19 @@ caller; `id` below 256 else `-1`; with `out` null only the state is returned;
 otherwise the SDK's twelve-word status block is filled from the record. The
 boot thread reports **ready** (2), not running, on the reference.
 
+**SYS-10k — the boot thread stays.** A program does not run on the boot
+thread: the reference enters it on a thread of its own — the SDK's runtime
+sees its first `0x20` answer **3** after the runtime's own thread, so the
+program's is **1** — and the boot thread, 0, remains ready at 128 for as long
+as the program runs. It is what the scheduler picks when every other thread
+waits, and a program whose threads all block on an interrupt's answer (an
+SDK client's `WaitSema` inside `SifBindRpc`) resumes when that interrupt
+makes one ready again. Only when the scan finds **no** thread does the
+reference print `# <Thread> No active threads` and reboot into the OSD; a
+rebuild must not reach that state while the boot thread exists.
+(`docs/analysis/33`; the thread ids and the survival of an all-waiting
+program are observed on the reference under PCSX2 with `tests/m1`.)
+
 ## SYS-11: The table is indexed without a bound
 
 `docs/analysis/33`: the dispatcher computes `table[number]` for any number
