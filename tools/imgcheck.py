@@ -33,9 +33,29 @@ EXPECTED_POST = [0xFC, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09]
 # base load address the `@` token set (spec/03 BOOT-9).
 BOOT_LIST = 0x1F8100
 EXPECTED_BASE = 0x800
-EXPECTED_MODULES = 3             # SYSMEM, LOADCORE and EESYNC; the rest follows
-MODULES = ("SYSMEM", "LOADCORE", "EESYNC")
-EXPECTED_LIBRARIES = ["sysmem", "loadcore"]
+BOOT_LIST_TOTAL = 29             # the reference's IOPBTCONF (spec/03 BOOT-9)
+
+
+def bootListModules(image: pathlib.Path) -> list[str]:
+    """The module names the image's own IOPBTCONF lists, in load order: what
+    IOPBOOT must resolve (spec/03 BOOT-9), read from the archive rather than
+    kept as a count that goes stale each time a module is added."""
+    data = image.read_bytes()
+    entries = romdir.parseEntries(data, romdir.findTable(data))
+    entry = next(e for e in entries if e.name == "IOPBTCONF")
+    text = data[entry.offset:entry.offset + entry.size].decode("ascii", "replace")
+    return [token for token in text.split()
+            if not token.startswith("@") and not token.startswith("#")]
+
+
+def expectedLibraries(image: pathlib.Path, modules: list[str]) -> list[str]:
+    """Every library the boot list's modules export, as their files declare."""
+    tags = []
+    for name in modules:
+        for table in moduleFromImage(image, name).tables():
+            if table["kind"] == "export":
+                tags.append(table["tag"])
+    return tags
 
 # LOADCORE's entry calls sysmem's allocator through the stub the loader
 # rewrote, and records what came back (src/iop/loadcore.S). It is the first
@@ -59,7 +79,7 @@ PROGRAM_LINE = "OSDSYS: loaded from the archive and running"
 PROGRAM_ARGUMENT = "BootBrowser"
 
 NOT_YET = (
-    "the rest of the boot list: three of its twenty-nine modules are built",
+    "the rest of the boot list: {built} of its twenty-nine modules are built",
     "supersession (spec/02 IRX-11): registration compares versions, but "
     "nothing yet inherits a superseded library's clients",
     # `{}` is filled in from the image's own table -- a hand-maintained count
@@ -126,7 +146,7 @@ def moduleFromImage(image: pathlib.Path, name: str) -> irxinfo.Irx:
 def checkModules(image: pathlib.Path) -> list[str]:
     """Each built module against the checker the reference's modules pass."""
     problems = []
-    for name in MODULES:
+    for name in bootListModules(image):
         problems += [f"{name}: {problem}" for problem
                      in irxinfo.checkModule(moduleFromImage(image, name))]
     return problems
@@ -152,18 +172,20 @@ def checkIop(image: pathlib.Path) -> list[str]:
         problems.append(f"BOOT-9: the boot list's base address parsed as "
                         f"{base:#x}, want {EXPECTED_BASE:#x} -- IOPBOOT did "
                         f"not reach or read IOPBTCONF")
-    if count != EXPECTED_MODULES:
+    modules = bootListModules(image)
+    if count != len(modules):
         problems.append(f"BOOT-9: {count} module names resolved, want "
-                        f"{EXPECTED_MODULES}")
+                        f"{len(modules)}")
         return problems
 
     # IRX-10: both modules' export tables were linked into the registry, and
     # IRX-9: every import table found its exporter.
     exports, imports = iopsim.scanLibraries(bus)
     tags = [tag for _, tag, _, _ in exports]
-    if sorted(tags) != sorted(EXPECTED_LIBRARIES):
+    expected = expectedLibraries(image, modules)
+    if sorted(tags) != sorted(expected):
         problems.append(f"IRX-10: libraries {tags} registered, want "
-                        f"{EXPECTED_LIBRARIES}")
+                        f"{expected}")
     unbound = [tag for _, tag, _, _, ok in imports if not ok]
     if unbound:
         problems.append(f"IRX-9: import tables {unbound} were never bound")
@@ -182,7 +204,7 @@ def checkIop(image: pathlib.Path) -> list[str]:
     # IRX-3: every export entry is an R_MIPS_32, so each must have moved by the
     # module's own base. Comparing against the stored file is what makes this a
     # test of the relocation rather than of the table.
-    for index, name in enumerate(MODULES):
+    for index, name in enumerate(modules):
         module = moduleFromImage(image, name)
         # A module need not export anything: EESYNC is a service, not a
         # library (spec/02 IRX-13's export-free resident shape).
@@ -518,7 +540,7 @@ def main() -> int:
           f"across the SIF, where a file crosses it")
     print("\nnot required of the image yet:")
     for item in NOT_YET:
-        print(f"   {item.format(unserved=unserved)}")
+        print(f"   {item.format(unserved=unserved, built=len(bootListModules(arguments.image)))}")
     return 0
 
 

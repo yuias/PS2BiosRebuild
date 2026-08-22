@@ -13,5 +13,6 @@ IOPBTCONF     @PS2_SOURCE_DIR@/src/rom/iopbtconf.txt  -
 IOPBOOT       @PS2_BINARY_DIR@/iopboot.bin    @@PS2_SOURCE_DIR@/src/rom/extinfo/iopboot.txt
 SYSMEM        @PS2_BINARY_DIR@/sysmem.irx     @@PS2_BINARY_DIR@/sysmem.extinfo
 LOADCORE      @PS2_BINARY_DIR@/loadcore.irx   @@PS2_BINARY_DIR@/loadcore.extinfo
+EXCEPMAN      @PS2_BINARY_DIR@/excepman.irx   @@PS2_BINARY_DIR@/excepman.extinfo
 EESYNC        @PS2_BINARY_DIR@/eesync.irx     @@PS2_BINARY_DIR@/eesync.extinfo
 OSDSYS        @PS2_OSDSYS@                    @@PS2_SOURCE_DIR@/src/rom/extinfo/osdsys.txt

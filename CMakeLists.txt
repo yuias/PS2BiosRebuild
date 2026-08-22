@@ -120,6 +120,8 @@ ps2AddModule(sysmem MODULE Memory_Manager VERSION 1.00
     SOURCES src/iop/sysmem.cpp)
 ps2AddModule(loadcore MODULE Module_Loader VERSION 1.00
     SOURCES src/iop/loadcore.cpp)
+ps2AddModule(excepman MODULE Exception_Manager VERSION 1.00
+    SOURCES src/iop/excepman.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
@@ -192,7 +194,7 @@ add_custom_command(
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf eesync.elf osdsys.elf
+            loadcore.elf excepman.elf eesync.elf osdsys.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
