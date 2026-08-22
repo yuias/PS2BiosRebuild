@@ -10,8 +10,9 @@ the working document and is kept current.
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
 > is thin is *depth*: three of the boot list's twenty-nine modules exist,
-> sixty-two of the 125 syscall slots are served, the EE's threads switch on
-> syscalls but not on interrupts, and neither processor takes an interrupt.
+> sixty-eight of the 125 syscall slots are served, the EE's threads switch on
+> syscalls and it delivers interrupts to a program's handlers but does not yet
+> idle for one, and the IOP takes no interrupt at all.
 >
 > Five specifications are written and every one has a gate that has been tested
 > in both directions. Six simulators and checkers judge an image — ours and the
@@ -487,46 +488,52 @@ emulators the program prints its first stages —
 ```
 
 — which is SYS-8, SYS-9 and SYS-10 exercised by someone else's runtime: step
-4 arrived early and is built. It then stops in `SifInitRpc`, polling slot
-`0x7A` for the IOP's RPC service. (The C library's own start-up would have
-stopped there earlier, reading the clock over CDVD's RPC; the test program
-opts out of that weak hook so the stages before it can report.) The pull is
-now at step 2, SIF RPC on both sides, which drags in the EE's DMAC interrupt
-— the SDK dispatches incoming SIF commands from a channel-5 handler installed
-with slot `0x12` — and the IOP's `SIFCMD` protocol. `python3 tools/ps2sim.py
-build-m1/rom.bin --syscalls` prints the exact list; both emulators agree with
-it since `docs/analysis/31`.
+4 arrived early and is built. (The C library's own start-up would have
+stopped in `SifInitRpc` earlier, reading the clock over CDVD's RPC; the test
+program opts out of that weak hook so the stages before it can report.)
 
-*Exactly where to pick up (2026-08-17, suspended mid-step):* the analysis and
-specification for step 2 are done — `docs/analysis/34` (the command and RPC
-protocol), `35` (interrupt delivery and the SIF slots), `spec/03` BOOT-12,
-`spec/05` SYS-12/SYS-13 — and the EE's half is partly built: slots
-`0x10`–`0x13` and the interrupt entry (`src/kernel/interrupt.cpp`,
-`syscall.S`'s `_interrupt_entry`, SYS-12) are in and gated, but **no interrupt
-has been observed on a target yet** because nothing raises one. What is left
-for `SifInitRpc` to return, in order:
+*Where M1 stands (2026-08-22):* step 2 is built and gated on both targets.
+The EE's SIF slots (`spec/05` SYS-13, `src/kernel/sif.cpp`) and the IOP's
+command service (`spec/03` BOOT-12, `src/iop/eesync.cpp`) speak the command
+layer to the SDK's client, and the first interrupt the image has ever taken —
+channel 5's, on the IOP's `SET_SREG` reply — went through SYS-12's entry into
+the SDK's handler on PS2e and PCSX2 alike:
 
-1. **EE, `spec/05` SYS-13** — slots `0x76`–`0x7A` in `src/kernel/sif.cpp`:
-   the software registers (32), `0x79`/`0x7A` over MSCOM/SMCOM/MSFLG/SMFLG,
-   `0x78` arming channel 5, `0x77` building BOOT-11a headers and tags from a
-   transfer list and starting channel 6, `0x76` answering `-1` when channel 6
-   has stopped.
-2. **IOP, `spec/03` BOOT-12** — `src/iop/eesync.cpp` becomes the command
-   service: publish the receive buffer (128 bytes, the packet's full size) in
-   `SMCOM`, raise `0x20000` in `SMFLG`, dispatch on `cid`; answer INIT_CMD
-   (`0x80000002`, the EE receive address at `+0x10`) with SET_SREG
-   (`0x80000001`, `{0, 1}`, `psize 0x18`) sent to that address as a BOOT-11c/d
-   packet — that transfer is what raises the EE's channel-5 interrupt and
-   enters the SDK's handler, the first real exercise of SYS-12. Keep the
-   kernel's own file fetch as a private user `cid` whose body is today's
-   request block; `sifExchange` in `src/kernel/sif.cpp` prefixes the header.
-3. Then `SifBindRpc`/`SifCallRpc` for server `0x80000006` (`LOADFILE`;
-   `docs/analysis/34` §5 lists what its function numbers and reply still need
-   reading), which is the M1 program's fourth stage.
+```
+# m1: SifInitRpc returned
+```
 
-The simulators cannot deliver an EE interrupt (`tools/eesim.py` has none),
-so this step's gate is PS2e first and PCSX2 second — the M1 program printing
-`# m1: SifInitRpc returned`. `tests/m1/main.c` prints a line per stage.
+Two things the step pulled in that the plan had not listed: the kernel's TLB
+(`spec/04` EE-12, `docs/analysis/36` — PCSX2 answers an unmapped uncached read
+with zeroes, and the SDK's client reads its packet that way), and a loader
+that holds a run of `HI16` (`spec/02` IRX-3a — the compiled service hoisted
+its `lui`). The IOP side polls the packet's size byte rather than taking its
+DMA interrupt, a deviation `docs/implementation.md` records; the busy-bit
+workaround (§7) stays until that interrupt exists.
+
+The program now stops one stage on: `SifLoadModule` binds server
+`0x80000006` and `WaitSema`s for the `RPC_END` that nothing sends, and the
+kernel reports `no thread is ready to run`. The pull is now at step 3, and it
+is two pieces:
+
+1. **An idle path in the kernel.** A `WaitSema` with no other thread ready
+   must wait for an interrupt rather than stop — the handler's
+   `iSignalSema` is what makes the waiter ready again (SYS-12c is built for
+   exactly this and has not run yet). The kernel needs a place to idle with
+   interrupts enabled, outside the syscall's `EXL`.
+2. **The IOP's RPC layer and `LOADFILE`** (`spec/03` BOOT-12d): answer
+   `RPC_BIND` for `0x80000006` with `RPC_END` naming a server and its buffer;
+   receive `RPC_CALL`'s out-of-band argument block and answer with the
+   result. `docs/analysis/34` §5 lists what is still unread — `LOADFILE`'s
+   function numbers and reply layout, from `<outdir>/LOADFILE`'s own handler
+   — and that reading is the analysis this piece needs before it is built.
+   Behind it stand `MODLOAD`, `IOMAN` and `ROMDRV`, which is what a real
+   `SifLoadModule("rom0:SIO2MAN")` resolves to.
+
+The gate is the M1 program's next line, `# m1: SifLoadModule rom0:SIO2MAN ->
+<id>`, on PS2e first and PCSX2 second (`tools/eesim.py` takes no interrupt,
+so the simulators cannot judge this). `tests/m1/main.c` prints a line per
+stage.
 
 The gate keeps printing the slot and module counts, but they are no longer the
 ordering. New analysis documents are written only for what M1 or M2 faults on
@@ -565,9 +572,9 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 | Problem | Where it is written up | State |
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
-| Neither processor takes an interrupt in our image; both ends of the SIF rendezvous on the flag registers | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
-| The EE schedules on syscalls only; no interrupt preempts or wakes; the IOP has no threads, so `EESYNC` never returns from its entry | §6, M1 steps 2–4 | deliberate |
-| 63 of 125 syscall slots report themselves rather than working | §6, pulled by M1 | deliberate |
+| The IOP takes no interrupt; its command service polls the packet's size byte where the reference's `SIFCMD` is woken by its DMA channel | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
+| The EE schedules on syscalls and delivers interrupts, but a wait with nothing else ready stops the kernel instead of idling for one; the IOP has no threads, so `EESYNC` never returns from its entry | §6, M1 step 3 | deliberate |
+| 57 of 125 syscall slots report themselves rather than working | §6, pulled by M1 | deliberate |
 | Three of twenty-nine boot-list modules exist | §6, pulled by M1 and M2 | deliberate |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |

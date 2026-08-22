@@ -287,10 +287,33 @@ the thread runs, signals and exits, and `WaitSema` comes back —
 # m1: thread and semaphore ok
 ```
 
-— on PCSX2 and PS2e alike. It then stops in `SifInitRpc`, polling slot
-`0x7A` for an IOP RPC service that does not exist yet. `python3
+— on PCSX2 and PS2e alike.
+
+**Its `SifInitRpc` returns, on the EE's first interrupt.** The SDK's client
+brings the command layer up through the slots of `spec/05` SYS-13 — reads the
+IOP's receive address from `SMCOM`, arms channel 5 with `0x78`, installs its
+channel-5 handler with `0x12`, and sends `INIT_CMD` twice through `0x77` —
+and the IOP's `EESYNC`, now the command service of `spec/03` BOOT-12, keeps
+the address from the first and answers the second with `SET_SREG`. That
+packet lands where the client said, channel 5 finishes on the tag's
+interrupt bit, the DMAC raises IP3, and the kernel's interrupt entry (SYS-12)
+carries the SDK's handler through the packet to `sregs[0] = 1`:
+
+```
+# m1: SifInitRpc returned
+```
+
+Two things had to be true first, and each was found on one emulator and not
+the other. PS2e delivered the interrupt straight away; PCSX2 did not until the
+kernel mapped the TLB the reference maps (`spec/04` EE-12,
+`docs/analysis/36`) — the client reads its packet through the uncached window
+at `0x20000000`, which PCSX2 answers with zeroes when nothing maps it. And an
+IOP module that hoists its `lui` met `mkirx`'s pairing rule, which now accepts
+the shape (`spec/02` IRX-3a, below). The program then calls `SifLoadModule`,
+whose `SifBindRpc` sends `RPC_BIND` and waits on a semaphore for an answer no
+server gives, and the kernel reports `no thread is ready to run`. `python3
 tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call it made in
-order; SIF RPC is what it asks for next (`docs/project-state.md` §6).
+order; `docs/project-state.md` §6 says what it asks for next.
 
 ## Deviations from the reference, and why
 
@@ -403,20 +426,31 @@ above, because a module's bss is zeroed by the loader as it lands: the boot
 list sat below the load base until an early module grew enough to wipe it, and
 the load base only says where the *first* module starts.
 
-**Our returning packets are tagged `end` where the reference tags them `cnt`.**
-`spec/03` BOOT-11c's destination tag is id 1 with the interrupt bit set on the
-reference; ours is id 7, `end`. Both terminate the EE channel's run and both
-are read the same way by it, but a rebuild aiming at bit-level agreement should
-know which one the reference writes.
+**The IOP's command service polls where the reference's is woken.** Every
+packet that crosses the SIF is framed as `spec/03` BOOT-11 and BOOT-12 say,
+on both sides, and the EE's side is interrupt-driven the way the reference's
+is: an arriving packet ends channel 5 on its tag's interrupt bit and the
+DMAC's interrupt carries a program's handler through it. The IOP's `SIFCMD`
+is woken the same way by its own controller; our `EESYNC` has no interrupt
+dispatch yet and instead polls the packet's size byte — the mark the channel
+writes as a packet lands and the service clears when it has read it, which is
+the mark the SDK's own handler uses on the EE. It then waits, bounded, for
+the channel's busy bit, since the size byte lands first and the rest follows.
 
-**Our SIF exchange is framed as the reference's is, but rendezvous is by flag.**
-`spec/03` BOOT-11's framing is implemented in full: the EE runs a source chain
-over a packet headed for the address the IOP published, and the IOP builds a
-send block whose second half is the destination tag the EE's channel pops. What
-is still ours rather than the reference's is *when* each side looks. The
-reference's drivers are woken by the SBUS interrupt; ours poll a bit in the
-flag registers, because there is no interrupt dispatch on either side yet. The
-transfers are hardware-shaped; the handshake around them is not.
+**The kernel's own file requests are a command of ours.** The reference
+serves `rom0:` through `ROMDRV` over SIFCMD's RPC, which the IOP does not have
+yet. Until it does, the kernel's loader asks for files with a packet under
+command id `0x10` — a user command in BOOT-12a's terms, the only one the
+service knows — whose body names the file, a window of it, and where the
+answer goes (`src/kernel/sif.cpp`, `src/iop/eesync.cpp`).
+
+**Slot `0x76` reports a transfer running until channel 6 idles**, where the
+reference decodes the word `0x77` returned against the channel's position in
+its tag list (`spec/05` SYS-13d). The SDK's `SifDmaStat` loop asks the same
+question either way — *is it done yet* — and gets the same `-1`, a little
+later. `0x77`'s word is the entry count rather than the reference's packed
+list positions, and `0x79` on a software register returns the value written,
+where the reference returns whatever `$a2` held (`docs/analysis/35` §3).
 
 **The syscall entry preserves more than the reference's does.** EE-7e is
 implemented: every register but `$zero`, `$k0` and `$k1` is saved and restored
@@ -453,11 +487,10 @@ it cannot quietly go stale. This copy is the gate's own text:
 
 - The rest of the boot list: three of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 63 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - The scheduler under interrupts: threads switch on syscalls (SYS-10c) but no timer or SBUS interrupt preempts or wakes anything yet
-- SIF RPC (SIFCMD/SIFRPC on the IOP, slots 0x76-0x7A on the EE): a program's SifInitRpc waits forever for an IOP that has no RPC service
-- Interrupt-driven SIF service: our exchange is framed as BOOT-11 says, but both ends still rendezvous on the flag registers rather than on the SBUS interrupt the reference's drivers wait for
-
+- SIF RPC servers (spec/03 BOOT-12d): the IOP answers the command layer's INIT_CMD, so a program's SifInitRpc returns, but no server is bound — SifBindRpc waits forever
+- The IOP's DMA interrupt: the command service polls the packet's size byte where the reference's SIFCMD is woken by the channel; the EE side is interrupt-driven as the reference's is
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
 The fault that used to sit beside this list — SIF0 delivering nothing under
@@ -544,6 +577,14 @@ loader in `IOPBOOT` needed only a comment: it keeps the held `HI16` after
 applying it, so a second `LO16` under the same `lui` recomputes the same high
 half, and a `LO16` with nothing held is now left alone rather than sent to
 address zero.
+
+The command service in `EESYNC` then produced the other shape: the compiler
+hoisted two `lui` of one address out of a loop, apart from their uses, and the
+object writer placed both `HI16` in front of the one `LO16` it paired them
+with — which is how a static link would resolve them, and so what the loader
+has to do too. `mkirx` accepts a run of up to eight `HI16` before the `LO16`
+of their symbol, and the loader holds the run and rebases every one of it
+from that `LO16`.
 
 `EESYNC` is the first module compiled this way; `SYSMEM` and `LOADCORE`
 followed. `ps2AddModule` pins compiled IOP code to `-march=mips1
