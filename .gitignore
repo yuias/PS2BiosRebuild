@@ -28,8 +28,8 @@ CMakeUserPresets.json
 !.vscode/tasks.json
 
 # Claude Code
-.claude/plans/
-.claude/settings.local.json
+.claude/
+CLAUDE.local.md
 
 # Development
 assets/*
