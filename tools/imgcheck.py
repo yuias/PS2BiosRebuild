@@ -91,9 +91,8 @@ NOT_YET = (
     "loading a module over the SIF (spec/03 BOOT-12e): the loader's server "
     "answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not "
     "exist on the IOP yet",
-    "threads on the IOP (spec/06 IOP-3): the command service runs inside the "
-    "channel's interrupt handler and EESYNC's entry never returns, since no "
-    "thread manager exists to give the boot a thread to sleep on",
+    "the IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 "
+    "until a timer manager exists",
     "EELOAD: the reference replaces the running program through that stub "
     "(spec/04 EE-9a), where our kernel loads the program itself",
 )
@@ -157,7 +156,10 @@ def checkIop(image: pathlib.Path) -> list[str]:
     problems: list[str] = []
     bus = iopsim.Bus(image.read_bytes())
     cpu = iopsim.Cpu(bus)
-    while cpu.steps < 200_000 and cpu.stop_reason is None:
+    # Enough steps for the whole boot list to load and register: each module
+    # added costs its copy and fixups, and the budget is what the IOP needs to
+    # reach its wait for the EE, not a measure of anything.
+    while cpu.steps < 2_000_000 and cpu.stop_reason is None:
         cpu.step()
     post = [value for _, value in bus.post]
     if post != EXPECTED_POST:

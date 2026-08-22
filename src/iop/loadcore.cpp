@@ -192,14 +192,14 @@ extern "C" {
 // it names and returns straight to the original caller (the target's own
 // `jr $ra` sees the return address our `jal` set); unbound, it returns the
 // ordinal harmlessly (IRX-8a).
-int _import_sysmem_allocate(int size);
+int _import_sysmem_allocate(int mode, int size, int address);
 int _import_sysmem_release(int address);
 
 // IRX-12: entry(argc, argv, 0, module_record), with the module's own $gp
 // installed. Calling the bound import proves the binding worked -- the same
 // use a reference module would make of its own imports from its entry.
 int _module_start(int, char **) {
-    const int address = _import_sysmem_allocate(64);
+    const int address = _import_sysmem_allocate(0, 64, 0);
     *reinterpret_cast<volatile uint32_t *>(kRanMarker) =
         static_cast<uint32_t>(address);
     return 0;                          // resident

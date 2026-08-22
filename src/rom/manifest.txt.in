@@ -15,5 +15,6 @@ SYSMEM        @PS2_BINARY_DIR@/sysmem.irx     @@PS2_BINARY_DIR@/sysmem.extinfo
 LOADCORE      @PS2_BINARY_DIR@/loadcore.irx   @@PS2_BINARY_DIR@/loadcore.extinfo
 EXCEPMAN      @PS2_BINARY_DIR@/excepman.irx   @@PS2_BINARY_DIR@/excepman.extinfo
 INTRMAN       @PS2_BINARY_DIR@/intrman.irx    @@PS2_BINARY_DIR@/intrman.extinfo
+THREADMAN     @PS2_BINARY_DIR@/threadman.irx  @@PS2_BINARY_DIR@/threadman.extinfo
 EESYNC        @PS2_BINARY_DIR@/eesync.irx     @@PS2_BINARY_DIR@/eesync.extinfo
 OSDSYS        @PS2_OSDSYS@                    @@PS2_SOURCE_DIR@/src/rom/extinfo/osdsys.txt

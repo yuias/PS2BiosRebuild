@@ -40,12 +40,16 @@ uint32_t heap_last;
     return -1;
 }
 
-// Ordinal 4: allocate(size) -> address, or 0.
+// Ordinal 4: allocate(mode, size, address) -> address, or 0. The reference's
+// modes place a block lowest, highest or at `address` [header]; a bump
+// allocator has one place to put anything, so the two are read and ignored
+// (docs/implementation.md).
 //
 // A bump allocator, which is all the boot needs: every allocation the module
 // list makes lives as long as the machine does. Anything with a real lifetime
 // arrives with the heap of `HEAPLIB`.
-[[nodiscard]] int allocate(uint32_t size) {
+[[nodiscard]] int allocate([[maybe_unused]] uint32_t mode, uint32_t size,
+                           [[maybe_unused]] uint32_t address) {
     if (size == 0) {
         return 0;
     }
@@ -54,10 +58,10 @@ uint32_t heap_last;
     if (next > kHeapEnd) {
         return 0;                      // past the end of the heap
     }
-    const uint32_t address = heap_cursor;
+    const uint32_t block = heap_cursor;
     heap_last = heap_cursor;
     heap_cursor = next;
-    return static_cast<int>(address);
+    return static_cast<int>(block);
 }
 
 // Ordinal 5: release(address) -> 0, or -1.
@@ -102,7 +106,7 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         reservedHook,                   // 1  reserved
         unimplemented,                  // 2
         unimplemented,                  // 3
-        allocate,                       // 4  allocate
+        reinterpret_cast<int (*)(uint32_t)>(allocate),   // 4  allocate(mode, size, address)
         deallocate,                     // 5  release
         unimplemented,                  // 6
         unimplemented,                  // 7

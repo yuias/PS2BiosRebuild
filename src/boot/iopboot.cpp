@@ -222,6 +222,24 @@ extern "C" {
         running_base = next_base;
     }
     bootListWord(kBlNext) = running_base;       // where the next module would go
+
+    // spec/06 IOP-3i: the boot has been running on a thread since THREADMAN
+    // made it one, and with the list done that thread has nothing left to
+    // do. It sleeps -- `thbase` ordinal 24, reached through the registry the
+    // same way a module's import would be -- and the idle thread and the
+    // interrupt handlers carry the machine from here. Without a thread
+    // manager there is nothing to sleep on, and the boot stops instead.
+    auto *exporter = reinterpret_cast<const uint8_t *>(registryHead());
+    const Name thbase = packName("thbase");
+    while (exporter != nullptr) {
+        if (peek32(exporter + 12) == thbase.low && peek32(exporter + 16) == thbase.high) {
+            const auto sleep = reinterpret_cast<void (*)()>(
+                peek32(exporter + kTableHeader + 24 * 4));
+            sleep();
+            break;
+        }
+        exporter = reinterpret_cast<const uint8_t *>(peek32(exporter));
+    }
     stop();
 }
 

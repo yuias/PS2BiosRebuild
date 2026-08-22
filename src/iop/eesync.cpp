@@ -530,8 +530,8 @@ int _import_intrman_cpu_enable();
 extern "C" {
 
 // The module's entry, called by the loader as entry(argc, argv, 0, record)
-// (spec/02 IRX-10). It never returns: the IOP's boot ends here, serving.
-[[noreturn]] int _module_start(int, char **) {
+// (spec/02 IRX-10).
+int _module_start(int, char **) {
     // BOOT-10a: wait for the EE to raise its bit. Nothing else can proceed
     // until it does -- neither side may go on alone.
     waitUntilSet(kSifMsflg, kHandshakeBit);
@@ -560,11 +560,9 @@ extern "C" {
     writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
     _import_intrman_cpu_enable();
 
-    // Nothing left to do on this thread: the service runs in the handler.
-    // Until a thread manager gives the boot a thread to sleep, the entry does
-    // not return (docs/implementation.md).
-    for (;;) {
-    }
+    // The service runs in the handler; the entry returns, resident, and
+    // the boot goes on (IRX-12).
+    return 0;
 }
 
 }  // extern "C"
