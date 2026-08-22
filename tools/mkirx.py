@@ -96,7 +96,12 @@ def loadImage(data: bytes, sections: list[Section]) -> tuple[bytes, int, int, in
 
     data_sections = [s for s in progbits if s.name.startswith(".data")]
     data_start = min((s.addr for s in data_sections), default=file_end)
-    bss = sum(s.size for s in nobits)
+    # The bss runs from the end of the file's bytes to the end of the last
+    # NOBITS section -- alignment padding between the two included, since a
+    # loader zeroes and reserves `memsz - filesz` bytes and a module whose
+    # memsz stopped short of its bss would have the next thing loaded on top
+    # of its variables (which is how this line came to be written).
+    bss = max((s.addr + s.size for s in nobits), default=file_end) - file_end
     return bytes(image), data_start, file_end - data_start, bss
 
 
