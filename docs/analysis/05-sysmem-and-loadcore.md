@@ -112,9 +112,9 @@ three:
 
 ```
   jr    $ra
-  addiu $v0, $zero, 4      # ordinal 4
+  addiu $zero, $zero, 4    # ordinal 4: 0x24000004
   jr    $ra
-  addiu $v0, $zero, 5
+  addiu $zero, $zero, 5
   jr    $ra
   addiu $v0, $zero, 6
   00000000                 # terminator
@@ -199,7 +199,8 @@ left to the spec pass rather than settled here.
   fixed tag field, entries at +20, zero-terminated.
 - Export slot 0 must equal the module entry; reserved slots must stay occupied
   by a shared return stub so ordinals do not shift.
-- Import stubs are `jr $ra` + `addiu $v0, $zero, ordinal`, and the binder
+- Import stubs are `jr $ra` + `addiu $zero, $zero, ordinal` (`0x2400` in the
+  high half -- every one of the 517 stubs across the image), and the binder
   rewrites only the first word, to `j target` or `jr $ra` when out of range.
 - Export-table extent is derivable from relocations, not from scanning the
   stored file for a zero word.

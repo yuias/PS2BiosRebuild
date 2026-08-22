@@ -166,7 +166,7 @@ Entries are 8-byte stubs, two instructions each, terminated by a zero word:
 
 ```
 jr    $ra                      # 0x03E00008
-addiu $v0, $zero, <ordinal>    # opcode 9, ordinal in the low 16 bits
+addiu $zero, $zero, <ordinal>  # 0x2400xxxx: opcode 9, ordinal in the low 16 bits
 ```
 
 **IRX-8a:** Unbound, a stub returns harmlessly. An unresolved import is

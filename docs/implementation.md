@@ -155,9 +155,11 @@ IRX-9: import tables ['sysmem'] were never bound
 IRX-9: the cross-module call returned 0x4, want 0x100000
 ```
 
-`0x4` is the ordinal: an unbound stub is `jr $ra; addiu $v0, $zero, 4`, so it
-returns harmlessly with the ordinal still in `$v0`, which is IRX-8a's
-survivability demonstrated rather than asserted.
+`0x4` is the ordinal: an unbound stub is `jr $ra; addiu $zero, $zero, 4`,
+so it returns harmlessly, which is IRX-8a's survivability demonstrated rather
+than asserted. (The `0x4` came back in `$v0` from an earlier stub encoding
+that put the ordinal there; the reference's stubs, and ours now, encode it in
+the `$zero`-targeted `addiu` — the word an emulator's IOP HLE looks for.)
 
 **And the two processors meet.** `EESYNC` is last in the boot list and does
 nothing but wait for the EE; the kernel's `sif.S` raises the flag it is waiting

@@ -215,9 +215,9 @@ def checkModule(irx: Irx) -> list[str]:
                     break
                 require(first == 0x03E00008, "IRX-8",
                         f"{where} stub {index} starts with {first:#x}")
-                require((second >> 26) == 9, "IRX-8",
+                require((second >> 16) == 0x2400, "IRX-8",
                         f"{where} stub {index} second word {second:#x} "
-                        f"is not addiu")
+                        f"is not addiu $zero, $zero, <ordinal>")
                 require((second & 0xFFFF) >= 2, "IRX-7a",
                         f"{where} imports reserved ordinal {second & 0xFFFF}")
                 at += STUB_SIZE

@@ -280,11 +280,11 @@ asm(
     ".globl _import_sysmem_allocate\n"
     "_import_sysmem_allocate:\n"
     "jr $ra\n"
-    "addiu $v0, $zero, 4\n"             // ordinal 4: allocate
+    "addiu $zero, $zero, 4\n"           // ordinal 4: allocate
     ".globl _import_sysmem_release\n"
     "_import_sysmem_release:\n"
     "jr $ra\n"
-    "addiu $v0, $zero, 5\n"             // ordinal 5: release
+    "addiu $zero, $zero, 5\n"           // ordinal 5: release
     ".word 0\n"                         // the terminator
     ".set reorder\n"
     ".popsection\n"

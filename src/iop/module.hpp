@@ -3,7 +3,7 @@
 //
 // docs/spec/02-module-abi.md IRX-4 (the 20-byte table header), IRX-5 (an
 // export table's entries and terminator), IRX-8 (an import stub is `jr $ra`
-// then `addiu $v0, $zero, ordinal`, exactly) and IRX-9 (the loader rewrites
+// then `addiu $zero, $zero, ordinal`, exactly) and IRX-9 (the loader rewrites
 // only the stub's first word). The export side is a struct, because a table
 // of function pointers gets its R_MIPS_32 fixups from the linker for free;
 // the import side is assembly, because IRX-8 specifies instruction words and
@@ -71,7 +71,7 @@ template <typename F>
 #define PS2_IMPORT(symbol, ordinal)                                       \
     asm(".globl " #symbol "\n" #symbol ":\n"                              \
         "jr $ra\n"                                                        \
-        "addiu $v0, $zero, " #ordinal "\n");
+        "addiu $zero, $zero, " #ordinal "\n");
 #define PS2_IMPORTS_END()                                                 \
     asm(".word 0\n"                                                       \
         ".set reorder\n"                                                  \
