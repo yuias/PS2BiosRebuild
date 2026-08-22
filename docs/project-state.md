@@ -130,7 +130,7 @@ reference and the reason for it.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
-| Boot tail (EE-9) | **built** — `rom0:OSDSYS` crosses the SIF, is placed and runs |
+| Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 62 slots served, the rest report themselves |
 | EE interrupt delivery (SYS-12) | **built, gated statically, not yet observed** — handler lists, the interrupt entry and the reschedule on exit; nothing raises an interrupt until the IOP's command service exists |
@@ -441,9 +441,9 @@ simulator, in this order:
 - **M2 — a retail title boots from disc.** Our `OSDSYS` reads `SYSTEM.CNF`
   from `cdrom0:` and runs `BOOT2` through the loader; the title reaches its own
   steady state on PCSX2. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
-  loads from `rom0:`, plus `EELOAD` at the address PCSX2's fast boot hooks
-  (read off PCSX2's source when this starts, not assumed) so its `-elf` and
-  fast-boot paths work with our image as well.
+  loads from `rom0:`. `EELOAD` at the address PCSX2's fast boot hooks is
+  done: its `-elf` launch of the M1 program on our image is a gate now
+  (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
 **M3 — an OSD that draws** (GS initialisation, a freely-licensed font, and the
 configuration field map of `26`–`28`) is real work but comes *after* M2, since a
@@ -565,14 +565,28 @@ documents (`37`–`40`) written for it, and one toolchain fault found by it
 takes interrupts and switches threads from them, so §7's busy-bit row is
 retired from "worked around" to "not waited on".
 
-**Next: M2.** A retail title from `cdrom0:`, per "The finish line" above. The
-first faults it will hit, in the order the boot meets them: `OSDSYS` reading
+**M2, first step done: `EELOAD`.** The program is now entered the
+reference's way — slot `0x06` stages `EELOAD`, `EELOAD` asks `LOADFILE` for
+the ELF (IOP-5h) and `ExecPS2` (slot `0x07`) enters it — and PCSX2's hooks
+engage: the `jal` at `0x8209C`, the `"rom0:OSDSYS"` literal it overwrites with
+`host:<elf>`, and its IOP-side `host:` HLE, which intercepts `ioman` import
+stubs and only recognises the reference's encoding of them (`addiu $zero,
+$zero, ordinal`, `0x2400xxxx` — spec/02 IRX-8 was corrected; our modules had
+used `$v0`). Two faults found on the way and fixed: the IOP scheduler dropped
+the thread an interrupt's wake-up preempted, so the IOP died after its first
+RPC (invisible under M1, which needed nothing more); and `LOADFILE` sent
+segments to unaligned addresses, which the simulator's SIF accepts and an
+emulator's DMA does not. A third, found at the same time, is not a fault:
+PS2e's console breaks a line at the SDK's `\r\n`, so `argv[0]` prints on the
+line after its label there.
+
+**Next: M2, the rest.** In the order the boot meets them: `OSDSYS` reading
 `SYSTEM.CNF` needs `CDVDMAN`/`CDVDFSV` (the disc over the SIF) and `FILEIO`
-(`IOMAN` over the SIF); running `BOOT2` needs `EELOAD` at the address PCSX2
-hooks (read off PCSX2's source first, not assumed) and the EE kernel's
-`LoadExecPS2`; and a title's own start-up will pull `PADMAN`, `MCMAN` and
-whatever else it loads with `SifLoadModule`, which now works. `TIMRMAN`
-(`DelayThread`, IOP-3j) will come early, since drivers' retry loops use it.
+(`IOMAN` over the SIF), and running `BOOT2` needs the EE kernel's
+`LoadExecPS2` over the `EELOAD` path that now exists; a title's own start-up
+will pull `PADMAN`, `MCMAN` and whatever else it loads with `SifLoadModule`,
+which works. `TIMRMAN` (`DelayThread`, IOP-3j) will come early, since drivers'
+retry loops use it.
 
 The gate keeps printing the slot and module counts, but they are no longer the
 ordering. New analysis documents are written only for what M1 or M2 faults on
