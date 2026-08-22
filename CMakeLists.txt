@@ -67,7 +67,8 @@ function(ps2AddComponent name)
   add_custom_command(TARGET ${name}.elf POST_BUILD
       COMMAND "${PS2_OBJCOPY}" -O binary
               --only-section=.vectors --only-section=.text
-              --only-section=.rodata --only-section=.syscalls
+              --only-section=.rodata --only-section=.data
+              --only-section=.syscalls
               --only-section=.exctable --only-section=.inttable
               --only-section=.cop0reads
               "$<TARGET_FILE:${name}.elf>"
@@ -159,6 +160,10 @@ target_link_options(osdsys.elf PRIVATE
 set_target_properties(osdsys.elf PROPERTIES
     LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/link/osdsys.ld")
 
+# EELOAD is raw code at the address the kernel stages it to (spec/04 EE-9a,
+# docs/analysis/41), lifted out of its ELF like the other components.
+ps2AddComponent(eeload SCRIPT eeload.ld SOURCES src/ee/eeload.S src/ee/eeload.cpp)
+
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
     src/kernel/entry.S
@@ -218,7 +223,7 @@ add_custom_command(
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf threadman.elf dmacman.elf
             ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
-            sio2man.elf osdsys.elf
+            sio2man.elf osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

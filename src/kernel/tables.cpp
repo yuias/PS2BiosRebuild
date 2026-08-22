@@ -35,6 +35,7 @@ void sysNothing() asm("_sys_nothing");
 // program.cpp
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
+void sysExecPs2() asm("_sys_exec_ps2");
 
 // sif.cpp
 void sysSifStopDChain() asm("_sys_sif_stop_dchain");
@@ -126,7 +127,7 @@ Handler syscall_table[256] = {
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,
     sysUndefined, sysUndefined,
     sysLoadProgram,                                        // 0x06  EE-9a
-    sysUndefined,
+    sysExecPs2,                                            // 0x07  SYS-8d
     // 0x08
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,
     sysUndefined,

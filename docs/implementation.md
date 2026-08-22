@@ -464,17 +464,29 @@ them, refusing a stale id the same way. Seven `thbase` calls are the
 reference's own stubs; `DelayThread` and the alarms answer -1 until a timer
 manager exists (IOP-3j), which the gate lists.
 
-**There is no `EELOAD`.** EE-9a records that the reference's program loader
-uses the archive file `EELOAD` as the stub that replaces the running program.
-Ours loads the program from the kernel directly. The observable contract —
-slot `0x06` loads a path, slot `0x7B` is the same with the path pinned, the
-default boot passes one argument, and the program is entered with the
-launcher's registers and its arguments in the thread record (EE-9e) — is
-unchanged; what differs is that nothing is staged in between. From a syscall
-the entry is made the reference's way, by pointing EPC at the program and
-letting the dispatcher's `eret` land there; from the kernel's own boot, which
-is not in a syscall, it is a direct call with `(entry, 0, argc, argv)` in the
-argument registers, which is what SYS-8d says a launcher's own call leaves.
+**`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
+and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with
+`{ "EELOAD", path, argv... }`, and `EELOAD` asks the IOP's `LOADFILE` for the
+ELF (fno 1) and enters it through slot `0x07`. The reference's `EELOAD`
+carries its own copy of the SDK's RPC client, interrupt-driven
+(`docs/analysis/41` §4); ours is a polling client on the same packets, because
+no handler of its own can be installed in the 0x20000 bytes an emulator
+expects it in. The reference clears memory above `0x82000` to the top of
+RAM and re-initialises the hardware around the program; ours clears up to
+2 MiB — the region a program's bss and `EELOAD` itself occupy — and touches
+no hardware, since no emulator's boot needs the re-initialisation and the
+reference's registers for it are not specified yet. The program receives its
+arguments as SYS-8d says, with `argv[0]` the first of the caller's own list:
+the default boot's `{ "BootBrowser" }`. From the kernel's own boot, which is
+not in a syscall, `EELOAD` is entered directly with `argc = 0`, the call an
+emulator's hook expects first (EE-9f).
+
+**`LOADFILE` moves an ELF in quadword blocks.** IOP-5h: the bus moves
+quadwords to quadword addresses, and a linker packs segments one after
+another, so a segment that begins or ends inside a quadword shares it with
+its neighbour. Ours keeps the last block sent and resends it with the next
+segment's first bytes over it, which is what the file's own layout would
+have put there; the reference's handling of the same case was not traced.
 
 **A stack of `0xFFFFFFFF` is a stack of `-1`.** SYS-8a records that the
 reference compares the `stack` argument of slot `0x3C` at 64 bits, so a
@@ -576,7 +588,7 @@ it cannot quietly go stale. This copy is the gate's own text:
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
 - The IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 until a timer manager exists
 - The modules a title loads on request: SIO2MAN is the one the archive holds; PADMAN, MCMAN and the rest are not built
-- EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
+- EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); the reference's own switches and its KELF path (docs/analysis/41 §3) are not parsed
 
 The fault that used to sit beside this list — SIF0 delivering nothing under
 PCSX2 — is closed: `docs/analysis/29-sif0-on-pcsx2.md` found the bit, and

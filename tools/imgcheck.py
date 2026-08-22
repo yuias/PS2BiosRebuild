@@ -92,8 +92,9 @@ NOT_YET = (
     "until a timer manager exists",
     "the modules a title loads on request: SIO2MAN is the one the archive "
     "holds; PADMAN, MCMAN and the rest are not built",
-    "EELOAD: the reference replaces the running program through that stub "
-    "(spec/04 EE-9a), where our kernel loads the program itself",
+    "EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); "
+    "the reference's own switches and its KELF path (docs/analysis/41 §3) "
+    "are not parsed",
 )
 
 # The interface the kernel publishes, exercised through eesim's harness. Every

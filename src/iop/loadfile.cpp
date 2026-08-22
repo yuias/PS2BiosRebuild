@@ -51,16 +51,180 @@ alignas(16) int32_t answer[4];
 Server server;
 Queue queue;
 
-// BOOT-12e: the request is `{ arg_len, result, path[252], args[252] }` and
-// the answer `{ id | error, modres }`.
+// --- fno 1: an EE ELF, put in EE memory from here (IOP-5f, docs/analysis/41) ---
+
+constexpr uint32_t kFunctionElfLoad = 1;
+constexpr uint32_t kChunkBytes = 0x1000;
+constexpr int kOpenRead = 1;
+constexpr int kElfError = -1;
+
+struct ElfHeader {
+    uint8_t ident[16];
+    uint16_t type;
+    uint16_t machine;
+    uint32_t version;
+    uint32_t entry;
+    uint32_t phoff;
+    uint32_t shoff;
+    uint32_t flags;
+    uint16_t ehsize;
+    uint16_t phentsize;
+    uint16_t phnum;
+};
+
+struct ProgramHeader {
+    uint32_t type;
+    uint32_t offset;
+    uint32_t vaddr;
+    uint32_t paddr;
+    uint32_t filesz;
+    uint32_t memsz;
+    uint32_t flags;
+    uint32_t align;
+};
+
+// sceSifSetDma's entry [header]: IOP memory to EE memory.
+struct Transfer {
+    uint32_t src;
+    uint32_t dest;
+    uint32_t size;
+    uint32_t attr;
+};
+
+extern "C" {
+int _import_ioman_open(const char *path, int flags);
+int _import_ioman_close(int fd);
+int _import_ioman_read(int fd, void *buffer, int size);
+int _import_ioman_lseek(int fd, int offset, int whence);
+int _import_sifman_set_dma(const Transfer *list, uint32_t count);
+int _import_sifman_dma_stat(uint32_t id);
+}
+
+alignas(16) uint8_t chunk[kChunkBytes];
+alignas(16) uint8_t headers[0x400];
+
+// The bus moves quadwords to quadword addresses (BOOT-11k), so a segment's
+// image goes out in aligned blocks. The block last sent is kept: a segment
+// that begins inside it -- the linker packs one after another -- is sent
+// with that block's bytes ahead of its own, so its neighbour's tail survives.
+constexpr uint32_t kBlock = 16;
+alignas(16) uint8_t carry[kBlock];
+uint32_t carry_address = 0xFFFFFFFF;
+
+// One transfer to EE memory, waited for: the sending channel's interrupt
+// says when it has gone (EESYNC's sifman).
+void sendToEe(const void *from, uint32_t ee_address, uint32_t bytes) {
+    Transfer transfer;
+    transfer.src = reinterpret_cast<uintptr_t>(from);
+    transfer.dest = ee_address;
+    transfer.size = bytes;
+    transfer.attr = 0;
+    const int id = _import_sifman_set_dma(&transfer, 1);
+    while (id != 0 && _import_sifman_dma_stat(static_cast<uint32_t>(id)) >= 0) {
+    }
+}
+
+// A segment's memory image, `[paddr, paddr + memsz)`: its file bytes, then
+// zeros, a chunk at a time. The last block is padded with zeros up to a
+// quadword, which the next segment's lead bytes restore if it starts there.
+[[nodiscard]] bool sendSegment(int fd, const ProgramHeader &segment) {
+    uint32_t address = segment.paddr & ~(kBlock - 1);
+    uint32_t lead = segment.paddr - address;
+    uint32_t position = 0;
+    while (position < segment.memsz || lead != 0) {
+        uint32_t fill = 0;
+        if (lead != 0) {
+            for (uint32_t k = 0; k < lead; k++) {
+                chunk[k] = address == carry_address ? carry[k] : 0;
+            }
+            fill = lead;
+            lead = 0;
+        }
+        uint32_t wanted = segment.memsz - position;
+        if (wanted > kChunkBytes - fill) {
+            wanted = kChunkBytes - fill;
+        }
+        uint32_t from_file = 0;
+        if (position < segment.filesz) {
+            from_file = segment.filesz - position;
+            if (from_file > wanted) {
+                from_file = wanted;
+            }
+            _import_ioman_lseek(fd, static_cast<int>(segment.offset + position), 0);
+            if (_import_ioman_read(fd, chunk + fill, static_cast<int>(from_file))
+                != static_cast<int>(from_file)) {
+                return false;
+            }
+        }
+        uint32_t length = (fill + wanted + kBlock - 1) & ~(kBlock - 1);
+        for (uint32_t k = fill + from_file; k < length; k++) {
+            chunk[k] = 0;
+        }
+        sendToEe(chunk, address, length);
+        carry_address = address + length - kBlock;
+        for (uint32_t k = 0; k < kBlock; k++) {
+            carry[k] = chunk[length - kBlock + k];
+        }
+        address += length;
+        position += wanted;
+    }
+    return true;
+}
+
+// Each PT_LOAD segment, in file order.
+[[nodiscard]] int32_t loadElf(const char *path, uint32_t *entry, uint32_t *gp) {
+    const int fd = _import_ioman_open(path, kOpenRead);
+    if (fd < 0) {
+        return kElfError;
+    }
+    const int got = _import_ioman_read(fd, headers, sizeof(headers));
+    const auto &elf = *reinterpret_cast<const ElfHeader *>(headers);
+    if (got < static_cast<int>(sizeof(ElfHeader)) || headers[0] != 0x7F || headers[1] != 'E'
+        || headers[2] != 'L' || headers[3] != 'F' || elf.type != 2
+        || elf.phoff + uint32_t{elf.phnum} * elf.phentsize > sizeof(headers)) {
+        _import_ioman_close(fd);
+        return kElfError;
+    }
+    carry_address = 0xFFFFFFFF;
+    for (uint16_t index = 0; index < elf.phnum; index++) {
+        const auto &segment = *reinterpret_cast<const ProgramHeader *>(
+            headers + elf.phoff + uint32_t{index} * elf.phentsize);
+        if (segment.type != 1 || segment.memsz == 0) {
+            continue;
+        }
+        if (!sendSegment(fd, segment)) {
+            _import_ioman_close(fd);
+            return kElfError;
+        }
+    }
+    _import_ioman_close(fd);
+    *entry = elf.entry;
+    *gp = 0;
+    return 0;
+}
+
+// BOOT-12e: the request for fno 0 is `{ arg_len, result, path[252],
+// args[252] }` and the answer `{ id | error, modres }`; for fno 1 (the SDK's
+// client [header]) `{ epc, gp, path[252], secname[252] }`, answered with
+// `{ epc | error, gp, 0, 0 }`.
 void *serve(uint32_t fno, void *buffer, uint32_t) {
     auto *words = static_cast<uint32_t *>(buffer);
+    const auto *path = reinterpret_cast<const char *>(words + 2);
+    answer[1] = 0;
+    answer[2] = 0;
+    answer[3] = 0;
+    if (fno == kFunctionElfLoad) {
+        uint32_t entry = 0;
+        uint32_t gp = 0;
+        const int32_t result = loadElf(path, &entry, &gp);
+        answer[0] = result < 0 ? result : static_cast<int32_t>(entry);
+        answer[1] = static_cast<int32_t>(gp);
+        return answer;
+    }
     if (fno != kFunctionLoad) {
         return nullptr;                         // IOP-5f: no answer at all
     }
-    const auto *path = reinterpret_cast<const char *>(words + 2);
     const auto *args = reinterpret_cast<const char *>(words + 0x41);
-    answer[1] = 0;
     if (_import_modload_is_illegal(path) != 0) {
         answer[0] = kIllegalObject;
         return answer;
@@ -97,6 +261,18 @@ PS2_IMPORTS_END()
 PS2_IMPORTS_BEGIN("modload\0", 0x0101)
 PS2_IMPORT(_import_modload_load_start, 7)
 PS2_IMPORT(_import_modload_is_illegal, 15)
+PS2_IMPORTS_END()
+
+PS2_IMPORTS_BEGIN("ioman\0\0\0", 0x0102)
+PS2_IMPORT(_import_ioman_open, 4)
+PS2_IMPORT(_import_ioman_close, 5)
+PS2_IMPORT(_import_ioman_read, 6)
+PS2_IMPORT(_import_ioman_lseek, 8)
+PS2_IMPORTS_END()
+
+PS2_IMPORTS_BEGIN("sifman\0\0", 0x0101)
+PS2_IMPORT(_import_sifman_set_dma, 7)
+PS2_IMPORT(_import_sifman_dma_stat, 8)
 PS2_IMPORTS_END()
 
 extern "C" {

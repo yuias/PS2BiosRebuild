@@ -1,0 +1,3 @@
+date 2026-08-22
+version 1.00
+comment PS2BiosRebuild_EELOAD

@@ -311,11 +311,11 @@ void waitUntilSet(uintptr_t address, uint32_t bits) {
 // the physical address. The bus moves quadwords and the EE's channel counts
 // them, so a short run is padded up to one; every source here has room.
 void describe(SendBlock &block, const void *from, uint32_t words,
-              uint32_t destination, bool last) {
+              uint32_t destination, bool last, bool ends_ee_channel = true) {
     const uint32_t quads = quadwords(words);
     block.address = reinterpret_cast<uintptr_t>(from) | (last ? kTagEnd : 0);
     block.words = quads * 4;
-    block.tag = (last ? kTagDestEnd : kTagDest) | quads;
+    block.tag = (last && ends_ee_channel ? kTagDestEnd : kTagDest) | quads;
     block.destination = destination & 0x1FFFFFFF;
 }
 
@@ -521,6 +521,70 @@ void answerCall(Server &server) {
     }
 }
 
+// --- the sifman library: a module's own transfers to the EE ------------------
+//
+// sceSifSetDma(list, count) [header]: each entry `{ src, dest, size, attr }`
+// names IOP memory to send and where in EE memory it lands. The run ends on
+// the IOP side only: the EE's channel is left armed, so that the packet a
+// server sends after its data (answerCall) is what ends it, as the SDK's
+// client expects. sceSifDmaStat(id) answers -1 once the run has finished --
+// the sending channel's own interrupt says so (irq 0x2A, the reference's
+// SIFMAN number) -- and 0 while it runs.
+
+constexpr uint32_t kSif0Irq = 0x2A;              // IOP_IRQ_DMA_SIF0 [header]
+constexpr uint32_t kTransfersMax = 2;
+
+struct Transfer {
+    uint32_t src;
+    uint32_t dest;
+    uint32_t size;
+    uint32_t attr;
+};
+
+volatile uint32_t send_running;
+
+int sendFinished(void *) {
+    send_running = 0;
+    return 1;
+}
+
+int sifSetDma(const Transfer *list, uint32_t count) {
+    if (count == 0 || count > kTransfersMax) {
+        return 0;
+    }
+    for (uint32_t k = 0; k < count; k++) {
+        describe(send_blocks[k], reinterpret_cast<const void *>(list[k].src),
+                 (list[k].size + 3) / 4, list[k].dest, k + 1 == count, false);
+    }
+    send_running = 1;
+    send();
+    return 1;
+}
+
+int sifDmaStat(uint32_t) {
+    return send_running ? 0 : -1;
+}
+
+[[gnu::used]] ps2::module::ExportTable<9> sifman_exports = {
+    ps2::module::kExportMagic,
+    0,
+    0x0101,
+    0,
+    {'s', 'i', 'f', 'm', 'a', 'n', 0, 0},
+    {
+        ps2::module::slot(ps2::module::reservedHook),   // 0
+        ps2::module::slot(ps2::module::reservedHook),   // 1
+        ps2::module::slot(ps2::module::reservedHook),   // 2
+        ps2::module::slot(ps2::module::reservedHook),   // 3
+        ps2::module::slot(ps2::module::reservedHook),   // 4
+        ps2::module::slot(ps2::module::reservedHook),   // 5
+        ps2::module::slot(ps2::module::reservedHook),   // 6
+        ps2::module::slot(sifSetDma),                   // 7  sceSifSetDma
+        ps2::module::slot(sifDmaStat),                  // 8  sceSifDmaStat
+        nullptr,
+    },
+};
+
 // IRX-4: the library server modules import (spec/06 IOP-5f's ordinals).
 [[gnu::used]] ps2::module::ExportTable<23> sifcmd_exports = {
     ps2::module::kExportMagic,
@@ -660,6 +724,8 @@ int _module_start(int, char **) {
     armReceive();
     _import_intrman_register(kSif1Irq, 1, servePacket, nullptr);
     _import_intrman_enable(kSif1Irq);
+    _import_intrman_register(kSif0Irq, 1, sendFinished, nullptr);
+    _import_intrman_enable(kSif0Irq);
     writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
     _import_intrman_cpu_enable();
 

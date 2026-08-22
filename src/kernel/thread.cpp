@@ -478,6 +478,21 @@ uint32_t startProgramThread(uint32_t gp, uint32_t entry) {
     return id;
 }
 
+// EE-9 (docs/analysis/41 §2): a program that replaces the running one takes
+// every other thread with it -- all but the caller's and the boot thread's,
+// which is the idle (SYS-10k) -- before the new program is entered.
+void terminateOtherThreads() {
+    prepareTables();
+    for (uint32_t id = 1; id < kThreads; id++) {
+        ThreadRecord &thread = thread_table[id];
+        if (id == current_thread || thread.state == Free) {
+            continue;
+        }
+        detach(static_cast<uint16_t>(id));
+        freeThread(static_cast<uint16_t>(id));
+    }
+}
+
 // The launcher's half of SYS-8d: record what 0x3C will hand over.
 void setProgramArguments(uint32_t argc, const char *packed) {
     prepareTables();

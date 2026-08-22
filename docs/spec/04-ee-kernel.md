@@ -260,6 +260,20 @@ remaining arguments along and tail-calls it.
 **EE-9c:** The default boot invokes that path with `argc = 1` and
 `argv = { "BootBrowser" }`.
 
+**EE-9f:** `EELOAD` is raw code at `0x82000`, entered at its first word by
+the dispatcher's `eret` after slot `0x06` staged it (`docs/analysis/41`).
+Slot `0x06(path, argc, argv)` hands it `{ "EELOAD", path, argv[0..argc-1] }`
+through SYS-8b's block, after ending every other thread and clearing memory
+from `0x82000` upward; the ROM's own boot enters it with `argc = 0`, which
+means `rom0:OSDSYS` with `{ "BootBrowser" }`. Its `main` is reached by a
+`jal` at `0x8209C`, and its default path is the literal `"rom0:OSDSYS"` on an
+8-byte boundary in that region: an emulator's fast boot hooks the one and
+overwrites the other with the title's ELF (`host:` or `cdrom0:`), so both are
+part of the contract. It binds `LOADFILE` (`0x80000006`), asks fno 1 with
+`{ epc, gp, path[252], secname[252] }`, receives `{ epc | error, gp, 0, 0 }`,
+and tail-calls slot `0x07(epc, gp, argc, argv)` with the caller's own
+arguments, which enters the program as SYS-8d says.
+
 **EE-9d:** `rom0:` is the device the IOP's `ROMDRV` registers with `ioman`
 (`docs/analysis/11`), so this call crosses the SIF and is served by the IOP —
 which means the IOP boot of `spec/03` must have completed before EE-9c can

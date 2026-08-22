@@ -661,10 +661,10 @@ buf, cfunc = NULL, cbuf = NULL, qd)` and one `RpcLoop(queue)` call, in that
 order; `RpcLoop` never returns. The registered dispatch function receives
 `(fno, buf, size)`, drops `size`, range-checks `fno < 6` (out of range
 produces **no reply at all**, not an error code), and tail-calls a table
-entry keyed by `fno`. Only `fno 0` (IOP module load) is in scope here; `fno`
-1–5 (an EE-ELF loader, a memory peek/poke pair, and `LoadStartKelfModule`)
-exist for `EELOAD`/the OSD's own boot path and are not needed for
-`SifLoadModule`.
+entry keyed by `fno`. `fno 0` (IOP module load) and `fno 1` (an EE ELF,
+IOP-5h) are in scope; `fno` 2–5 (a memory peek/poke pair and
+`LoadStartKelfModule`) exist for the OSD's own boot path and are not needed
+yet.
 
 **IOP-5g — `fno 0`, and where `-201`/`-203` come from.** `BOOT-12e`'s
 request layout (`arg_len@+0`, `path@+8`, `args@+0x104`) is read, then
@@ -684,6 +684,19 @@ that is simply not present (e.g. `rom0:NOSUCH`) is a *different* code from a
 *different* site: `MODLOAD`'s own fixed substitution for any `IOMAN` `open`
 failure (IOP-5e) — the underlying `IOMAN`/`ROMDRV` error is discarded, not
 passed through.
+
+**IOP-5h — `fno 1`, the EE ELF loader `EELOAD` asks for.** The request is
+`{ epc, gp, path[252], secname[252] }` (`0x200` bytes) and the answer
+`{ epc | error, gp, 0, 0 }` (`docs/analysis/41` §4). `LOADFILE` opens `path`
+through `IOMAN`, reads the ELF and program headers, and puts every `PT_LOAD`
+segment in EE memory at its `p_paddr` — file bytes, then zeros to `p_memsz` —
+through the `sifman` library's `SetDma`/`DmaStat` (ordinals 7 and 8: a
+transfer list of `{ src, dest, size, attr }`, and `-1` once a transfer's
+interrupt has come, `0` while it runs). Transfers are quadwords to quadword
+addresses, so a segment that starts or ends inside a quadword shares that
+block with its neighbour, and the block is sent whole with the neighbour's
+bytes in it. `epc` answers the ELF's entry and `gp` is `0`; an open or read
+failure answers `-1` and loads nothing further.
 
 ## IOP-6: SIO2MAN's start-up contract
 
