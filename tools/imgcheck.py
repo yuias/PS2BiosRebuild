@@ -66,11 +66,11 @@ NOT_YET = (
     # is exactly the kind of thing that goes quietly stale.
     "{unserved} of the 125 syscall slots: they resolve to the reporter of "
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
-    "the scheduler under interrupts: threads switch on syscalls (SYS-10c) but "
-    "no timer or SBUS interrupt preempts or wakes anything yet",
-    "SIF RPC servers (spec/03 BOOT-12d): the IOP answers the command layer's "
-    "INIT_CMD, so a program's SifInitRpc returns, but no server is bound -- "
-    "SifBindRpc waits forever",
+    "preemption: threads switch on syscalls (SYS-10c) and on the SIF's "
+    "interrupt (SYS-12c), but no timer interrupt preempts a running one yet",
+    "loading a module over the SIF (spec/03 BOOT-12e): the loader's server "
+    "answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not "
+    "exist on the IOP yet",
     "the IOP's DMA interrupt: the command service polls the packet's size "
     "byte where the reference's SIFCMD is woken by the channel; the EE side "
     "is interrupt-driven as the reference's is",

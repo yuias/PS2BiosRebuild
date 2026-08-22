@@ -332,6 +332,43 @@ To satisfy `SifInitRpc` on an SDK-built EE client:
   bind `sid = 0x80000006` and call-site buffer sizes are confirmed from
   `m1.dis`. `<outdir>/LOADFILE`'s own handler (imports `sifcmd` ordinals
   14/17/19/22 = InitRpc/RegisterRpc/SetRpcQueue/RpcLoop, per `irxinfo
-  --imports`) was not disassembled in this pass.
+  --imports`) was not disassembled in this pass. *Settled from the client's
+  side since: §6.*
+
+## 6. The loader's client, read
+
+`_SifLoadModule` (`m1.dis 0x1121b0`), which `SifLoadModule` tail-calls with
+`fno = 0` and `mode = 0`:
+
+```
+addiu $a0, $sp, 0x10 ; memset(buf, 0, 0x200)         the request, 512 bytes
+addiu $a0, $sp, 0x18 ; strlcpy(buf + 8, path, 0xfc)   the path at +8
+sw    $a2, 0x10($sp)                                   arg_len at +0 (0 here)
+addiu $a0, $sp, 0x114; memcpy(buf + 0x104, args, n)   the arguments at +0x104
+sceSifCallRpc(cd = 0x1260f0, fno, mode, buf, 0x200, buf, 8, 0, 0)
+lw    $v0, 0x10($sp)                                   the answer's word 0
+lw    $v0, 0x14($sp); sw $v0, 0($a3)                   word 1 -> *modres
+```
+
+So function 0 takes `{ arg_len, result, path[252], args[252] }` and answers
+`{ id | error, modres }` into the same buffer's first two words, and
+`SifLoadModule` returns word 0. `SifLoadFileInit` (`0x112970`) binds
+`0x80000006` in a loop until `cd->server` (`cd + 0x24`) is non-null.
+
+What the reference answers, run on the reference under PCSX2 (`-elf` with
+the M1 program, and a copy of it asking for `rom0:NOSUCH`):
+
+```
+# m1: CreateThread -> 3
+# m1: SifLoadModule rom0:SIO2MAN -> 25
+# m1: SifLoadModule rom0:NOSUCH -> -203
+# m1: done
+```
+
+— a module id for a file it has, **-203** for one it has not, and `done`
+afterwards with every thread of the program waiting, which is what settles
+`spec/05` SYS-10k: the boot thread is still there to be picked. (Our kernel
+answers `CreateThread -> 2` for the same program while the program runs on
+the boot thread itself; with a thread of its own it answers 3 too.)
 - `SIF_SYSREG_MAINADDR`/`SIF_SYSREG_SUBADDR` (software regs 0/1) were named
   from the header only; no code path setting or reading them was traced.

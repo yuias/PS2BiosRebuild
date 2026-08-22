@@ -381,8 +381,21 @@ result buffer and size), `0x8000000C` reads server data; each is answered
 with `cid 0x80000008` (RPC_END) whose body names the request it answers. A
 server is a registered id with a dispatch function; the SDK's module loader
 binds server `0x80000006`. The bodies are as `docs/analysis/34` §3 recovers
-them; what it leaves unresolved (the loader's function numbers and reply) is
-recovered when that server is built.
+them. A `BIND` is answered with the server's record address and its argument
+buffer (`sd`, `buf`, `cbuf` in the `END`), or with none of them for an id no
+server has, which the client reads as "try again". A `CALL`'s arguments have
+already landed in that buffer when the packet arrives — the client sends
+them ahead of it, as the out-of-band payload — and its answer is the result
+bytes to the client's receive buffer **followed by** the `END` packet, in one
+run of the sending channel, so the EE's channel stops (and the client's
+handler runs) only once both are there.
+
+**BOOT-12e — the module loader's server.** `sid 0x80000006`, function
+**0** loads a module: a 512-byte request — the argument length at `+0`, the
+path as a string at `+8` (up to 251 bytes), the arguments at `+0x104` — and
+an 8-byte answer, the module id or an error at `+0`, the module's own return
+at `+4`. A name the loader has no file for answers **-203**, observed on the
+reference (`docs/analysis/34` §6).
 
 ## Verification
 

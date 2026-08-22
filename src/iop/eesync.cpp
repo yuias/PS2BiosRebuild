@@ -15,11 +15,13 @@
 // this module published. The reference serves them from `SIFCMD` under a DMA
 // interrupt; here the service polls the packet's own size byte, which the
 // channel writes as the packet lands and the service zeroes when it has read
-// it -- the same mark the EE's client uses on its side. Two kinds of command
+// it -- the same mark the EE's client uses on its side. Three kinds of command
 // are answered: the system commands the SDK's client sends to bring its RPC
-// layer up (BOOT-12c), and a command of our own by which the kernel asks for a
-// file out of the archive (docs/implementation.md) -- the reference serves
-// `rom0:` through ROMDRV over SIFCMD's RPC, which does not exist here yet.
+// layer up (BOOT-12c), the RPC requests that layer then makes of a server
+// (BOOT-12d -- one server, the module loader's id, which cannot load anything
+// yet), and a command of our own by which the kernel asks for a file out of
+// the archive (docs/implementation.md) -- the reference serves `rom0:`
+// through ROMDRV over that same RPC, which does not exist here yet.
 
 #include <stdint.h>
 
@@ -71,11 +73,13 @@ constexpr uintptr_t kDmaDmacen = 0xBF801578;
 // BOOT-11: what crosses the bus is framed. An incoming packet carries the
 // address it lands at, so this end supplies none; an outgoing one is described
 // by a 16-byte send block at TADR that also carries, ready-made, the tag the
-// EE's channel pops to learn where the bytes go.
-constexpr uint32_t kTagEnd = 0x80000000;        // last packet of this channel's run
-constexpr uint32_t kTagDestEnd = 0x90000000;    // an EE destination tag: `cnt`
-                                                // with the interrupt bit, which
-                                                // is what the reference writes
+// EE's channel pops to learn where the bytes go. A run of send blocks is one
+// transfer to the EE's channel, which stops on the last block's tag.
+constexpr uint32_t kTagEnd = 0x80000000;        // last send block of this run
+constexpr uint32_t kTagDest = 0x10000000;       // an EE destination tag: `cnt`
+constexpr uint32_t kTagDestEnd = 0x90000000;    // `cnt` with the interrupt bit,
+                                                // which is what the reference
+                                                // writes on a packet
 
 // What the boot block left for us, at the address `src/boot/iopboot.S` fixes.
 constexpr uintptr_t kBootList = 0x001F8100;
@@ -97,7 +101,21 @@ constexpr uint32_t kCidSystem = 0x80000000;
 constexpr uint32_t kCidChangeAddress = kCidSystem | 0;
 constexpr uint32_t kCidSetSreg = kCidSystem | 1;
 constexpr uint32_t kCidInitCmd = kCidSystem | 2;
+constexpr uint32_t kCidRpcEnd = kCidSystem | 8;
+constexpr uint32_t kCidRpcBind = kCidSystem | 9;
+constexpr uint32_t kCidRpcCall = kCidSystem | 10;
 constexpr uint32_t kCidFile = 0x10;
+
+// BOOT-12d: the module loader's server, the one the SDK's `SifLoadModule`
+// binds. Its request is 512 bytes -- the argument length, the result, the
+// path at +8 and the arguments at +0x104 -- and its answer two words, the
+// module id (or an error) and the module's own return. The reference's
+// loader answers a name it has no file for with -203 (docs/analysis/34 §6).
+constexpr uint32_t kLoadfileServer = 0x80000006;
+constexpr uint32_t kLoadfileRequestBytes = 0x200;
+constexpr uint32_t kLoadfileFunctionLoad = 0;
+constexpr int32_t kErrorNoFile = -203;
+constexpr uint32_t kNoSuchFunction = 0x80000000; // what an unknown fno answers
 
 // BOOT-12a: the sixteen bytes every packet begins with. `size` is `psize` in
 // its low byte and `dsize` above it.
@@ -108,6 +126,44 @@ struct CommandHeader {
     uint32_t opt;
 };
 static_assert(sizeof(CommandHeader) == 16);
+
+// BOOT-12d: the RPC packets, as the SDK's client lays them out after the
+// header. Every one carries the client's three words first.
+struct RpcBind {
+    CommandHeader header;
+    uint32_t rec_id;
+    uint32_t pkt_addr;
+    uint32_t rpc_id;
+    uint32_t client;        // the client's record, handed back in the answer
+    uint32_t sid;
+};
+
+struct RpcCall {
+    CommandHeader header;
+    uint32_t rec_id;
+    uint32_t pkt_addr;
+    uint32_t rpc_id;
+    uint32_t client;
+    uint32_t function;
+    uint32_t send_size;
+    uint32_t receive;       // in EE memory: where the result goes
+    uint32_t receive_size;
+    uint32_t mode;          // 0: no END wanted
+    uint32_t server;
+};
+
+struct RpcEnd {
+    CommandHeader header;
+    uint32_t rec_id;
+    uint32_t pkt_addr;
+    uint32_t rpc_id;
+    uint32_t client;
+    uint32_t cid;           // which request this answers
+    uint32_t server;
+    uint32_t buffer;
+    uint32_t cbuffer;
+};
+static_assert(sizeof(RpcEnd) == 48);
 
 // The kernel's file request, as the EE lays it out after the header
 // (`src/kernel/sif.cpp`): eight words.
@@ -125,9 +181,9 @@ static_assert(sizeof(Request) == 32);
 // What our outgoing channel reads at TADR: where the bytes are and how many,
 // then the tag the EE's channel pops.
 struct SendBlock {
-    uint32_t address;       // | kTagEnd
+    uint32_t address;       // | kTagEnd on the last of a run
     uint32_t words;
-    uint32_t tag;           // kTagDestEnd | quadwords
+    uint32_t tag;           // kTagDest[End] | quadwords
     uint32_t destination;
 };
 
@@ -143,9 +199,19 @@ struct File {
     uint32_t size;
 };
 
+// BOOT-12d: one server. Its buffer is where a call's arguments land -- the
+// client sends them ahead of the call packet, to the address BIND answered.
+struct Server {
+    uint32_t sid;
+    uint32_t (*function)(uint32_t fno, const uint32_t *args, uint32_t size);
+    uint32_t *buffer;
+};
+
 alignas(16) uint8_t receive[kPacketBytes];  // published in SMCOM: packets land here
-alignas(16) SendBlock send_block;
+alignas(16) SendBlock send_blocks[2];
 alignas(16) uint32_t payload[kPayloadWords];
+alignas(16) uint32_t result[4];             // what a server function answers
+alignas(16) uint32_t loadfile_buffer[kLoadfileRequestBytes / 4];
 uint32_t ee_area;                          // what the EE published at the handshake
 uint32_t ee_packet_buffer;                 // BOOT-12c: where the EE's client listens
 
@@ -170,6 +236,10 @@ void waitUntilSet(uintptr_t address, uint32_t bits) {
 
 [[nodiscard]] uint32_t alignedSize(uint32_t size) {
     return (size + 15) & ~uint32_t{15};
+}
+
+[[nodiscard]] uint32_t quadwords(uint32_t words) {
+    return (words + 3) / 4;
 }
 
 // Walk the archive's table, which the boot block left at kBootList +
@@ -235,24 +305,33 @@ void waitUntilSet(uintptr_t address, uint32_t bits) {
     return (length + 3) / 4;
 }
 
-// Send `words` of the payload to `destination` in EE memory: BOOT-11c's send
-// block, then the channel. BOOT-11k: the EE's client names its buffer through
-// an uncached alias, and what goes into the tag has to be the physical address.
-void send(uint32_t words, uint32_t destination) {
+// One send block: `words` of `from` to `destination` in EE memory, tagged so
+// the EE's channel stops there or goes on. BOOT-11k: the EE's client names
+// its buffers through an uncached alias, and what goes into the tag has to be
+// the physical address. The bus moves quadwords and the EE's channel counts
+// them, so a short run is padded up to one; every source here has room.
+void describe(SendBlock &block, const void *from, uint32_t words,
+              uint32_t destination, bool last) {
+    const uint32_t quads = quadwords(words);
+    block.address = reinterpret_cast<uintptr_t>(from) | (last ? kTagEnd : 0);
+    block.words = quads * 4;
+    block.tag = (last ? kTagDestEnd : kTagDest) | quads;
+    block.destination = destination & 0x1FFFFFFF;
+}
+
+// Start the run of send blocks at `send_blocks`: BOOT-11c, then the channel.
+void send() {
     writeWord(kSifCtrl, kCtrlSif0Path);          // BOOT-11f, for this path
-
-    // The bus moves quadwords and the EE's channel counts them, so a short
-    // answer is padded up to one; the payload has room for the padding.
-    const uint32_t quads = (words + 3) / 4;
-    send_block.address = reinterpret_cast<uintptr_t>(payload) | kTagEnd;
-    send_block.words = quads * 4;
-    send_block.tag = kTagDestEnd | quads;
-    send_block.destination = destination & 0x1FFFFFFF;
     barrier();
-
-    writeWord(kDmaSif0 + kTadr, reinterpret_cast<uintptr_t>(&send_block));
+    writeWord(kDmaSif0 + kTadr, reinterpret_cast<uintptr_t>(send_blocks));
     writeWord(kDmaSif0 + kBcr, kDmaBlock);
     writeWord(kDmaSif0 + kChcr, kDmaSendChcr);   // start
+}
+
+// Send `words` of the payload to `destination`, as one packet.
+void sendPayload(uint32_t words, uint32_t destination) {
+    describe(send_blocks[0], payload, words, destination, true);
+    send();
 }
 
 // BOOT-12c: the answer that completes the client's `SifInitRpc` -- SET_SREG
@@ -268,7 +347,7 @@ void sendSetSreg(uint32_t index, uint32_t value) {
     header->opt = 0;
     payload[4] = index;
     payload[5] = value;
-    send(6, ee_packet_buffer);
+    sendPayload(6, ee_packet_buffer);
 }
 
 // The kernel's file request: a name, a verb, and where the answer goes.
@@ -286,7 +365,99 @@ void serveFile(const Request &request) {
     } else {
         words = fillContent(file, request.offset, request.length);
     }
-    send(words, request.destination);
+    sendPayload(words, request.destination);
+}
+
+// --- BOOT-12d: the RPC layer and its one server -----------------------------
+
+// The loader's `load` function: the archive has no loader to hand a module
+// to yet, so every name is answered the way the reference answers one it has
+// no file for. The answer is the module id and the module's own return.
+uint32_t loadfile(uint32_t fno, const uint32_t *args, uint32_t size) {
+    (void)args;
+    (void)size;
+    if (fno != kLoadfileFunctionLoad) {
+        result[0] = kNoSuchFunction;
+        result[1] = 0;
+        return 8;
+    }
+    result[0] = static_cast<uint32_t>(kErrorNoFile);
+    result[1] = 0;
+    return 8;
+}
+
+Server servers[] = {
+    {kLoadfileServer, loadfile, loadfile_buffer},
+};
+
+[[nodiscard]] Server *findServer(uint32_t sid) {
+    for (Server &server : servers) {
+        if (server.sid == sid) {
+            return &server;
+        }
+    }
+    return nullptr;
+}
+
+// The END packet every request is answered with, to the client's buffer.
+// `cid` names the request; an unknown server is answered with none, which the
+// SDK's client reads as "not bound" and asks again.
+void fillEnd(RpcEnd &end, const RpcBind &request, uint32_t cid, const Server *server) {
+    end.header.size = sizeof(RpcEnd);
+    end.header.dest = 0;
+    end.header.cid = kCidRpcEnd;
+    end.header.opt = 0;
+    end.rec_id = request.rec_id;
+    end.pkt_addr = request.pkt_addr;
+    end.rpc_id = request.rpc_id;
+    end.client = request.client;
+    end.cid = cid;
+    end.server = server != nullptr ? reinterpret_cast<uintptr_t>(server) : 0;
+    end.buffer = server != nullptr ? reinterpret_cast<uintptr_t>(server->buffer) : 0;
+    end.cbuffer = end.buffer;
+}
+
+void serveBind(const RpcBind &request) {
+    if (ee_packet_buffer == 0) {
+        return;
+    }
+    auto &end = *reinterpret_cast<RpcEnd *>(payload);
+    fillEnd(end, request, kCidRpcBind, findServer(request.sid));
+    sendPayload(sizeof(RpcEnd) / 4, ee_packet_buffer);
+}
+
+// A call: the arguments have already landed in the server's buffer, ahead of
+// this packet. The function's answer goes to the client's receive buffer and
+// the END packet after it, in one run, so that the EE's channel stops -- and
+// its handler runs -- only once both are there.
+void serveCall(const RpcCall &request) {
+    auto *server = reinterpret_cast<Server *>(request.server);
+    if (server == nullptr || ee_packet_buffer == 0) {
+        return;
+    }
+    const uint32_t answered = server->function(request.function, server->buffer,
+                                               request.send_size);
+    uint32_t blocks = 0;
+    if (request.receive != 0 && request.receive_size != 0 && answered != 0) {
+        uint32_t words = (request.receive_size + 3) / 4;
+        if (words > answered / 4) {
+            words = answered / 4;
+        }
+        describe(send_blocks[blocks], result, words, request.receive,
+                 request.mode == 0);
+        blocks++;
+    }
+    if (request.mode != 0) {
+        auto &end = *reinterpret_cast<RpcEnd *>(payload);
+        fillEnd(end, *reinterpret_cast<const RpcBind *>(&request), kCidRpcCall,
+                server);
+        describe(send_blocks[blocks], payload, sizeof(RpcEnd) / 4,
+                 ee_packet_buffer, true);
+        blocks++;
+    }
+    if (blocks != 0) {
+        send();
+    }
 }
 
 // BOOT-11i: arm the receiving channel before waiting to be told anything. The
@@ -335,6 +506,12 @@ void waitForPacket() {
             break;
         case kCidChangeAddress:
             ee_packet_buffer = body[0];
+            break;
+        case kCidRpcBind:
+            serveBind(*reinterpret_cast<const RpcBind *>(receive));
+            break;
+        case kCidRpcCall:
+            serveCall(*reinterpret_cast<const RpcCall *>(receive));
             break;
         case kCidFile:
             serveFile(*reinterpret_cast<const Request *>(body));
