@@ -18,6 +18,8 @@
 // This module also imports `sysmem` 4, which is the first cross-module call in
 // the image and therefore the first test of the binding of IRX-9.
 
+#include "loader.hpp"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -111,6 +113,81 @@ static_assert(sizeof(LibraryTable) == 0x14);
     return registerAccept(table);
 }
 
+// --- spec/06 IOP-5a/5b: the loader, for modules loaded on request ---------
+//
+// The same `src/iop/loader.hpp` the boot block uses, behind the ordinals
+// MODLOAD calls in sequence: probe, load, link, flush, register. The module
+// id counts on from the boot list, whose modules the boot block loaded
+// without records: the first module loaded on request is numbered after the
+// last one the list named, which is where the reference's count lands too
+// (docs/analysis/34 §6: SIO2MAN is 25 after a 24-entry list).
+
+constexpr uintptr_t kBootListCount = 0x001F8100;
+
+ps2::loader::ModuleRecord *module_list;
+uint16_t next_module_id;
+
+// Ordinal 22: probe(image, info) -> 0 | -1.
+[[nodiscard]] int probeExecutable(const uint8_t *image, ps2::loader::ExecutableInfo *info) {
+    ps2::loader::Segments segments;
+    if (!ps2::loader::readHeaders(image, segments)) {
+        return -1;
+    }
+    info->type = 4;
+    info->entry = 0;
+    info->gp = 0;
+    info->memory_size = segments.load_memsz;
+    info->text_size = segments.load_filesz;
+    info->data_size = 0;
+    info->bss_size = segments.load_memsz - segments.load_filesz;
+    info->base = 0;
+    return 0;
+}
+
+// Ordinal 23: load(image, info) -> 0 | -1, placing at `info->base`. The
+// module's exports are registered here, where the boot block registers a
+// list module's: a module that has not run cannot register itself, and its
+// own call of ordinal 6 from its entry then finds the table present.
+[[nodiscard]] int loadExecutable(const uint8_t *image, ps2::loader::ExecutableInfo *info) {
+    ps2::loader::Segments segments;
+    if (!ps2::loader::readHeaders(image, segments) || info->base == 0) {
+        return -1;
+    }
+    const ps2::loader::Placed placed = ps2::loader::place(image, segments, info->base);
+    info->entry = placed.entry;
+    info->gp = placed.gp;
+    ps2::loader::registerExports(reinterpret_cast<uint8_t *>(info->base),
+                                 reinterpret_cast<uint8_t *>(placed.end));
+    return 0;
+}
+
+// Ordinal 8: link(base, info) -> 0 | -1 when an import found no exporter.
+[[nodiscard]] int linkLibraryEntries(uint8_t *base, const ps2::loader::ExecutableInfo *info) {
+    return ps2::loader::bind(base, base + info->memory_size) == 0 ? 0 : -1;
+}
+
+// Ordinal 4: the instruction cache. A plain store is seen by the next fetch
+// on the targets this image runs on (docs/implementation.md).
+int flushIcache() {
+    return 0;
+}
+
+// Ordinal 16: register(record) -> 0. The id is assigned here (IOP-5c).
+int registerModule(ps2::loader::ModuleRecord *record) {
+    if (next_module_id == 0) {
+        next_module_id = static_cast<uint16_t>(
+            *reinterpret_cast<volatile uint32_t *>(kBootListCount) + 1);
+    }
+    record->id = next_module_id++;
+    record->next = module_list;
+    module_list = record;
+    return 0;
+}
+
+int unimplementedCall() {
+    return -1;
+}
+
 // IRX-4: the export table, kept mutable for the same reason as `sysmem`'s
 // (IRX-4c).
 struct ExportTable {
@@ -119,9 +196,14 @@ struct ExportTable {
     uint16_t version;
     uint16_t flags;
     char tag[8];
-    int (*entries[14])(void *);
+    int (*entries[25])(void *);
 };
 static_assert(offsetof(ExportTable, entries) == 0x14);
+
+template <typename F>
+[[nodiscard]] constexpr int (*asSlot(F *function))(void *) {
+    return reinterpret_cast<int (*)(void *)>(function);
+}
 
 // `used`: nothing in this translation unit takes its address -- the loader
 // finds it by scanning for the magic word (IRX-4b), not through a reference
@@ -136,16 +218,27 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         reservedHook,                   // 0  reserved
         reservedHook,                   // 1  reserved
         unimplemented,                  // 2
-        unimplemented,                  // 3
-        unimplemented,                  // 4
+        unimplemented,                  // 3  GetLibraryEntryTable
+        asSlot(flushIcache),            // 4  FlushIcache
         unimplemented,                  // 5
         registerVersioned,              // 6  register, versioned
         unimplemented,                  // 7
-        unimplemented,                  // 8
-        unimplemented,                  // 9
+        asSlot(linkLibraryEntries),     // 8  LinkLibraryEntries
+        unimplemented,                  // 9  UnLinkLibraryEntries
         registerPinned,                 // 10 register, pinned
         unimplemented,                  // 11
-        unimplemented,                  // 12
+        unimplemented,                  // 12 QueryBootMode
+        unimplemented,                  // 13
+        unimplemented,                  // 14
+        unimplemented,                  // 15
+        asSlot(registerModule),         // 16 RegisterModule
+        unimplemented,                  // 17 ReleaseModule
+        unimplemented,                  // 18
+        unimplemented,                  // 19
+        unimplemented,                  // 20 AddRebootNotifyHandler
+        unimplemented,                  // 21 SetCacheCtrl
+        asSlot(probeExecutable),        // 22 ProbeExecutableObject
+        asSlot(loadExecutable),         // 23 LoadExecutableObject
         nullptr,                        // IRX-5b
     },
 };

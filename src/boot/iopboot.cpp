@@ -120,7 +120,7 @@ void writeBootEntry(uint32_t index, uint32_t rom_address, uint32_t size) {
     // means the first module needs no loader to already exist.
     auto *segment_start = reinterpret_cast<uint8_t *>(base_address);
     auto *segment_end = reinterpret_cast<uint8_t *>(placed.end);
-    bind(segment_start, segment_end);
+    (void)bind(segment_start, segment_end);
     registerExports(segment_start, segment_end);
 
     // `return & 3` decides residency; with no allocator there is nothing to

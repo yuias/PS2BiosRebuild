@@ -126,6 +126,18 @@ ps2AddModule(intrman MODULE Interrupt_Manager VERSION 1.00
     SOURCES src/iop/intrman.S src/iop/intrman.cpp)
 ps2AddModule(threadman MODULE Multi_Thread_Manager VERSION 1.00
     SOURCES src/iop/threadman.cpp)
+ps2AddModule(dmacman MODULE DMA_Controller_Manager VERSION 1.00
+    SOURCES src/iop/dmacman.cpp)
+ps2AddModule(ioman MODULE IO_File_Manager VERSION 1.00
+    SOURCES src/iop/ioman.cpp)
+ps2AddModule(modload MODULE Module_File_Loader VERSION 1.00
+    SOURCES src/iop/modload.cpp)
+ps2AddModule(romdrv MODULE ROM_File_Driver VERSION 1.00
+    SOURCES src/iop/romdrv.cpp)
+ps2AddModule(stdio MODULE Standard_IO VERSION 1.00
+    SOURCES src/iop/stdio.cpp)
+ps2AddModule(loadfile MODULE Load_Module_By_EE VERSION 1.00
+    SOURCES src/iop/loadfile.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
@@ -198,7 +210,8 @@ add_custom_command(
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf excepman.elf intrman.elf threadman.elf eesync.elf
+            loadcore.elf excepman.elf intrman.elf threadman.elf dmacman.elf
+            ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
             osdsys.elf
     COMMENT "Assembling the ROM archive")
 

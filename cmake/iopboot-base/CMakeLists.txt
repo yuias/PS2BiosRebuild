@@ -32,7 +32,8 @@ add_custom_command(
     DEPENDS "${PS2_SOURCE_DIR}/tools/mkromdir.py" "${PS2_MANIFEST}"
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
             sysmem.elf loadcore.elf excepman.elf intrman.elf threadman.elf
-            eesync.elf
+            dmacman.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf
+            loadfile.elf
     COMMENT "Computing IOPBOOT's archive-relative link address")
 
 # A bare OUTPUT command with no consumer in its own directory is pruned from

@@ -22,6 +22,7 @@
 // through ROMDRV over that same RPC, which does not exist here yet.
 
 #include "module.hpp"
+#include "sifrpc.hpp"
 
 #include <stdint.h>
 
@@ -111,11 +112,6 @@ constexpr uint32_t kCidFile = 0x10;
 // path at +8 and the arguments at +0x104 -- and its answer two words, the
 // module id (or an error) and the module's own return. The reference's
 // loader answers a name it has no file for with -203 (docs/analysis/34 §6).
-constexpr uint32_t kLoadfileServer = 0x80000006;
-constexpr uint32_t kLoadfileRequestBytes = 0x200;
-constexpr uint32_t kLoadfileFunctionLoad = 0;
-constexpr int32_t kErrorNoFile = -203;
-constexpr uint32_t kNoSuchFunction = 0x80000000; // what an unknown fno answers
 
 // BOOT-12a: the sixteen bytes every packet begins with. `size` is `psize` in
 // its low byte and `dsize` above it.
@@ -199,21 +195,25 @@ struct File {
     uint32_t size;
 };
 
-// BOOT-12d: one server. Its buffer is where a call's arguments land -- the
-// client sends them ahead of the call packet, to the address BIND answered.
-struct Server {
-    uint32_t sid;
-    uint32_t (*function)(uint32_t fno, const uint32_t *args, uint32_t size);
-    uint32_t *buffer;
-};
+// BOOT-12d: the servers modules register through the `sifcmd` library
+// (src/iop/sifrpc.hpp), and the queues whose threads answer their calls.
+using ps2::sifrpc::Queue;
+using ps2::sifrpc::Server;
+Server *servers;
+Queue *queues;
 
 alignas(16) uint8_t receive[kPacketBytes];  // published in SMCOM: packets land here
 alignas(16) SendBlock send_blocks[2];
 alignas(16) uint32_t payload[kPayloadWords];
-alignas(16) uint32_t result[4];             // what a server function answers
-alignas(16) uint32_t loadfile_buffer[kLoadfileRequestBytes / 4];
 uint32_t ee_area;                          // what the EE published at the handshake
 uint32_t ee_packet_buffer;                 // BOOT-12c: where the EE's client listens
+
+extern "C" {
+int _import_thbase_sleep();
+int _import_thbase_iwakeup(uint32_t id);
+int _import_intrman_suspend(uint32_t *state);
+int _import_intrman_resume(uint32_t state);
+}
 
 [[nodiscard]] uint32_t readWord(uintptr_t address) {
     return *reinterpret_cast<volatile uint32_t *>(address);
@@ -368,35 +368,68 @@ void serveFile(const Request &request) {
     sendPayload(words, request.destination);
 }
 
-// --- BOOT-12d: the RPC layer and its one server -----------------------------
-
-// The loader's `load` function: the archive has no loader to hand a module
-// to yet, so every name is answered the way the reference answers one it has
-// no file for. The answer is the module id and the module's own return.
-uint32_t loadfile(uint32_t fno, const uint32_t *args, uint32_t size) {
-    (void)args;
-    (void)size;
-    if (fno != kLoadfileFunctionLoad) {
-        result[0] = kNoSuchFunction;
-        result[1] = 0;
-        return 8;
-    }
-    result[0] = static_cast<uint32_t>(kErrorNoFile);
-    result[1] = 0;
-    return 8;
-}
-
-Server servers[] = {
-    {kLoadfileServer, loadfile, loadfile_buffer},
-};
+// --- BOOT-12d: the RPC layer, as the `sifcmd` library ------------------------
+//
+// IOP-5f: a server module registers a queue bound to its own thread and a
+// server on that queue, then calls RpcLoop, which sleeps until the handler
+// has queued a call and answers it from the thread -- where a server's
+// function may do what an interrupt handler may not, such as create threads.
 
 [[nodiscard]] Server *findServer(uint32_t sid) {
-    for (Server &server : servers) {
-        if (server.sid == sid) {
-            return &server;
+    for (Server *server = servers; server != nullptr; server = server->next) {
+        if (server->sid == sid) {
+            return server;
         }
     }
     return nullptr;
+}
+
+int initRpc(uint32_t) {
+    return 0;
+}
+
+int setRpcQueue(Queue *queue, uint32_t thread_id) {
+    queue->thread_id = thread_id;
+    queue->pending = nullptr;
+    queue->next = queues;
+    queues = queue;
+    return 0;
+}
+
+int registerRpc(Server *server, uint32_t sid, void *function, void *buffer,
+                void *cfunction, void *cbuffer, Queue *queue) {
+    server->sid = sid;
+    server->function = reinterpret_cast<void *(*)(uint32_t, void *, uint32_t)>(function);
+    server->buffer = buffer;
+    server->cfunction = reinterpret_cast<void *(*)(uint32_t, void *, uint32_t)>(cfunction);
+    server->cbuffer = cbuffer;
+    server->queue = queue;
+    server->next_pending = nullptr;
+    server->next = servers;
+    servers = server;
+    return 0;
+}
+
+void answerCall(Server &server);
+
+// The queue's thread lives here: asleep until the handler wakes it with a
+// call to answer, then back to sleep. Never returns.
+int rpcLoop(Queue *queue) {
+    for (;;) {
+        uint32_t state;
+        _import_intrman_suspend(&state);
+        Server *server = queue->pending;
+        if (server != nullptr) {
+            queue->pending = server->next_pending;
+            server->next_pending = nullptr;
+        }
+        _import_intrman_resume(state);
+        if (server == nullptr) {
+            _import_thbase_sleep();
+            continue;
+        }
+        answerCall(*server);
+    }
 }
 
 // The END packet every request is answered with, to the client's buffer.
@@ -427,30 +460,58 @@ void serveBind(const RpcBind &request) {
 }
 
 // A call: the arguments have already landed in the server's buffer, ahead of
-// this packet. The function's answer goes to the client's receive buffer and
-// the END packet after it, in one run, so that the EE's channel stops -- and
-// its handler runs -- only once both are there.
+// this packet. The request is kept on the server and queued for its thread,
+// which is woken to answer it (IOP-5f); nothing runs here but the wake.
 void serveCall(const RpcCall &request) {
     auto *server = reinterpret_cast<Server *>(request.server);
-    if (server == nullptr || ee_packet_buffer == 0) {
+    if (server == nullptr || server->queue == nullptr) {
         return;
     }
-    const uint32_t answered = server->function(request.function, server->buffer,
-                                               request.send_size);
-    uint32_t blocks = 0;
-    if (request.receive != 0 && request.receive_size != 0 && answered != 0) {
-        uint32_t words = (request.receive_size + 3) / 4;
-        if (words > answered / 4) {
-            words = answered / 4;
+    server->client = request.client;
+    server->rec_id = request.rec_id;
+    server->pkt_addr = request.pkt_addr;
+    server->rpc_id = request.rpc_id;
+    server->fno = request.function;
+    server->send_size = request.send_size;
+    server->receive = request.receive;
+    server->receive_size = request.receive_size;
+    server->mode = request.mode;
+    Queue &queue = *server->queue;
+    server->next_pending = nullptr;
+    if (queue.pending == nullptr) {
+        queue.pending = server;
+    } else {
+        Server *tail = queue.pending;
+        while (tail->next_pending != nullptr) {
+            tail = tail->next_pending;
         }
-        describe(send_blocks[blocks], result, words, request.receive,
-                 request.mode == 0);
+        tail->next_pending = server;
+    }
+    _import_thbase_iwakeup(queue.thread_id);
+}
+
+// On the queue's thread: the function's answer goes to the client's receive
+// buffer and the END packet after it, in one run, so that the EE's channel
+// stops -- and its handler runs -- only once both are there.
+void answerCall(Server &server) {
+    void *answer = server.function(server.fno, server.buffer, server.send_size);
+    if (ee_packet_buffer == 0) {
+        return;
+    }
+    uint32_t blocks = 0;
+    if (answer != nullptr && server.receive != 0 && server.receive_size != 0) {
+        describe(send_blocks[blocks], answer, (server.receive_size + 3) / 4,
+                 server.receive, server.mode == 0);
         blocks++;
     }
-    if (request.mode != 0) {
+    if (server.mode != 0) {
+        RpcBind request;
+        request.rec_id = server.rec_id;
+        request.pkt_addr = server.pkt_addr;
+        request.rpc_id = server.rpc_id;
+        request.client = server.client;
         auto &end = *reinterpret_cast<RpcEnd *>(payload);
-        fillEnd(end, *reinterpret_cast<const RpcBind *>(&request), kCidRpcCall,
-                server);
+        fillEnd(end, request, kCidRpcCall, &server);
         describe(send_blocks[blocks], payload, sizeof(RpcEnd) / 4,
                  ee_packet_buffer, true);
         blocks++;
@@ -459,6 +520,41 @@ void serveCall(const RpcCall &request) {
         send();
     }
 }
+
+// IRX-4: the library server modules import (spec/06 IOP-5f's ordinals).
+[[gnu::used]] ps2::module::ExportTable<23> sifcmd_exports = {
+    ps2::module::kExportMagic,
+    0,
+    0x0101,
+    0,
+    {'s', 'i', 'f', 'c', 'm', 'd', 0, 0},
+    {
+        ps2::module::slot(ps2::module::reservedHook),   // 0
+        ps2::module::slot(ps2::module::reservedHook),   // 1
+        ps2::module::slot(ps2::module::reservedHook),   // 2
+        ps2::module::slot(ps2::module::reservedHook),   // 3
+        ps2::module::slot(ps2::module::reservedHook),   // 4
+        ps2::module::slot(ps2::module::reservedHook),   // 5
+        ps2::module::slot(ps2::module::reservedHook),   // 6
+        ps2::module::slot(ps2::module::reservedHook),   // 7
+        ps2::module::slot(ps2::module::reservedHook),   // 8
+        ps2::module::slot(ps2::module::reservedHook),   // 9
+        ps2::module::slot(ps2::module::reservedHook),   // 10
+        ps2::module::slot(ps2::module::reservedHook),   // 11
+        ps2::module::slot(ps2::module::reservedHook),   // 12
+        ps2::module::slot(ps2::module::reservedHook),   // 13
+        ps2::module::slot(initRpc),                     // 14 sceSifInitRpc
+        ps2::module::slot(ps2::module::reservedHook),   // 15
+        ps2::module::slot(ps2::module::reservedHook),   // 16
+        ps2::module::slot(registerRpc),                 // 17 sceSifRegisterRpc
+        ps2::module::slot(ps2::module::reservedHook),   // 18
+        ps2::module::slot(setRpcQueue),                 // 19 sceSifSetRpcQueue
+        ps2::module::slot(ps2::module::reservedHook),   // 20
+        ps2::module::slot(ps2::module::reservedHook),   // 21
+        ps2::module::slot(rpcLoop),                     // 22 sceSifRpcLoop
+        nullptr,
+    },
+};
 
 // BOOT-11i: arm the receiving channel before waiting to be told anything. The
 // EE's transfer runs only once this end is ready for it, so arming after a
@@ -519,6 +615,13 @@ PS2_IMPORTS_BEGIN("intrman\0", 0x0102)
 PS2_IMPORT(_import_intrman_register, 4)
 PS2_IMPORT(_import_intrman_enable, 6)
 PS2_IMPORT(_import_intrman_cpu_enable, 9)
+PS2_IMPORT(_import_intrman_suspend, 17)
+PS2_IMPORT(_import_intrman_resume, 18)
+PS2_IMPORTS_END()
+
+PS2_IMPORTS_BEGIN("thbase\0\0", 0x0101)
+PS2_IMPORT(_import_thbase_sleep, 24)
+PS2_IMPORT(_import_thbase_iwakeup, 26)
 PS2_IMPORTS_END()
 
 extern "C" {

@@ -104,6 +104,39 @@ static void poke32(void *address, uint32_t value) {
     return *reinterpret_cast<volatile uint32_t *>(kRegistryHead);
 }
 
+// spec/06 IOP-5c: the record at the head of a module loaded on request --
+// ModuleInfo_t [header], 0x30 bytes, the image following it. IRX-12c fixes
+// `entry` and `gp`; `id` is what a loader answers.
+struct ModuleRecord {
+    ModuleRecord *next;
+    const char *name;
+    uint16_t version;
+    uint16_t newflags;
+    uint16_t id;
+    uint16_t flags;
+    uint32_t entry;
+    uint32_t gp;
+    uint32_t text_start;
+    uint32_t text_size;
+    uint32_t data_size;
+    uint32_t bss_size;
+    uint32_t reserved[2];
+};
+static_assert(sizeof(ModuleRecord) == 0x30);
+
+// spec/06 IOP-5b: what LOADCORE's probe reports about an image and its load
+// fills in. `type` 4 is a relocatable module, the only kind here.
+struct ExecutableInfo {
+    uint32_t type;
+    uint32_t entry;
+    uint32_t gp;
+    uint32_t memory_size;       // the load segment, bss included
+    uint32_t text_size;
+    uint32_t data_size;
+    uint32_t bss_size;
+    uint32_t base;              // where it was placed, once it has been
+};
+
 // What the two program headers of IRX-1 say about a file.
 struct Segments {
     uint32_t load_offset;
@@ -300,7 +333,10 @@ static void bindTable(uint8_t *import_table, const uint8_t *export_table) {
     }
 }
 
-static void bind(uint8_t *start, uint8_t *end) {
+// Returns how many import tables found no exporter: the boot carries on
+// regardless (IRX-8a), the loader of IOP-5b refuses the module (KE_LINKERR).
+static uint32_t bind(uint8_t *start, uint8_t *end) {
+    uint32_t unbound = 0;
     for (uint8_t *at = start; at < end; at += 4) {
         if (peek32(at) != kImportMagic) {
             continue;
@@ -319,10 +355,12 @@ static void bind(uint8_t *start, uint8_t *end) {
             exporter = reinterpret_cast<uint8_t *>(peek32(exporter));
         }
         if (exporter == nullptr) {
+            unbound++;
             continue;                          // nothing exports it yet
         }
         bindTable(at, exporter);
     }
+    return unbound;
 }
 
 // IRX-10a: link every export table in the segment into the registry. The
