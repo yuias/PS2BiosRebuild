@@ -808,7 +808,7 @@ emulators are the gate.
 **The gate that matters is the M1 pull**, `docs/project-state.md` §6: an
 independently-built program, run under the PS2SDK toolchain, calls
 `SifInitRpc` and `SifLoadModule("rom0:SIO2MAN")` and prints its own final
-line. It answers `13` — the module after the boot list's twelve — on PS2e and
+line. It answers `14` — the module after the boot list's thirteen — on PS2e and
 PCSX2, with the module parked as IOP-6c says. What the emulators do not show
 is the exactness of the individual calls: PS2e's `--debug-iop` (single-step,
 watchpoints) is the instrument for that when a later module disagrees.

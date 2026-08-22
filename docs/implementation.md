@@ -349,7 +349,7 @@ The archive carries `SIO2MAN` (IOP-6), and the program's fourth stage is
 what M1 asked for:
 
 ```
-# m1: SifLoadModule rom0:SIO2MAN -> 13
+# m1: SifLoadModule rom0:SIO2MAN -> 14
 # m1: done
 ```
 
@@ -591,7 +591,7 @@ first-pair bit preservation and the POST side effect are all implemented.
 `ninja -C build check` prints this list at the end of every successful run, so
 it cannot quietly go stale. This copy is the gate's own text:
 
-- The rest of the boot list: 12 of its twenty-nine modules are built
+- The rest of the boot list: 13 of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet

@@ -552,7 +552,7 @@ rom0:SIO2MAN -> <id>` with a non-negative id, on PS2e first and PCSX2 second
 **M1 is met (2026-08-22, end of day).** Both targets print
 
 ```
-# m1: SifLoadModule rom0:SIO2MAN -> 13
+# m1: SifLoadModule rom0:SIO2MAN -> 14
 # m1: done
 ```
 
