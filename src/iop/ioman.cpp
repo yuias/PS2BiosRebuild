@@ -358,7 +358,13 @@ int delDrv(const char *name) {
 
 }  // namespace
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
+
+int _import_loadcore_register(void *table);
 
 int _module_start(int, char **) {
     for (Device *&entry : drivers) {
@@ -367,6 +373,12 @@ int _module_start(int, char **) {
     for (File &file : files) {
         file.device = nullptr;
     }
+    // IRX-10a, the reference's way: the module registers its own library
+    // from its entry. The loader has already done so (docs/implementation.md),
+    // and LOADCORE answers yes to a table it finds; the call is made all the
+    // same, because an emulator watching for it -- PCSX2 learns where
+    // `ioman` is from this call, for its `host:` device -- sees it here.
+    _import_loadcore_register(&ioman_exports);
     return 0;                                   // resident
 }
 
