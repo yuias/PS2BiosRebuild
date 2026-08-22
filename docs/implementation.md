@@ -349,7 +349,7 @@ The archive carries `SIO2MAN` (IOP-6), and the program's fourth stage is
 what M1 asked for:
 
 ```
-# m1: SifLoadModule rom0:SIO2MAN -> 14
+# m1: SifLoadModule rom0:SIO2MAN -> 16
 # m1: done
 ```
 
@@ -473,6 +473,22 @@ them, refusing a stale id the same way. Seven `thbase` calls are the
 reference's own stubs; `DelayThread` and the alarms answer -1 until a timer
 manager exists (IOP-3j), which the gate lists.
 
+**`CDVDMAN` serves one datapattern, and `FILEIO` has no arbitrary-alignment
+push.** IOP-8 and IOP-9. Our `CDVDMAN` implements the plain 2048-byte sector
+(datapattern 0) and ignores `sceCdRead`'s mode; the S-command families
+(`docs/analysis/26`), the streaming API and `CDVDFSV`'s RPC surface are not
+built, and the fifty ordinals outside the twelve it implements share one
+"return 0" stub so a client's import still binds. Our `FILEIO` serves
+`open`/`close`/`read`/`lseek`/`getstat` and answers every other function of
+its table `-1`; the reference's second service (`sid 0x80000003`) does not
+exist here. `EESYNC` has no `sceSifGetOtherData` (`sifcmd` ordinal 23), which
+the reference uses to place a `read`'s unaligned head and tail at an EE
+address of any alignment, so ours sends the whole quadword those bytes fall
+in, zero-filled around them -- the same thing `LOADFILE` does for a segment's
+unaligned lead (IOP-5h), and it clobbers up to fifteen bytes on either side
+of the caller's range. The bounce buffer is a fixed 4 KiB rather than the
+reference's probe from 16 KiB downward.
+
 **`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
 and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with
 `{ "EELOAD", path, argv... }`, and `EELOAD` asks the IOP's `LOADFILE` for the
@@ -591,7 +607,7 @@ first-pair bit preservation and the POST side effect are all implemented.
 `ninja -C build check` prints this list at the end of every successful run, so
 it cannot quietly go stale. This copy is the gate's own text:
 
-- The rest of the boot list: 13 of its twenty-nine modules are built
+- The rest of the boot list: 15 of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet

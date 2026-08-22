@@ -130,6 +130,7 @@ reference and the reason for it.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
+| The disc and the EE's file service (IOP-8, IOP-9) | **built, untested against a disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC; nothing reads a disc yet, so only the boot's own gates cover them |
 | IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
@@ -552,7 +553,7 @@ rom0:SIO2MAN -> <id>` with a non-negative id, on PS2e first and PCSX2 second
 **M1 is met (2026-08-22, end of day).** Both targets print
 
 ```
-# m1: SifLoadModule rom0:SIO2MAN -> 14
+# m1: SifLoadModule rom0:SIO2MAN -> 16
 # m1: done
 ```
 

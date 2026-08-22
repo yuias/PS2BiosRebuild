@@ -797,22 +797,6 @@ build/rom.bin` and `ninja -C build check` boot the image only if the
 the chains; the hand-written paths of both modules are checked for the
 R3000's load-delay hazard by the same target.
 
-**IOP-3 through IOP-6** are exercised by the M1 program (`docs/project-state.md`
-§6) on the two targets: `LOADFILE`'s thread is woken from an interrupt and
-switched to (IOP-3h), the program's `SifLoadModule("rom0:SIO2MAN")` goes
-through `IOMAN`, `ROMDRV`, `LOADCORE` and `MODLOAD` and answers the
-module's id, and `SIO2MAN` reaches IOP-6c's parked state. The simulators
-cannot judge these — `tools/eesim.py` delivers no EE interrupt — so the two
-emulators are the gate.
-
-**The gate that matters is the M1 pull**, `docs/project-state.md` §6: an
-independently-built program, run under the PS2SDK toolchain, calls
-`SifInitRpc` and `SifLoadModule("rom0:SIO2MAN")` and prints its own final
-line. It answers `14` — the module after the boot list's thirteen — on PS2e and
-PCSX2, with the module parked as IOP-6c says. What the emulators do not show
-is the exactness of the individual calls: PS2e's `--debug-iop` (single-step,
-watchpoints) is the instrument for that when a later module disagrees.
-
 ## IOP-7: Timers (TIMRMAN)
 
 Derived from `docs/analysis/44` §1–§3.
@@ -854,6 +838,295 @@ read — the reference acknowledges a timer interrupt no other way.
 
 **IOP-7e — the hold block.** Ordinals 13–15 address `0xBF8014C0 + 4n`
 (mode) and `0xBF8014B0 + 4n` (value); nothing on the boot path uses them.
+
+## IOP-8: The disc (CDVDMAN)
+
+Derived from `docs/analysis/42-cdvd.md` §0–§4, §7.
+
+**IOP-8a — the `cdrom` device and its ops table.** `CDVDMAN` registers one
+`IOMAN` device, named `cdrom` (no digit — the same `IOMAN`-side unit-splitting
+`ROMDRV`'s `rom` uses, IOP-4e), `type = 0x10` (`IOP_DT_FS` [header]). Real
+`init`/`deinit`/`open`/`close`/`read`/`lseek`; every other slot — `format`,
+**`write` included**, `ioctl`, `remove`, `mkdir`, `rmdir`, `dopen`, `dclose`,
+`dread`, `getstat`, `chstat` (eleven slots) — shares one "return `0`" stub
+(§1). This is the one point `CDVDMAN` differs from `ROMDRV`'s ops table
+(IOP-4g): `ROMDRV` gives `write` its own dedicated error stub, `CDVDMAN`
+routes it through the same no-op every other unimplemented slot uses, so a
+`write` against `cdrom0:` reports success without writing anything.
+`AddDrv`'s own contract (IOP-4a) still applies: `init` runs before
+registration completes and may veto it.
+
+**IOP-8b — no dedicated service thread.** Every hardware command — the
+N-command send, the DMA arm — runs synchronously on whichever thread called
+into the driver (`open`/`read`, or an exported `sceCd*` call), not on a
+service thread of `CDVDMAN`'s own. Concurrent callers are serialised by
+semaphore rather than handed to a queue: one semaphore for the whole
+open/read/search sequence and the one-sector cache it shares, a second for
+the N-command channel itself. Only the second is polled non-blocking
+(`PollSema`, declining immediately rather than queueing) — an unready or
+busy channel is a declined call, not a wait.
+
+**IOP-8c — the N-command register block.** A block separate from the
+S-command pair `docs/analysis/26-cdvd-nvm-and-config.md` already covers:
+
+| Addr | Use |
+| --- | --- |
+| `0xBF402004` | write: N-command number, starts the command |
+| `0xBF402005` | read: status — bit `0x80` busy, bit `0x40` set means ready, precondition to send is `(status & 0xC0) == 0x40`; write: one parameter byte, looped |
+| `0xBF402006` | write: the one-byte submode, set before the command; read: the command's raw result byte |
+| `0xBF402007` | write-only: `1` aborts the current command (`sceCdBreak`) |
+| `0xBF402008` | read: bit 0, tested by the IRQ-2 handler; write: `1` (done) or `2` (retry) to acknowledge |
+| `0xBF40200A` | read: drive state — `0x0A` is "ready with a disc" (`SCECdStatPause` [header]) |
+| `0xBF40200F` | read: disk-type byte, returned raw by `sceCdGetDiskType` |
+
+**IOP-8d — a 2048-byte sector read, register by register.** The
+datapattern-0 case — the only shape a plain `sceCdRead(lbn, sectors, buf,
+NULL)` takes, and the only one this module builds:
+
+1. Arm DMA channel 3 (poked directly; no `dmacman` import, matching the
+   reference): `CHCR (0xBF8010B8) = 0`, `MADR (0xBF8010B0) = dest`, `BCR
+   (0xBF8010B4) = (sectors << 16) | 0x200`, `CHCR = 0x41000200`. `0x200` is
+   the per-block size in words: `2048 / 4 = 512 = 0x200`, one block per
+   sector — the value a rebuild derives once it knows the target is a plain
+   2048-byte sector, distinct from the multiplier the reference's other
+   datapattern branches feed into the command's own length field.
+2. Require `(0xBF402005 & 0xC0) == 0x40` — a precondition check, not a spin;
+   an unready channel declines the call outright. (`sceCdInit(mode=0)` is
+   the one place that actually spins on this same bit, before any command is
+   ever sent — IOP-8g.)
+3. Write the submode byte to `0xBF402006`. The reference's observed set is
+   `{0x40, 0x80, 0x83, 0x85, 0x86, 0x8f}`, chosen by disk type and
+   datapattern; a rebuild handling only the plain PS2 CD/DVD, datapattern-0
+   case uses the fixed value `0x80`.
+4. Write an 11-byte parameter block to `0xBF402005`, one byte at a time:
+   `lbn` little-endian at `+0..3`, `sectors` little-endian at `+4..7`,
+   `trycount` at `+8` (0 when the caller's mode is defaulted/`NULL`), the
+   same submode byte at `+9`, datapattern (`0`) at `+10`.
+5. Write `6` to `0xBF402004` — the command starts. The call returns as soon
+   as this is accepted; the sector bytes are not yet at `dest`.
+
+**IOP-8e — the completion contract.** `RegisterIntrHandler(irq=2, mode=1,
+...)` (`intrman` ordinal 4) and `EnableIntr(2)` (ordinal 6) install the
+completion side once, from the module's own init; `DPCR (0xBF8010F0) |=
+0x8000` enables channel 3's own DMA bit at the same time. IRQ 2's handler:
+reads `0xBF402006` into the byte `sceCdGetError` later returns; reads
+`0xBF402008` bit 0 — clear acknowledges with `2` and leaves completion
+pending (a retry cycle); set reads `0xBF402005` bit 0 to decide the
+completion word (`1` ok, `-1` error) and acknowledges with `1`. No
+`SignalSema` happens in the handler and no completion is semaphore-driven:
+`sceCdSync(mode)` (ordinal 11) is the caller-facing wait, and it busy-polls
+the completion word — mode `0` sleeps 1000 µs (`DelayThread`, `thbase`
+ordinal 33) between checks and blocks until it is set; mode `1` checks once
+and returns immediately. `sceCdCheckCmd` (ordinal 21) returns the same word
+raw, unblocking. This is deliberately not a cleaner semaphore wait: it
+reproduces the reference's own call-and-poll shape, which is what a title's
+timing assumptions may depend on.
+
+**IOP-8f — ISO9660 path resolution.** A path is `\DIR\FILE;1`-shaped, the
+same form `SYSTEM.CNF`'s own `BOOT2` line uses and what `IOMAN` hands the
+driver's `open` past the device's colon. Resolution:
+
+1. Read LBA 16 (the Primary Volume Descriptor) and check `"CD001"` at byte
+   offset 1; a mismatch fails resolution outright.
+2. The PVD's own root directory record, at PVD offset 156 (34 bytes), gives
+   the root directory's extent LBA (offset `+2`, little-endian 32-bit) and
+   size (offset `+10`).
+3. The path must begin with `\`; anything else is a silent "not found."
+4. Split the remainder at `\` into components, descending up to 8 levels
+   (`CdlMAXLEVEL` [header]) — deeper paths fail.
+5. At each level, scan the current directory's extent sector by sector.
+   Each ISO9660 directory record: length byte at `+0` (`0` means padding to
+   the sector boundary — records never split across sectors), extent LBA at
+   `+2` (little-endian 32-bit), data length at `+10`, flags at `+25` (bit 1
+   set means a subdirectory), file-identifier length at `+32`, the
+   identifier itself at `+33`. A component matches an identifier either
+   exactly or, when the component itself carries no `;version` suffix,
+   against the identifier's own name with its `;1` suffix stripped.
+6. A match that is not the path's last component must be a directory, and
+   descent continues into its extent; a match on the last component yields
+   the file's own extent LBA and size — exactly what `sceCdRead` needs.
+
+Every metadata and data sector this resolution and the driver's own `read`
+touch goes through one shared, one-sector cache keyed by LBA, so a
+byte-range request that does not start on a sector boundary (`LOADFILE`'s
+own 4 KiB reads at arbitrary offsets) costs one hardware read per sector
+actually touched, not one per call.
+
+**IOP-8g — the exports.** Ordinal numbering matches the reference's 62-entry
+table (§0); a rebuild's minimal table implements the following and shares
+one "return `0`" filler across every other slot, so the table's own size
+matches the reference's exactly:
+
+| Ord | Export | Behaviour |
+| --- | --- | --- |
+| 0 | (module init, re-exported) | registers the `cdrom` device (`AddDrv`) |
+| 4 | `sceCdInit(mode)` | mode `0` spins on the N-command ready bit before installing the IRQ/DMA state; every mode installs it |
+| 6 | `sceCdRead(lbn, sectors, buf, mode)` | non-blocking: IOP-8d, ignores `mode` (datapattern 0 only) |
+| 8 | `sceCdGetError()` | the IRQ-2 handler's stored result byte |
+| 10 | `sceCdSearchFile(sceCdlFILE*, path)` | IOP-8f, filling `{lsn, size, name[16], date[8]}` |
+| 11 | `sceCdSync(mode)` | IOP-8e |
+| 12 | `sceCdGetDiskType()` | raw `0xBF40200F` |
+| 13 | `sceCdDiskReady(mode)` | mode `1` a single check; otherwise a bare spin on `0xBF40200A == 0x0A`, no event flag |
+| 21 | `sceCdCheckCmd()` | the raw completion word IOP-8e describes |
+| 28 | `sceCdStatus()` | raw `0xBF40200A` |
+| 39 | `sceCdBreak()` | writes `1` to `0xBF402007` |
+| 46 | `sceCdNop()` | no-op |
+
+**IOP-8h — what is out of scope for this minimal driver.** No S-commands
+(NVM, OSD configuration, disc keys — `docs/analysis/26`), no CD streaming
+API (`sceCdSt*`, ordinals 56–61), no `CDVDFSV` RPC surface (§5) and
+therefore no EE-facing SIF service for any of the above — an EE client
+reaches only what a later `CDVDFSV` build forwards. `sceCdRead`'s `mode`
+argument (trycount/spindlectrl/datapattern) is accepted but not
+interpreted: every read is issued as the plain 2048-byte, datapattern-0
+case IOP-8d describes, matching what `LOADFILE`'s own ELF-loading path
+needs and nothing beyond it.
+
+## IOP-9: The EE's file service (FILEIO)
+
+Derived from `docs/analysis/43-fileio-and-title-boot.md` §1-§5.
+
+**IOP-9a — the service and its thread.** `FILEIO` exports nothing; its
+entry creates two IOP threads, both priority `0x60` (96), and starts each in
+turn (§1). Thread 1, on a `0x1000`-byte (4 KiB) stack, is the file-serving
+RPC: it runs `sceSifCheckInit`, conditionally `sceSifInit`, `sceSifInitRpc`
+(`$a0 = 0`, wait mode), `sceSifGetThreadId`, `sceSifSetRpcQueue`,
+`sceSifRegisterRpc(sd, sid = 0x80000001, func, buf, cfunc = 0, cbuf = 0,
+qd)`, then `sceSifRpcLoop`, which never returns — the same registration
+shape `IOP-5f` already fixes for `LOADFILE`'s own thread. Thread 2, on a
+`0x800`-byte (2 KiB) stack, registers a second service, `sid = 0x80000003`,
+with its own 3-mode dispatch (alloc / free / open-read-whole-file); no
+caller or purpose for it was identified in the analysis (§1, §12) and it is
+not part of this specification's required surface.
+
+**IOP-9b — the bounce buffer, allocated lazily.** A shared routine probes
+for the largest scratch allocation it can get: it seeds a chosen chunk size
+with `0x4000` (16 KiB) and calls `sysmem`'s allocator; on failure it halves
+the size (plain truncating divide-by-two) and retries, up to eight times,
+down to a floor of 128 bytes (§2). This probe is not run at module entry.
+`open` and `write` each test whether the allocation has already succeeded
+and run the probe themselves if not, answering `-1` if even the smallest
+attempt fails; `read` uses the buffer unconditionally, without the same
+guard — an apparent unguarded assumption that a real client always `open`s
+before it `read`s (§2, §12).
+
+**IOP-9c — the fno dispatch table.** The registered function receives
+`(fno, buf, size)`, drops `size`, range-checks `fno < 0x11` (17) — an
+out-of-range `fno` gets no reply at all, the same shape `IOP-5f` already
+fixes for `LOADFILE` — and jumps through a 17-entry table (§3):
+
+| fno | operation | ioman ordinal |
+| --- | --- | --- |
+| 0 | open | 4 |
+| 1 | close | 5 |
+| 2 | read | 6 (chunked, IOP-9e) |
+| 3 | write | 7 (chunked, IOP-9e) |
+| 4 | lseek | 8 |
+| 5 | ioctl | 9 |
+| 6 | remove | 10 |
+| 7 | mkdir | 11 |
+| 8 | rmdir | 12 |
+| 9 | dopen | 13 |
+| 10 | dclose | 14 |
+| 11 | dread | 15 (+ `sceSifSetDma`) |
+| 12 | getstat | 16 (+ `sceSifSetDma`) |
+| 13 | chstat | 17 |
+| 14 | format | 18 |
+| 15 | AddDrv | 20 |
+| 16 | DelDrv | 21 |
+
+Every handler is called through a common thunk that fixes `$a0` to the
+request buffer and `$a2` to a reply buffer 112 bytes before it; the
+wrapper's own return value is that same reply pointer, sent back as the
+RPC's result body — again the shape `IOP-5f` already fixes. A likely retail
+defect is flagged rather than asserted: fno 6 (`remove`)'s thunk is short
+five instructions relative to every other entry's, so a `remove` call may
+fall through into a `mkdir` call using the same buffer before the real
+reply is sent (§3); not exercised under a simulator or emulator in the
+analysis, so its reachability is open (§12) and it is not part of this
+specification's required behaviour.
+
+**IOP-9d — request and answer layouts.** Offsets are from the fixed request
+buffer unless noted; every answer below is a fixed-size reply area (§4).
+Field order is per-operation, not a shared convention — `open`'s path
+starts at `+4` (not `+0`) while `getstat`'s destination address starts at
+`+0` with its path at `+4`:
+
+```
+open    (fno 0):  { mode:u32 @0, path:cstr @4 }              -> { fd_or_err:s32 }
+close   (fno 1):  { fd:u32 @0 }                                -> { result:s32 }
+read    (fno 2):  { fd:u32 @0, dest_ee_addr:u32 @4, length:u32 @8 } -> { count_or_err:s32 }
+write   (fno 3):  { fd:u32 @0, ?:u32 @4, length:u32 @8,
+                     first_chunk_len:u32 @0xc, first_chunk_data @0x10, ... } -> { count_or_err:s32 }
+lseek   (fno 4):  { fd:u32 @0, offset:s32 @4, whence:u32 @8 }  -> { position:s32 }
+ioctl   (fno 5):  { fd:u32 @0, cmd:u32 @4, arg @8 }            -> { result:s32 }
+remove  (fno 6):  { path:cstr @0 }                              -> { result:s32 }
+mkdir   (fno 7):  { path:cstr @0 }                              -> { result:s32 }
+rmdir   (fno 8):  { path:cstr @0 }                              -> { result:s32 }
+dopen   (fno 9):  { path:cstr @0 }                              -> { fd_or_err:s32 }
+dclose  (fno 10): { fd:u32 @0 }                                  -> { result:s32 }
+dread   (fno 11): { fd:u32 @0, dest_ee_addr:u32 @4 }            -> { count_or_err:s32 }
+                   -- a 0x12c-byte dirent DMA'd straight to dest_ee_addr, not in the reply
+getstat (fno 12): { dest_ee_addr:u32 @0, path:cstr @4 }         -> { result:s32 }
+                   -- a 0x28-byte (40-byte) stat block DMA'd straight to dest_ee_addr
+chstat  (fno 13): { mask:u32 @0, stat:[0x28 bytes] @4, path:cstr @0x2c } -> { result:s32 }
+format  (fno 14): { path:cstr @0 }                               -> { result:s32 }
+AddDrv  (fno 15): { device_ptr:u32 @0 }                          -> { result:s32 }
+DelDrv  (fno 16): { name:cstr @0 }                                -> { result:s32 }
+```
+
+`getstat`'s 40-byte transfer and `chstat`'s inline 40-byte stat block agree
+with each other on that size (`chstat`'s path begins exactly at
+`+4 + 0x28`); `write`'s request layout beyond its first inline chunk, and
+the field at `+4`, were not fully resolved (§5, §12). `ioctl`'s `arg` rides
+inline in the request buffer rather than being copied elsewhere, so an
+`ioctl` needing a larger argument is not served by this path (§4).
+
+**IOP-9e — the `read`/`write` data path: alignment, `SifSetDma`,
+`GetOtherData`.** For a request of 16 bytes or more, `read` splits the
+transfer into three pieces by the 16-byte alignment of `dest_ee_addr`, not
+of the file offset (§5):
+
+- a **head**, `(16 - (dest_ee_addr & 0xf)) & 0xf` bytes, bringing the
+  destination onto a 16-byte boundary (zero if already aligned);
+- a **middle**, the largest run from there that is itself a multiple of 16
+  bytes;
+- a **tail**, whatever remains, under 16 bytes.
+
+Head and tail are each read into small fixed scratch buffers via a plain
+`ioman` read, then placed at the EE address with `sceSifGetOtherData`
+(`sifcmd` ordinal 23, `SIF_CMD_RPC_RDATA`) — the RPC layer's own
+arbitrary-alignment primitive, used because the raw DMA engine cannot
+target an address of any alignment. The aligned middle goes through the
+shared bounce buffer (IOP-9b), one probed chunk at a time: an `ioman` read
+into the bounce buffer, then, inside a critical section
+(`CpuSuspendIntr`/`CpuResumeIntr`), a raw `sceSifSetDma` call with a
+single-entry transfer descriptor `{ src = bounce_buffer, dest =
+current_ee_addr, size = chunk, attr = 0 }`; before reusing the bounce
+buffer for the next chunk, the handler polls `sceSifDmaStat` in a tight
+loop until the previous transfer has drained. The net rule: an EE
+destination needs no alignment at all for `read` to serve it correctly — a
+request under 16 bytes is served as a single unaligned fragment through
+`GetOtherData` alone (`IOP-9c`'s dispatch note). `write` shares the same
+lazily-allocated bounce buffer and the same two mechanisms, moving data the
+other way through `ioman`'s `write` ordinal; its own request layout beyond
+the first inline chunk was not fully resolved (`IOP-9d`).
+
+**IOP-3 through IOP-6** are exercised by the M1 program (`docs/project-state.md`
+§6) on the two targets: `LOADFILE`'s thread is woken from an interrupt and
+switched to (IOP-3h), the program's `SifLoadModule("rom0:SIO2MAN")` goes
+through `IOMAN`, `ROMDRV`, `LOADCORE` and `MODLOAD` and answers the
+module's id, and `SIO2MAN` reaches IOP-6c's parked state. The simulators
+cannot judge these — `tools/eesim.py` delivers no EE interrupt — so the two
+emulators are the gate.
+
+**The gate that matters is the M1 pull**, `docs/project-state.md` §6: an
+independently-built program, run under the PS2SDK toolchain, calls
+`SifInitRpc` and `SifLoadModule("rom0:SIO2MAN")` and prints its own final
+line. It answers `16` — the module after the boot list's fifteen — on PS2e and
+PCSX2, with the module parked as IOP-6c says. What the emulators do not show
+is the exactness of the individual calls: PS2e's `--debug-iop` (single-step,
+watchpoints) is the instrument for that when a later module disagrees.
 
 No gate for IOP-1's Block-A/HDB path (IOP-1c) or IOP-2's priority-3 cause-0
 handler (IOP-2d) is anticipated at all: neither affects anything the M1 or M2

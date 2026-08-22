@@ -144,6 +144,10 @@ ps2AddModule(stdio MODULE Standard_IO VERSION 1.00
     SOURCES src/iop/stdio.cpp)
 ps2AddModule(loadfile MODULE Load_Module_By_EE VERSION 1.00
     SOURCES src/iop/loadfile.cpp)
+ps2AddModule(cdvdman MODULE cdvd_driver VERSION 1.00
+    SOURCES src/iop/cdvdman.cpp)
+ps2AddModule(fileio MODULE FILEIO_service VERSION 1.00
+    SOURCES src/iop/fileio.cpp)
 # Not on the boot list: the first module a program loads on request.
 ps2AddModule(sio2man MODULE sio2man VERSION 1.00
     SOURCES src/iop/sio2man.cpp)
@@ -220,12 +224,13 @@ add_custom_command(
             "${PS2_MANIFEST}" -o "${PS2_IMAGE}" --size ${PS2_IMAGE_SIZE}
             --check IOPBOOT ${PS2_IOPBOOT_BASE} "${PS2_IOPBOOT_BASE_RSP}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/rom/iopbtconf.txt"
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf dmacman.elf
             ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
-            sio2man.elf osdsys.elf eeload.elf
+            cdvdman.elf fileio.elf sio2man.elf osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

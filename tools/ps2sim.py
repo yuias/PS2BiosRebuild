@@ -49,7 +49,7 @@ IOP_REGISTERS = {0x1D000000: MSCOM, 0x1D000010: SMCOM, 0x1D000020: MSFLG,
 BD6_IDENTITY = 0x1D000060
 
 STEPS_PER_TURN = 2000            # small enough that a poll loop makes progress
-MAX_TURNS = 4000
+MAX_TURNS = 12000               # the joint boot's own length sets this, not a budget
 QUIET_TURNS = 50                 # nothing crossing the bus for this long is over
 IDLE_POLL = 128                  # how often, in steps, to look for the idle loop
 

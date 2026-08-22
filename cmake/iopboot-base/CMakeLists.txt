@@ -30,10 +30,12 @@ add_custom_command(
             "${PS2_MANIFEST}" --offset-of IOPBOOT --base ${PS2_IOPBOOT_BASE}
             --defsym IOPBOOT_BASE -o "${PS2_IOPBOOT_BASE_RSP}"
     DEPENDS "${PS2_SOURCE_DIR}/tools/mkromdir.py" "${PS2_MANIFEST}"
+            "${PS2_SOURCE_DIR}/src/rom/iopbtconf.txt"
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
-            sysmem.elf loadcore.elf excepman.elf intrman.elf threadman.elf
-            dmacman.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf
-            loadfile.elf sio2man.elf
+            sysmem.elf loadcore.elf excepman.elf intrman.elf timrman.elf
+            threadman.elf dmacman.elf ioman.elf modload.elf romdrv.elf
+            stdio.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf
+            sio2man.elf
     COMMENT "Computing IOPBOOT's archive-relative link address")
 
 # A bare OUTPUT command with no consumer in its own directory is pruned from

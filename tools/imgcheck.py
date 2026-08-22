@@ -157,7 +157,7 @@ def checkIop(image: pathlib.Path) -> list[str]:
     # Enough steps for the whole boot list to load and register: each module
     # added costs its copy and fixups, and the budget is what the IOP needs to
     # reach its wait for the EE, not a measure of anything.
-    while cpu.steps < 2_000_000 and cpu.stop_reason is None:
+    while cpu.steps < 3_000_000 and cpu.stop_reason is None:
         cpu.step()
     post = [value for _, value in bus.post]
     if post != EXPECTED_POST:
