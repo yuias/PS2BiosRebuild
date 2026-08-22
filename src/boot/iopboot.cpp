@@ -271,9 +271,21 @@ void registerExports(uint8_t *start, uint8_t *end) {
     }
 }
 
-// One REL entry, with the held HI16 (IRX-3a) threaded through by the caller.
-void applyRelocation(const Elf32Rel &entry, uint8_t *base, uint32_t &held_hi16,
-                      uint32_t *&held_address) {
+// IRX-3a: the HI16s waiting for a LO16. One per address in the reference's
+// modules; a compiler that hoists several `lui` of one address apart from
+// their uses emits a short run of them before the LO16 they share, and every
+// one of the run is rebased by it. `tools/mkirx.py` refuses a longer run.
+constexpr uint32_t kHeldHi16Max = 8;
+
+struct HeldHi16 {
+    uint32_t *address[kHeldHi16Max];
+    uint32_t stored[kHeldHi16Max];         // what the file had in each `lui`
+    uint32_t count;
+    bool applied;                          // a LO16 has used this run
+};
+
+// One REL entry, with the held HI16s (IRX-3a) threaded through by the caller.
+void applyRelocation(const Elf32Rel &entry, uint8_t *base, HeldHi16 &held) {
     auto *word = reinterpret_cast<uint32_t *>(base + entry.offset);
     switch (entry.info & 0xFF) {
     case kRMips32:
@@ -288,33 +300,43 @@ void applyRelocation(const Elf32Rel &entry, uint8_t *base, uint32_t &held_hi16,
         break;
     }
     case kRMipsHi16:
-        held_hi16 = *word;                     // IRX-3a: hold it for its LO16
-        held_address = word;
+        // A HI16 after a run was used starts the next run; one right after
+        // another HI16 joins the run.
+        if (held.applied || held.count >= kHeldHi16Max) {
+            held.count = 0;
+            held.applied = false;
+        }
+        held.address[held.count] = word;      // IRX-3a: hold it for its LO16
+        held.stored[held.count] = *word;
+        held.count++;
         break;
     case kRMipsLo16: {
         // A LO16 with no HI16 held is malformed (IRX-3a) and is left alone:
         // its high half is nowhere to be found, and address zero is not it.
-        if (held_address == nullptr) {
+        if (held.count == 0) {
             break;
         }
         const uint32_t instruction = *word;
         const auto low = static_cast<int32_t>(
             static_cast<int16_t>(instruction & 0xFFFF));
-        const uint32_t address = (held_hi16 << 16) + static_cast<uint32_t>(low)
+        const uint32_t address = (held.stored[0] << 16)
+                                  + static_cast<uint32_t>(low)
                                   + reinterpret_cast<uint32_t>(base);
         *word = (instruction & 0xFFFF0000) | (address & 0xFFFF);
 
-        // The carry out of the low half belongs to the high one. The held
-        // HI16 is kept, not dropped, so a compiler's `lui` shared by several
-        // LO16s of the same address (IRX-3a) has its high half recomputed for
-        // each -- to the same value, since `held_hi16` still holds what the
-        // file stored.
+        // The carry out of the low half belongs to the high one. The run is
+        // kept, not dropped, so a compiler's `lui` shared by several LO16s of
+        // the same address (IRX-3a) has its high half recomputed for each --
+        // to the same value, since `stored` still holds what the file had.
         uint32_t high = address >> 16;
         if ((address & 0x8000) != 0) {
             high += 1;
         }
-        const uint32_t hi_instruction = *held_address;
-        *held_address = (hi_instruction & 0xFFFF0000) | (high & 0xFFFF);
+        for (uint32_t k = 0; k < held.count; k++) {
+            const uint32_t hi_instruction = *held.address[k];
+            *held.address[k] = (hi_instruction & 0xFFFF0000) | (high & 0xFFFF);
+        }
+        held.applied = true;
         break;
     }
     default:
@@ -322,9 +344,9 @@ void applyRelocation(const Elf32Rel &entry, uint8_t *base, uint32_t &held_hi16,
     }
 }
 
-// Apply the REL entries of IRX-3 to the segment just copied. The held HI16
-// resets at the start of every SHT_REL section, but persists across every
-// entry within one.
+// Apply the REL entries of IRX-3 to the segment just copied. The held HI16s
+// reset at the start of every SHT_REL section, but persist across every entry
+// within one.
 void relocate(const uint8_t *rom, uint32_t base_address,
               const Elf32Header &header) {
     auto *base = reinterpret_cast<uint8_t *>(base_address);
@@ -336,11 +358,12 @@ void relocate(const uint8_t *rom, uint32_t base_address,
         }
         const uint8_t *rel = rom + sh.offset;
         const uint8_t *rel_end = rel + sh.size;
-        uint32_t held_hi16 = 0;
-        uint32_t *held_address = nullptr;
+        HeldHi16 held;
+        held.count = 0;
+        held.applied = false;
         for (; rel < rel_end; rel += sizeof(Elf32Rel)) {
             applyRelocation(*reinterpret_cast<const Elf32Rel *>(rel), base,
-                             held_hi16, held_address);
+                             held);
         }
     }
 }

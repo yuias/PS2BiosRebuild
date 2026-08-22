@@ -26,6 +26,7 @@ import sys
 PT_LOAD = 1
 PT_IOPMOD = 0x70000080
 SHT_REL = 9
+HI16_RUN_MAX = 8        # IRX-3a: the longest run of HI16 a loader holds
 R_MIPS_32 = 2
 
 EXPORT_MAGIC = 0x41C00000
@@ -160,8 +161,9 @@ def checkModule(irx: Irx) -> list[str]:
 
     # IRX-3a: every HI16 is followed by the LO16 it pairs with. The reference's
     # modules pair one to one; ours may carry further LO16s that share a paired
-    # high half (`tools/mkirx.py` checks they name the same address), so what is
-    # required here is the pairing, not equal counts.
+    # high half, and short runs of HI16 that share one LO16 (`tools/mkirx.py`
+    # checks they name the same address), so what is required here is the
+    # pairing, not equal counts.
     (shoff,) = struct.unpack_from("<I", d, 32)
     entsize, count, _ = struct.unpack_from("<HHH", d, 46)
     hi = lo = orphans = 0
@@ -174,8 +176,18 @@ def checkModule(irx: Irx) -> list[str]:
                  for k in range(size // 8)]
         hi += kinds.count(5)
         lo += kinds.count(6)
-        orphans += sum(1 for k, kind in enumerate(kinds)
-                       if kind == 5 and (k + 1 >= len(kinds) or kinds[k + 1] != 6))
+        run = 0
+        for kind in kinds:
+            if kind == 5:
+                run += 1
+                if run > HI16_RUN_MAX:
+                    orphans += 1
+            elif kind == 6:
+                run = 0
+            else:
+                orphans += run
+                run = 0
+        orphans += run
     require(orphans == 0, "IRX-3a", f"{orphans} HI16 not followed by a LO16")
     require(hi <= lo, "IRX-3a", f"{hi} HI16 against {lo} LO16")
 

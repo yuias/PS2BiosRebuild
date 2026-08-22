@@ -75,14 +75,18 @@ equal counts — one pair per address — in all 57 modules.
 
 *Deviation, our modules only:* a compiler that keeps one `lui` live across
 several accesses to the same address emits one `HI16` followed by several
-`LO16`, so our modules may carry more `LO16` than `HI16`. This is sound only
-when every `LO16` sharing a high half names the same address — one high half
-cannot serve two addresses once a load-time delta is added — and
-`tools/mkirx.py` refuses a module where it cannot see that: a `HI16` must be
-followed by a `LO16` of its symbol, and a `LO16` with no `HI16` before it must
-repeat, symbol and low half, one that was paired. A loader that keeps the held
-`HI16` after applying it, rather than dropping it, recomputes the same high
-half for each further `LO16` and needs no other change; a `LO16` with nothing
+`LO16`, so our modules may carry more `LO16` than `HI16`; and one that hoists
+several `lui` of one address apart from their uses emits a short run of `HI16`
+followed by the one `LO16` the object writer paired them all with, the pairing
+a static link resolves them by. The first is sound only when every `LO16`
+sharing a high half names the same address — one high half cannot serve two
+addresses once a load-time delta is added — and `tools/mkirx.py` refuses a
+module where it cannot see that: a `HI16` must be followed, after at most
+eight other `HI16`, by a `LO16` of its symbol, and a `LO16` with no `HI16`
+before it must repeat, symbol and low half, one that was paired. A loader
+holds the run of `HI16` rather than one, applies the `LO16`'s carry to every
+one of it, and keeps the run after applying it, rather than dropping it, so
+that each further `LO16` recomputes the same high half; a `LO16` with nothing
 held is left alone. `tools/irxinfo.py --check` requires the pairing and no
 longer equal counts.
 
