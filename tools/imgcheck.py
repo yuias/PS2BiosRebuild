@@ -91,9 +91,9 @@ NOT_YET = (
     "loading a module over the SIF (spec/03 BOOT-12e): the loader's server "
     "answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not "
     "exist on the IOP yet",
-    "the IOP's DMA interrupt: the command service polls the packet's size "
-    "byte where the reference's SIFCMD is woken by the channel; the EE side "
-    "is interrupt-driven as the reference's is",
+    "threads on the IOP (spec/06 IOP-3): the command service runs inside the "
+    "channel's interrupt handler and EESYNC's entry never returns, since no "
+    "thread manager exists to give the boot a thread to sleep on",
     "EELOAD: the reference replaces the running program through that stub "
     "(spec/04 EE-9a), where our kernel loads the program itself",
 )

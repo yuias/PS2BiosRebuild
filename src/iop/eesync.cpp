@@ -12,16 +12,16 @@
 // reverse. Registers that merely stored would livelock rather than fail.
 //
 // What arrives afterwards is BOOT-12's command packets, at the receive buffer
-// this module published. The reference serves them from `SIFCMD` under a DMA
-// interrupt; here the service polls the packet's own size byte, which the
-// channel writes as the packet lands and the service zeroes when it has read
-// it -- the same mark the EE's client uses on its side. Three kinds of command
-// are answered: the system commands the SDK's client sends to bring its RPC
+// this module published, each announced by the receiving channel's interrupt
+// and served inside its handler, as the reference's `SIFCMD` serves them.
+// Three kinds of command are answered: the system commands the SDK's client sends to bring its RPC
 // layer up (BOOT-12c), the RPC requests that layer then makes of a server
 // (BOOT-12d -- one server, the module loader's id, which cannot load anything
 // yet), and a command of our own by which the kernel asks for a file out of
 // the archive (docs/implementation.md) -- the reference serves `rom0:`
 // through ROMDRV over that same RPC, which does not exist here yet.
+
+#include "module.hpp"
 
 #include <stdint.h>
 
@@ -471,59 +471,61 @@ void armReceive() {
     writeWord(kDmaSif1 + kChcr, kDmaRecvChcr);
 }
 
-// The size byte is in the packet's first word and lands first; the rest of
-// the packet follows it. The channel's busy bit says when it has all landed
-// -- where that bit works (spec/03 BOOT-11h: on one target it never clears),
-// so the wait for it is bounded rather than trusted.
-void waitForPacket() {
-    while ((readWord(reinterpret_cast<uintptr_t>(receive)) & 0xFF) == 0) {
-    }
-    for (uint32_t n = 0; n < 4096; n++) {
-        if ((readWord(kDmaSif1 + kChcr) & kDmaBusy) == 0) {
-            break;
-        }
-    }
+// The receiving channel's interrupt (spec/06 IOP-2h: the second DMA bank's
+// channel 10, irq 0x2B -- the number the reference's SIFCMD registers,
+// docs/analysis/34 §1): a packet has landed whole, since the channel stops
+// on the end bit the sender put in its header (BOOT-11a). Everything the
+// packet asks for is done here, in the handler, the way the reference's
+// SIFCMD does it; returning 1 keeps the line enabled (IOP-2g).
+int servePacket(void *) {
     barrier();
+    const auto &header = *reinterpret_cast<const CommandHeader *>(receive);
+    const uint32_t *body = reinterpret_cast<const uint32_t *>(
+        receive + sizeof(CommandHeader));
+    switch (header.cid) {
+    case kCidInitCmd:
+        // BOOT-12c: `opt` 0 carries the client's receive buffer; `opt` 1
+        // is the RPC layer asking to be told it may start.
+        if (header.opt == 0) {
+            ee_packet_buffer = body[0];
+        } else {
+            sendSetSreg(0, 1);
+        }
+        break;
+    case kCidChangeAddress:
+        ee_packet_buffer = body[0];
+        break;
+    case kCidRpcBind:
+        serveBind(*reinterpret_cast<const RpcBind *>(receive));
+        break;
+    case kCidRpcCall:
+        serveCall(*reinterpret_cast<const RpcCall *>(receive));
+        break;
+    case kCidFile:
+        serveFile(*reinterpret_cast<const Request *>(body));
+        break;
+    default:
+        break;                                   // nothing registered for it
+    }
+    armReceive();
+    return 1;
 }
 
-[[noreturn]] void serve() {
-    armReceive();
-    writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
-    for (;;) {
-        waitForPacket();
-        const auto &header = *reinterpret_cast<const CommandHeader *>(receive);
-        const uint32_t *body = reinterpret_cast<const uint32_t *>(
-            receive + sizeof(CommandHeader));
-        switch (header.cid) {
-        case kCidInitCmd:
-            // BOOT-12c: `opt` 0 carries the client's receive buffer; `opt` 1
-            // is the RPC layer asking to be told it may start.
-            if (header.opt == 0) {
-                ee_packet_buffer = body[0];
-            } else {
-                sendSetSreg(0, 1);
-            }
-            break;
-        case kCidChangeAddress:
-            ee_packet_buffer = body[0];
-            break;
-        case kCidRpcBind:
-            serveBind(*reinterpret_cast<const RpcBind *>(receive));
-            break;
-        case kCidRpcCall:
-            serveCall(*reinterpret_cast<const RpcCall *>(receive));
-            break;
-        case kCidFile:
-            serveFile(*reinterpret_cast<const Request *>(body));
-            break;
-        default:
-            break;                               // nothing registered for it
-        }
-        armReceive();
-    }
-}
+constexpr uint32_t kSif1Irq = 0x2B;              // IOP_IRQ_DMA_SIF1 [header]
 
 }  // namespace
+
+PS2_IMPORTS_BEGIN("intrman\0", 0x0102)
+PS2_IMPORT(_import_intrman_register, 4)
+PS2_IMPORT(_import_intrman_enable, 6)
+PS2_IMPORT(_import_intrman_cpu_enable, 9)
+PS2_IMPORTS_END()
+
+extern "C" {
+int _import_intrman_register(uint32_t irq, uint32_t mode, int (*handler)(void *), void *arg);
+int _import_intrman_enable(uint32_t irq);
+int _import_intrman_cpu_enable();
+}
 
 extern "C" {
 
@@ -550,7 +552,19 @@ extern "C" {
     ee_area = readWord(kSifMscom);
     writeWord(kSifMsflg, kHandshakeBit);         // our write to MSFLG clears
 
-    serve();
+    // BOOT-11i and BOOT-12b: the receiver armed and the interrupt that
+    // announces its packets wired up before the EE is told anyone listens.
+    armReceive();
+    _import_intrman_register(kSif1Irq, 1, servePacket, nullptr);
+    _import_intrman_enable(kSif1Irq);
+    writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
+    _import_intrman_cpu_enable();
+
+    // Nothing left to do on this thread: the service runs in the handler.
+    // Until a thread manager gives the boot a thread to sleep, the entry does
+    // not return (docs/implementation.md).
+    for (;;) {
+    }
 }
 
 }  // extern "C"
