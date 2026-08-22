@@ -4,13 +4,14 @@ A reimplementation of the PlayStation 2 BIOS, written from a specification
 derived by analysing retail ROM images. The target is a 4 MiB image that an
 emulator accepts in place of a retail BIOS and boots software with.
 
-Status: **analysis complete; the image boots end to end on the simulators, and PCSX2 accepts it as a BIOS.**
-It builds from source, its IOP loads and links its modules, its EE comes up on
-our own kernel, the two meet across the SIF, and the boot ends by fetching
-`rom0:OSDSYS` over that bus — in the packet framing the reference itself uses —
-and running it. What is thin is depth: three of the boot list's twenty-nine
-modules exist, sixty-two of the 125 syscall slots are served, and neither
-processor takes an interrupt yet.
+Status: **the image boots software: an independently built program runs on it, on PCSX2 and PS2e.**
+It builds from source, its IOP boots a kernel of its own — exceptions,
+interrupts, threads, files, a module loader — its EE comes up on our own
+kernel, the two meet across the SIF, and a program built with the PS2SDK
+toolchain runs to its end on it: threads, semaphores, `SifInitRpc`, and
+`SifLoadModule("rom0:SIO2MAN")` answering a module loaded from the archive.
+What is thin is depth: twelve of the boot list's twenty-nine modules exist,
+sixty-eight of the 125 syscall slots are served, and no disc is read yet.
 
 Behind that, both CPUs are fully surveyed — the archive format, the boot block,
 all twenty-nine modules of the IOP boot list, and the EE kernel down to the

@@ -237,21 +237,23 @@ priority pattern (`0x07777777`/`0x07777777`/`0x777`) and the unnamed
 into `INTRMAN` — it is purely a register-poking accessor library with no
 opinion on how DMA completion reaches a handler.
 
-**Open, deliberately not specified here.** `docs/analysis/06`'s selection
-predicate — evaluated false on a retail SCPH-50000 (`spec/03` BOOT-3) —
-determines which of two paired `INTRMAN` variants stays resident, and on
-this hardware generation (the one with the second DMAC bank) that is
-**`INTRMANI`, not `INTRMANP`**; `docs/analysis/37`'s §2/§3 disassembly
-(everything IOP-2b through IOP-2h draws on for arguments, error codes and
-dispatch shape) was read off `INTRMANP`, and the ordinal table and delivery
-mechanics above hold across both variants by `06`'s ordinal-parity finding,
-but `INTRMANI`'s own `EnableIntr`/`DisableIntr` behaviour for `irq`
-`0x28`–`0x2D` and its `irq`-3 sub-dispatch's handling of `DICR2` — the part
-that actually governs whether `SIF0`/`SIF1` (`irq` `0x2A`/`0x2B`) and the
-other four second-bank channels are delivered on the reference — is not
-specified in this document: it is being read into an amended
-`docs/analysis/37` §3.6, and belongs here once that lands rather than as a
-description of `INTRMANP`'s own, non-resident, dead path.
+**The resident variant is `INTRMANI`** (`docs/analysis/37` §0: the boot
+releases `INTRMANP` on this generation of IOP, the one with the second
+bank), and it reaches the bank. `EnableIntr` for `0x28 <= irq < 0x2E` sets
+the channel's enable bit in `DICR2` (bit `16 + (irq - 0x28)`), sets **`DICR`**
+bit 23 — the one master for both banks — and `I_MASK` bit 3; `DisableIntr`
+clears the `DICR2` enable bit and reports the flag bit through `*res`, as
+for bank 1. The `irq`-3 handler walks **both** banks: `DICR`'s seven flags
+for indices `0x20`–`0x26`, then `DICR2`'s for `0x28`–`0x2D`, each flag
+acknowledged (a 1 written to it clears it) before its handler runs — which
+is the path `SIFMAN`'s `0x2A` and `SIFCMD`'s `0x2B` are delivered by (§3.6).
+`INTRMANI` also keeps a second gate, **`I_CTRL`** at `0xBF801078`:
+`CpuEnableIntr` writes it `1`, the disabling calls never write it `0`, the
+dispatcher reads it on entry (which clears it) and writes the read value
+back on exit, and `I_STAT` reaches the CPU only while it is set.
+`INTRMANP`'s own sub-dispatch stops at bank 1 and its `EnableIntr` ignores
+`irq >= 0x27`; that is the non-resident variant's dead path, not a
+requirement.
 
 **IOP-2j — the reschedule hooks, at the tail of a non-nested interrupt.**
 After handler dispatch and `I_MASK` handling, INTRMAN checks whether the
@@ -741,42 +743,30 @@ blocked on its own event flag rather than having exited or faulted.
 component, unlike the boot chain's fixed addresses — a rebuild's own
 `EXCEPMAN`/`INTRMAN` are free to place their tables anywhere, so nothing here
 is checkable by disassembling a fixed offset the way `spec/03`'s BOOT-1/
-BOOT-5 are. `tools/iopsim.py` models the R3000 core and the boot path's own
-hardware, but — as of this document — has no interrupt-delivery model, so
-`--check` cannot yet judge IOP-1/IOP-2 against a running image; it currently
-verifies the requirements of `spec/02`'s "dynamic half" only (module
-registration, binding, supersession).
+BOOT-5 are. `tools/ps2sim.py` models the IOP's interrupt controller and the
+DMA completion interrupts (`docs/analysis/24`), so `python3 tools/ps2sim.py
+build/rom.bin` and `ninja -C build check` boot the image only if the
+`EESYNC` service registered with `INTRMAN` is reached through the vector and
+the chains; the hand-written paths of both modules are checked for the
+R3000's load-delay hazard by the same target.
 
-**IOP-3 through IOP-6** are, likewise, not yet exercised by any existing
-gate: no `THREADMAN`, `IOMAN`, `ROMDRV`, `MODLOAD`, `LOADFILE` or `SIO2MAN`
-implementation exists in `src/iop/` at the time of writing (only `SYSMEM`,
-`LOADCORE` and the EE-sync module do). `ninja -C build check` runs whatever
-unit tests exist alongside an implementation as it is written, and is the
-first gate any of these modules gets; there is no substitute for it today.
+**IOP-3 through IOP-6** are exercised by the M1 program (`docs/project-state.md`
+§6) on the two targets: `LOADFILE`'s thread is woken from an interrupt and
+switched to (IOP-3h), the program's `SifLoadModule("rom0:SIO2MAN")` goes
+through `IOMAN`, `ROMDRV`, `LOADCORE` and `MODLOAD` and answers the
+module's id, and `SIO2MAN` reaches IOP-6c's parked state. The simulators
+cannot judge these — `tools/eesim.py` delivers no EE interrupt — so the two
+emulators are the gate.
 
 **The gate that matters is the M1 pull**, `docs/project-state.md` §6: an
 independently-built program, run under the PS2SDK toolchain, calls
 `SifInitRpc` and `SifLoadModule("rom0:SIO2MAN")` and prints its own final
-line. As of the pull's current state the program already reaches
-`SifLoadModule rom0:SIO2MAN -> -203` — the honest answer from an IOP that has
-no loader yet — on both PS2e and PCSX2. The gate this specification exists to
-satisfy is the same line answering a **non-negative id** instead: that
-requires IOP-4's `IOMAN`/`ROMDRV` and IOP-5's `MODLOAD`/`LOADFILE` built to
-this document, checked first on PS2e (`--debug-iop`, single-step and
-watchpoints over the exact call sequences IOP-5f/IOP-5g fix) and then on
-PCSX2. Once a module actually loads, IOP-6 becomes checkable the same way:
-`SIO2MAN`'s own `_start` sequence (IOP-6a) run to completion and its service
-thread observed parked in `WaitEventFlag`, which needs IOP-1/IOP-2/IOP-3
-underneath it to be correct first, since `SIO2MAN` imports `RegisterIntrHandler`,
-`CreateEventFlag`/`CreateThread` and their kin directly.
+line. It answers `13` — the module after the boot list's twelve — on PS2e and
+PCSX2, with the module parked as IOP-6c says. What the emulators do not show
+is the exactness of the individual calls: PS2e's `--debug-iop` (single-step,
+watchpoints) is the instrument for that when a later module disagrees.
 
 No gate for IOP-1's Block-A/HDB path (IOP-1c) or IOP-2's priority-3 cause-0
 handler (IOP-2d) is anticipated at all: neither affects anything the M1 or M2
 pulls exercise, and both are recorded here as open rather than as something a
-future tool is expected to close. IOP-2i is different: `docs/project-state.md`
-§6 already records the IOP side of SIF delivery as polling a packet's size
-byte instead of taking its DMA interrupt, a deviation held open specifically
-until `SIF0`/`SIF1`'s interrupt path — IOP-2i's own subject — exists, so the
-resident variant's second-bank behaviour this document defers is not a dead
-end; it is the next thing that deviation needs, and belongs in this
-specification as soon as the amended `docs/analysis/37` §3.6 lands.
+future tool is expected to close.

@@ -9,9 +9,9 @@ the working document and is kept current.
 > kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus in
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
-> is thin is *depth*: three of the boot list's twenty-nine modules exist,
-> sixty-eight of the 125 syscall slots are served, the EE's threads switch on
-> syscalls and on interrupts, and the IOP takes no interrupt at all.
+> is thin is *depth*: twelve of the boot list's twenty-nine modules exist
+> plus one loadable on request, sixty-eight of the 125 syscall slots are
+> served, and both processors take interrupts and switch threads from them.
 >
 > Five specifications are written and every one has a gate that has been tested
 > in both directions. Six simulators and checkers judge an image — ours and the
@@ -548,6 +548,32 @@ rom0:SIO2MAN -> <id>` with a non-negative id, on PS2e first and PCSX2 second
 (`tools/eesim.py` takes no interrupt, so the simulators cannot judge this).
 `tests/m1/main.c` prints a line per stage.
 
+**M1 is met (2026-08-22, end of day).** Both targets print
+
+```
+# m1: SifLoadModule rom0:SIO2MAN -> 13
+# m1: done
+```
+
+with `SIO2MAN` loaded from the archive through `IOMAN`/`ROMDRV`, relocated
+and linked by `LOADCORE`, started by `MODLOAD` on `LOADFILE`'s thread, and
+parked on its event flag. What it took was the IOP kernel of `spec/06` —
+`EXCEPMAN`, `INTRMAN`, `THREADMAN`, `DMACMAN`, `IOMAN`, `MODLOAD`, `ROMDRV`,
+`STDIO`, `LOADFILE`, the `sifcmd` library in `EESYNC` — from four analysis
+documents (`37`–`40`) written for it, and one toolchain fault found by it
+(`mkirx` sized a module's bss short; `docs/implementation.md`). The IOP now
+takes interrupts and switches threads from them, so §7's busy-bit row is
+retired from "worked around" to "not waited on".
+
+**Next: M2.** A retail title from `cdrom0:`, per "The finish line" above. The
+first faults it will hit, in the order the boot meets them: `OSDSYS` reading
+`SYSTEM.CNF` needs `CDVDMAN`/`CDVDFSV` (the disc over the SIF) and `FILEIO`
+(`IOMAN` over the SIF); running `BOOT2` needs `EELOAD` at the address PCSX2
+hooks (read off PCSX2's source first, not assumed) and the EE kernel's
+`LoadExecPS2`; and a title's own start-up will pull `PADMAN`, `MCMAN` and
+whatever else it loads with `SifLoadModule`, which now works. `TIMRMAN`
+(`DelayThread`, IOP-3j) will come early, since drivers' retry loops use it.
+
 The gate keeps printing the slot and module counts, but they are no longer the
 ordering. New analysis documents are written only for what M1 or M2 faults on
 — the analysis phase is complete and stays that way.
@@ -584,17 +610,15 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 
 | Problem | Where it is written up | State |
 | --- | --- | --- |
-| The IOP's DMA busy bit never clears on PCSX2, so it cannot be waited on | `spec/03` BOOT-11h, `docs/analysis/25` | worked around; cause unknown |
-| The IOP takes no interrupt; its command service polls the packet's size byte where the reference's `SIFCMD` is woken by its DMA channel | `docs/implementation.md`, printed by `ninja -C build check` | deliberate, and the reference does not work this way |
-| The IOP has no threads, so `EESYNC` never returns from its entry and serves everything from one loop; its loader server answers every name with -203 | §6, M1 | deliberate |
-| 57 of 125 syscall slots report themselves rather than working | §6, pulled by M1 | deliberate |
-| Three of twenty-nine boot-list modules exist | §6, pulled by M1 and M2 | deliberate |
+| The IOP's DMA busy bit never clears on PCSX2 | `spec/03` BOOT-11h, `docs/analysis/25` | no longer waited on anywhere: the IOP takes the channel's interrupt instead; cause still unknown |
+| `DelayThread` and the alarms answer -1: no timer manager | `spec/06` IOP-3j, printed by `ninja -C build check` | deliberate |
+| 57 of 125 syscall slots report themselves rather than working | §6, pulled by M2 | deliberate |
+| Twelve of twenty-nine boot-list modules exist, and one loadable on request | §6, pulled by M2 | deliberate |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
 
 The distinction that matters when picking this up: everything marked
 *deliberate* is depth the build has not reached yet and is listed by the gate
-on every successful run. **The first row is the only one that is not** — the
-IOP's busy bit is a thing that does not work and is not understood. It is
-worked around rather than waited on, and the boot completes anyway, which is
-why it sits below the deliberate items rather than above them.
+on every successful run. The first row is the one that is not understood,
+and it has stopped mattering: nothing waits on that bit since the IOP's
+drivers became interrupt-driven, so it is recorded rather than worked around.

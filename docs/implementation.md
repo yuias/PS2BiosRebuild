@@ -327,10 +327,38 @@ got (`spec/03` BOOT-12e):
 # m1: done
 ```
 
-— on PCSX2 and PS2e. The `-203` is honest: the archive has no `SIO2MAN`
-and the IOP has no loader to hand one to; `docs/project-state.md` §6 says
-what comes next. `python3 tools/ps2sim.py build-m1/rom.bin --syscalls` lists
-every call the program made, in order.
+— on PCSX2 and PS2e, at first with `-203`: the archive had no `SIO2MAN` and
+the IOP no loader to hand one to.
+
+**The IOP has a kernel, and the module loads.** `spec/06` is built module by
+module as the reference has them, on the boot list in the reference's order:
+`EXCEPMAN` installs the vector and its chains (IOP-1); `INTRMAN` delivers
+interrupts to registered handlers, both DMA banks included, and `EESYNC`
+serves every SIF packet from channel 10's handler, registered as irq `0x2B`
+the way the reference's `SIFCMD` registers it (IOP-2); `THREADMAN` schedules
+over INTRMAN's two hooks, with the boot thread sleeping once the list is
+loaded and an idle thread under everything (IOP-3); `DMACMAN` and `STDIO`
+exist for the imports of what follows; `IOMAN` and `ROMDRV` make the archive
+`rom0:` (IOP-4); `LOADCORE`'s probe/load/link/register ordinals and
+`MODLOAD`'s `LoadStartModule` load a module on request (IOP-5); and
+`LOADFILE` is a module of its own, its server registered through `EESYNC`'s
+`sifcmd` library and answered on its own thread, woken from the interrupt.
+The archive carries `SIO2MAN` (IOP-6), and the program's fourth stage is
+what M1 asked for:
+
+```
+# m1: SifLoadModule rom0:SIO2MAN -> 13
+# m1: done
+```
+
+— the thirteenth module after the list's twelve, loaded from the ROM through
+`IOMAN`, relocated, linked, started, and parked on its event flag with its
+service thread waiting, on PCSX2 and PS2e alike. Along the way the IOP took
+its first interrupts, switched its first threads from one, and showed that
+PS2e honours the R3000's load delay slot where PCSX2 does not (the one
+hand-written path, INTRMAN's frame push, is checked for hazards since).
+`python3 tools/ps2sim.py build-m1/rom.bin --syscalls` lists every call the
+program made, in order; `docs/project-state.md` §6 says what comes next.
 
 ## Deviations from the reference, and why
 
@@ -378,7 +406,10 @@ reference a module registers itself by calling `loadcore` ordinal 6 from its
 entry (IRX-10a). Ours has the loader do it, because the first module is loaded
 before any `loadcore` exists and would otherwise need a bootstrap path of its
 own. `LOADCORE` still exports ordinals 6 and 10 with the same semantics, over
-the same registry, for modules that register themselves the reference's way.
+the same registry, for modules that register themselves the reference's way
+— and ordinal 6 answers yes to a table already in the registry, since a
+module loaded on request (`spec/06` IOP-5b) is registered by the loader
+before its entry makes the reference's own call.
 
 **The registry head is at a fixed address.** The reference keeps it inside
 `LOADCORE`'s data. Ours is a word of low RAM shared between the boot block's
@@ -387,8 +418,10 @@ loader and `LOADCORE`, for the same reason: something has to own it before
 
 **`SYSMEM`'s allocator only bumps.** It hands out memory and can give back only
 the most recent allocation, refusing anything else rather than leaking
-silently. The heap extent is a fixed range until the boot parameters of BOOT-4
-step 5 are plumbed through; a real free list arrives with `HEAPLIB`.
+silently. It takes the reference's `(mode, size, address)` and reads only the
+size: a bump allocator has one place to put anything. The heap extent is a
+fixed range until the boot parameters of BOOT-4 step 5 are plumbed through;
+a real free list arrives with `HEAPLIB`.
 
 **A file crosses the bus a window at a time.** The reference serves `rom0:`
 through `ROMDRV` over `SIFCMD`'s RPC; neither exists here yet, so `EESYNC`
@@ -404,12 +437,30 @@ program headers are staged. This is what lets a program of any size run from
 the archive, where a single 16 KiB buffer at each end used to be the limit —
 and the reference `OSDSYS` is a megabyte.
 
-**`EESYNC` does not return.** A module's entry is supposed to return so the
-loader can move on (IRX-12); ours ends in a loop serving the EE's requests,
-because there is no scheduler yet to run a service on a thread of its own. The
-IOP's boot therefore ends inside `EESYNC` rather than at an idle loop, which is
-the same property BOOT-10d is about — the boot ends there rather than running
-on — reached a different way. It must change when threads arrive.
+**`EESYNC` is the command layer, the RPC layer and the file service in one
+module.** The reference spreads them over `SIFMAN`, `SIFCMD` and `ROMDRV`'s
+RPC; ours keeps them in the module that does the handshake, exporting the
+`sifcmd` library's server calls (ordinals 14, 17, 19, 22) so that `LOADFILE`
+registers its server the reference's way. Its entry returns, resident, and
+the boot thread sleeps at the end of the list (`spec/06` IOP-3i): `IOPBOOT`
+reaches `thbase`'s `SleepThread` through the registry rather than an import,
+being no module itself.
+
+**One `INTRMAN`, and no syscall traps.** The reference ships a variant pair
+and keeps whichever the machine selects (`docs/analysis/06`); this image is
+built for the generation with the second DMA bank and ships the one its
+`INTRMANI` corresponds to. `CpuSuspendIntr` and its kin edit `Status`
+directly instead of trapping into the syscall handler (IOP-2k), which only
+the reschedule syscall uses here; the saved frame is a shape of our own,
+shared with `THREADMAN` (`src/iop/context.hpp`), since the reference's is
+only partly read and both sides are ours.
+
+**`THREADMAN`'s records come from fixed pools, and an id is an index with a
+generation.** The reference allocates records from a heap and forms an id
+from the record's address (IOP-3c); ours has 48 of each kind and numbers
+them, refusing a stale id the same way. Seven `thbase` calls are the
+reference's own stubs; `DelayThread` and the alarms answer -1 until a timer
+manager exists (IOP-3j), which the gate lists.
 
 **There is no `EELOAD`.** EE-9a records that the reference's program loader
 uses the archive file `EELOAD` as the stub that replaces the running program.
@@ -443,16 +494,14 @@ above, because a module's bss is zeroed by the loader as it lands: the boot
 list sat below the load base until an early module grew enough to wipe it, and
 the load base only says where the *first* module starts.
 
-**The IOP's command service polls where the reference's is woken.** Every
-packet that crosses the SIF is framed as `spec/03` BOOT-11 and BOOT-12 say,
-on both sides, and the EE's side is interrupt-driven the way the reference's
-is: an arriving packet ends channel 5 on its tag's interrupt bit and the
-DMAC's interrupt carries a program's handler through it. The IOP's `SIFCMD`
-is woken the same way by its own controller; our `EESYNC` has no interrupt
-dispatch yet and instead polls the packet's size byte — the mark the channel
-writes as a packet lands and the service clears when it has read it, which is
-the mark the SDK's own handler uses on the EE. It then waits, bounded, for
-the channel's busy bit, since the size byte lands first and the rest follows.
+**Both ends of the SIF are interrupt-driven now.** Every packet that crosses
+it is framed as `spec/03` BOOT-11 and BOOT-12 say; on the EE an arriving
+packet ends channel 5 on its tag's interrupt bit and the DMAC's interrupt
+carries a program's handler through it, and on the IOP the receiving
+channel's completion is irq `0x2B`, served inside its handler as the
+reference's `SIFCMD` serves its own. The polling of the packet's size byte
+that stood in for this, and the bounded wait on the IOP's busy bit behind
+it, are gone.
 
 **The kernel's own file requests are a command of ours.** The reference
 serves `rom0:` through `ROMDRV` over SIFCMD's RPC, which the IOP does not have
@@ -470,11 +519,13 @@ reference does, and is picked only when no program thread can be. Where the
 reference keeps its boot thread, and what it runs there, was not read; the
 observable behaviour (`docs/analysis/34` §6) is what is matched.
 
-**The loader's server answers every name with -203.** `spec/03` BOOT-12e's
-server exists so that the SDK's `SifLoadModule` binds, calls and returns;
-what it cannot yet do is load, since the IOP has no `MODLOAD`, `IOMAN` or
-`ROMDRV`. -203 is the reference's answer for a file it has not got, which is
-true of every name here until those exist.
+**`MODLOAD` loads, and little else.** Of its sixteen ordinals,
+`LoadStartModule` and `IsIllegalBootDevice` are real — the latter accepts
+every path, its rule being unread (IOP-5g) — and the rest answer -1; the
+module id counts on from the boot list's length (IOP-5c), so the first module
+loaded on request is number thirteen here where the reference's is
+twenty-five. `IOMAN`'s and `ROMDRV`'s unread error numbers are kept as the
+analysis found them.
 
 **Slot `0x76` reports a transfer running until channel 6 idles**, where the
 reference decodes the word `0x77` returned against the channel's position in
@@ -517,12 +568,12 @@ first-pair bit preservation and the POST side effect are all implemented.
 `ninja -C build check` prints this list at the end of every successful run, so
 it cannot quietly go stale. This copy is the gate's own text:
 
-- The rest of the boot list: three of its twenty-nine modules are built
+- The rest of the boot list: 12 of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
 - 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
-- Loading a module over the SIF (spec/03 BOOT-12e): the loader's server answers every name with -203, since MODLOAD, IOMAN and ROMDRV do not exist on the IOP yet
-- The IOP's DMA interrupt: the command service polls the packet's size byte where the reference's SIFCMD is woken by the channel; the EE side is interrupt-driven as the reference's is
+- The IOP's timer (spec/06 IOP-3j): DelayThread and the alarms answer -1 until a timer manager exists
+- The modules a title loads on request: SIO2MAN is the one the archive holds; PADMAN, MCMAN and the rest are not built
 - EELOAD: the reference replaces the running program through that stub (spec/04 EE-9a), where our kernel loads the program itself
 
 The fault that used to sit beside this list — SIF0 delivering nothing under
