@@ -263,6 +263,25 @@ void makeReady(uint32_t index) {
     ready_bits[priority / 32] |= 1u << (priority % 32);
 }
 
+// A thread preempted by an interrupt's wake-up gave nothing up: it goes back
+// to the head of its queue, ahead of its peers, not behind them.
+void makeReadyFirst(uint32_t index) {
+    Thread &thread = threads[index];
+    thread.state = Ready;
+    thread.wait_type = NotWaiting;
+    const auto priority = static_cast<uint32_t>(thread.current_priority);
+    Queue &queue = ready[priority];
+    thread.prev = kNone;
+    thread.next = queue.head;
+    if (queue.head == kNone) {
+        queue.tail = static_cast<uint16_t>(index);
+    } else {
+        threads[queue.head].prev = static_cast<uint16_t>(index);
+    }
+    queue.head = static_cast<uint16_t>(index);
+    ready_bits[priority / 32] |= 1u << (priority % 32);
+}
+
 void takeOffReady(uint32_t index) {
     const auto priority = static_cast<uint32_t>(threads[index].current_priority);
     unlink(ready[priority], index);
@@ -343,6 +362,9 @@ uint32_t *newContext(uint32_t *frame) {
     }
     if (pending == kNone || pending == current) {
         pending = pick();
+        if (pending == kNone) {
+            pending = current;              // nothing ready: IOP-3h, stay
+        }
     }
     current = pending;
     Thread &next = threads[current];
@@ -405,7 +427,9 @@ void wake(uint32_t index, int32_t answer, bool from_interrupt) {
         if (current != kNone && thread.current_priority < threads[current].current_priority
             && (pending == kNone || pending == current
                 || thread.current_priority < threads[pending].current_priority)) {
-            if (pending != kNone && pending != current) {
+            if (pending == kNone || pending == current) {
+                makeReadyFirst(current);    // preempted, not blocked
+            } else {
                 makeReady(pending);
             }
             takeOffReady(index);
