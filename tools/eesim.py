@@ -1028,6 +1028,8 @@ def main() -> int:
                         help="load the image as an EE executable instead of "
                              "booting it as a ROM, and call an address with up "
                              "to four arguments; no address calls its entry")
+    parser.add_argument("--tlb", action="store_true",
+                        help="print every TLB write the boot makes, in order")
     parser.add_argument("--dump", nargs=3, metavar=("ADDRESS", "LENGTH", "PATH"),
                         help="after --call, write memory out; a LENGTH of "
                              "'result' uses the value the call returned")
@@ -1065,6 +1067,12 @@ def main() -> int:
         return 0
 
     report(machine)
+    if arguments.tlb:
+        cpu = machine.cpu
+        print(f"\nTLB writes, in order (Wired is {cpu.cop0[6]:#x} at the end):")
+        for index, (mask, hi, lo0, lo1) in cpu.tlb_writes:
+            print(f"   {index:2d}  PageMask={mask:#010x} EntryHi={hi:#010x} "
+                  f"EntryLo0={lo0:#010x} EntryLo1={lo1:#010x}")
     if arguments.io:
         print("\nI/O touched:")
         for offset in sorted(set(machine.bus.io_reads) | set(machine.bus.io_writes)):

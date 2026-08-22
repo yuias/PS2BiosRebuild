@@ -301,6 +301,39 @@ silently overwrite the other's fields.
 use. A rebuild taking them at full width would accept values the reference
 truncates.
 
+## EE-12: The kernel's TLB
+
+Derived from `docs/analysis/36-ee-tlb.md`. EE-1a maps the scratchpad and
+nothing else; a program reaches memory and hardware through KUSEG, and what
+it finds there is what the kernel maps before any program runs. Both
+reference images write the same table.
+
+**EE-12a — the table.** Thirty-nine entries, by index, `PageMask` /
+`EntryHi` / `EntryLo0` / `EntryLo1`:
+
+| Index | Maps | Pages | Cache |
+| --- | --- | --- | --- |
+| 0 | `0x70000000` → scratchpad | 4 KiB | EE-1a's entry, rewritten |
+| 1 | `0xFFFF8000` → physical `0x78000` | 2 × 16 KiB | cached |
+| 2–9 | `0x10000000`–`0x1000FFFF` → itself | 4 KiB each | uncached; `0x10001000` and `0x1000C000` are **not writable** (`EntryLo` `0x00400053`, `0x00400313`) |
+| 10 | `0x11000000` → itself | 64 KiB; the odd page invalid | uncached |
+| 11 | `0x12000000` → itself | 64 KiB; the odd page invalid | uncached |
+| 12 | `0x1E000000` → itself | 2 × 16 MiB | uncached |
+| 13–21 | `0x00080000`–`0x01FFFFFF` → physical | 256 KiB, 1 MiB, 4 MiB pairs | cached (`C = 3`) |
+| 22–30 | `0x20080000`–`0x21FFFFFF` → the same physical | the same | uncached (`C = 2`) |
+| 31–38 | `0x30100000`–`0x31FFFFFF` → the same physical | the same, less the first | uncached accelerated (`C = 7`) |
+
+The exact words are in `src/kernel/tlb.cpp` and reproduced by
+`python3 tools/eesim.py assets/SCPH-50000.bin --tlb`. The first 512 KiB of
+KUSEG are not mapped at all: a program lives above `0x80000`, and the kernel
+reaches that memory through KSEG0.
+
+**EE-12b — installation.** Every one of the 48 entries is first written
+invalid, under `EntryHi = 0xE0000000 + index × 0x2000` with both `EntryLo`
+zero, and the table is then written over indices 0–38 with `tlbwi`. `Wired`
+is left at 31: the entries below it are fixed, and a write through SYS-7b
+takes its index from `Random`, above them.
+
 ## Verification
 
 `tools/eeksys.py --check` asserts the statically checkable requirements of

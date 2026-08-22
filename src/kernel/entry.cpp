@@ -73,6 +73,9 @@ void *sifExchange(const char *name, uint32_t verb, void *destination,
 // thread.cpp
 extern uint32_t memory_size;
 
+// tlb.cpp -- EE-12
+void installTlb();
+
 // program.cpp -- EE-9c. It does not return when it succeeds, because the
 // program it loads replaces this one; when the archive has nothing to load it
 // comes back with -1, which is why it is not declared `[[noreturn]]`.
@@ -126,6 +129,11 @@ void printHex32(uint32_t value) {
     // ROM's vectors at 0xBFC00200. Clearing it is what points them at the page
     // this kernel just brought with it.
     writeStatus(readStatus() & ~kStatusBev);
+
+    // EE-12: the reset mapped the scratchpad and nothing else. The kernel
+    // itself runs through KSEG0 and KSEG1 and needs no more; a program reaches
+    // memory and hardware through KUSEG, and what it finds there is this.
+    installTlb();
 
     // BOOT-10: meet the IOP. Until this returns the machine has one working
     // processor; after it, both know where the other's memory is.
