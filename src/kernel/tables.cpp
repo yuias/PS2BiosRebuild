@@ -36,6 +36,14 @@ void sysNothing() asm("_sys_nothing");
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
 
+// sif.cpp
+void sysSifStopDChain() asm("_sys_sif_stop_dchain");
+void sysSifDmaStat() asm("_sys_sif_dma_stat");
+void sysSifSetDma() asm("_sys_sif_set_dma");
+void sysSifSetDChain() asm("_sys_sif_set_dchain");
+void sysSifSetReg() asm("_sys_sif_set_reg");
+void sysSifGetReg() asm("_sys_sif_get_reg");
+
 // interrupt.cpp, and the entry in syscall.S the interrupt table points at
 void sysAddIntcHandler() asm("_sys_add_intc_handler");
 void sysRemoveIntcHandler() asm("_sys_remove_intc_handler");
@@ -171,15 +179,17 @@ Handler syscall_table[256] = {
     sysUndefined, sysUndefined, sysUndefined,
     sysReadCop0,                                           // 0x67  = 0x63
     // 0x68
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
+    sysUndefined, sysUndefined, sysUndefined,
+    sysSifStopDChain,                                      // 0x6B  SYS-13b
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,
     // 0x70
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,
     sysSetSyscall,                                         // 0x74
     sysNothing,                                            // 0x75
-    sysUndefined, sysUndefined,
-    // 0x78
-    sysUndefined, sysUndefined, sysUndefined,
+    sysSifDmaStat,                                         // 0x76  SYS-13d
+    sysSifSetDma,                                          // 0x77  SYS-13c
+    // 0x78  SYS-13b, SYS-13a
+    sysSifSetDChain, sysSifSetReg, sysSifGetReg,
     sysLoadOsd,                                            // 0x7B  EE-9b
     sysUndefined,                                          // 0x7C
     // 0x7D .. 0xFF: reachable (SYS-11), nothing installed

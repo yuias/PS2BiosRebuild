@@ -68,11 +68,12 @@ NOT_YET = (
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
     "the scheduler under interrupts: threads switch on syscalls (SYS-10c) but "
     "no timer or SBUS interrupt preempts or wakes anything yet",
-    "SIF RPC (SIFCMD/SIFRPC on the IOP, slots 0x76-0x7A on the EE): a program's "
-    "SifInitRpc waits forever for an IOP that has no RPC service",
-    "interrupt-driven SIF service: our exchange is framed as BOOT-11 says, "
-    "but both ends still rendezvous on the flag registers rather than on the "
-    "SBUS interrupt the reference's drivers wait for",
+    "SIF RPC servers (spec/03 BOOT-12d): the IOP answers the command layer's "
+    "INIT_CMD, so a program's SifInitRpc returns, but no server is bound -- "
+    "SifBindRpc waits forever",
+    "the IOP's DMA interrupt: the command service polls the packet's size "
+    "byte where the reference's SIFCMD is woken by the channel; the EE side "
+    "is interrupt-driven as the reference's is",
     "EELOAD: the reference replaces the running program through that stub "
     "(spec/04 EE-9a), where our kernel loads the program itself",
 )

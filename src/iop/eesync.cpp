@@ -1,5 +1,5 @@
-// EESYNC: the IOP's half of the meeting with the EE, and the file service the
-// EE uses across the bus once they have met.
+// EESYNC: the IOP's half of the meeting with the EE, and the command service
+// the EE talks to across the bus once they have met.
 //
 // docs/spec/03-boot-chain.md BOOT-10. The IOP boot does not end at the last
 // module of the list; it ends waiting for the EE, which is why this module is
@@ -11,11 +11,15 @@
 // *clears* bits in MSFLG and *sets* them in SMFLG, and the EE's writes do the
 // reverse. Registers that merely stored would livelock rather than fail.
 //
-// The service afterwards is our own protocol (docs/implementation.md): the
-// reference serves `rom0:` through ROMDRV over SIFCMD's RPC, which does not
-// exist here yet. A request names an archive file and asks either its size or
-// a window of its bytes; the answer is one transfer to the address the request
-// carried.
+// What arrives afterwards is BOOT-12's command packets, at the receive buffer
+// this module published. The reference serves them from `SIFCMD` under a DMA
+// interrupt; here the service polls the packet's own size byte, which the
+// channel writes as the packet lands and the service zeroes when it has read
+// it -- the same mark the EE's client uses on its side. Two kinds of command
+// are answered: the system commands the SDK's client sends to bring its RPC
+// layer up (BOOT-12c), and a command of our own by which the kernel asks for a
+// file out of the archive (docs/implementation.md) -- the reference serves
+// `rom0:` through ROMDRV over SIFCMD's RPC, which does not exist here yet.
 
 #include <stdint.h>
 
@@ -27,9 +31,8 @@ constexpr uintptr_t kSifMsflg = 0xBD000020;
 constexpr uintptr_t kSifSmflg = 0xBD000030;
 constexpr uintptr_t kSifCtrl = 0xBD000040;
 
-constexpr uint32_t kHandshakeBit = 0x00010000;
-constexpr uint32_t kRequestBit = 0x00000002;    // the EE has sent us something
-constexpr uint32_t kReplyBit = 0x00000002;      // we have sent it back
+constexpr uint32_t kHandshakeBit = 0x00010000;  // BOOT-10: SIF_STAT_SIFINIT
+constexpr uint32_t kCommandBit = 0x00020000;    // BOOT-12b: SIF_STAT_CMDINIT
 
 // BOOT-11f: the control register gates the two data paths, one bit each, and
 // an emulator will move nothing across a path whose bit is clear. They are set
@@ -54,6 +57,7 @@ constexpr uintptr_t kTadr = 0xC;
 // enforces them where a lenient simulator does not.
 constexpr uint32_t kDmaSendChcr = 0x01000701;   // ch9:  from memory, started
 constexpr uint32_t kDmaRecvChcr = 0x41000300;   // ch10: to memory, started
+constexpr uint32_t kDmaBusy = 0x01000000;
 constexpr uint32_t kDmaBlock = 0x00000020;      // 32 words, the SIF's granularity
 
 // BOOT-11j: the controller has a per-channel enable of its own in the second
@@ -82,7 +86,31 @@ constexpr uint32_t kPayloadWords = 4096;        // up to 16 KiB per answer
 constexpr uint32_t kVerbSize = 0;               // how big is it?
 constexpr uint32_t kVerbContent = 1;            // send this window of it
 
-// The request as the EE lays it out (`src/kernel/sif.cpp`): eight words.
+// BOOT-12a: a command packet is at most 112 bytes; the buffer is the SDK's
+// size for one.
+constexpr uint32_t kPacketBytes = 128;
+
+// BOOT-12: the command ids this service answers. The system ones are the
+// SDK's; the file command is ours and `src/kernel/sif.cpp` names the same
+// number.
+constexpr uint32_t kCidSystem = 0x80000000;
+constexpr uint32_t kCidChangeAddress = kCidSystem | 0;
+constexpr uint32_t kCidSetSreg = kCidSystem | 1;
+constexpr uint32_t kCidInitCmd = kCidSystem | 2;
+constexpr uint32_t kCidFile = 0x10;
+
+// BOOT-12a: the sixteen bytes every packet begins with. `size` is `psize` in
+// its low byte and `dsize` above it.
+struct CommandHeader {
+    uint32_t size;
+    uint32_t dest;
+    uint32_t cid;
+    uint32_t opt;
+};
+static_assert(sizeof(CommandHeader) == 16);
+
+// The kernel's file request, as the EE lays it out after the header
+// (`src/kernel/sif.cpp`): eight words.
 struct Request {
     char name[kNameLength];
     uint16_t pad;
@@ -115,10 +143,11 @@ struct File {
     uint32_t size;
 };
 
-alignas(16) Request request;               // published in SMCOM: requests land here
+alignas(16) uint8_t receive[kPacketBytes];  // published in SMCOM: packets land here
 alignas(16) SendBlock send_block;
 alignas(16) uint32_t payload[kPayloadWords];
-uint32_t ee_area;                          // what the EE published to us
+uint32_t ee_area;                          // what the EE published at the handshake
+uint32_t ee_packet_buffer;                 // BOOT-12c: where the EE's client listens
 
 [[nodiscard]] uint32_t readWord(uintptr_t address) {
     return *reinterpret_cast<volatile uint32_t *>(address);
@@ -128,8 +157,8 @@ void writeWord(uintptr_t address, uint32_t value) {
     *reinterpret_cast<volatile uint32_t *>(address) = value;
 }
 
-// The DMA controller writes `request` behind the compiler's back; this keeps
-// the compiler from reading it before the flag that says it has arrived.
+// The DMA controller writes `receive` behind the compiler's back; this keeps
+// the compiler from reading it before the mark that says a packet is there.
 void barrier() {
     asm volatile("" ::: "memory");
 }
@@ -207,7 +236,8 @@ void waitUntilSet(uintptr_t address, uint32_t bits) {
 }
 
 // Send `words` of the payload to `destination` in EE memory: BOOT-11c's send
-// block, then the channel, then the flag that says the answer is ready.
+// block, then the channel. BOOT-11k: the EE's client names its buffer through
+// an uncached alias, and what goes into the tag has to be the physical address.
 void send(uint32_t words, uint32_t destination) {
     writeWord(kSifCtrl, kCtrlSif0Path);          // BOOT-11f, for this path
 
@@ -217,46 +247,102 @@ void send(uint32_t words, uint32_t destination) {
     send_block.address = reinterpret_cast<uintptr_t>(payload) | kTagEnd;
     send_block.words = quads * 4;
     send_block.tag = kTagDestEnd | quads;
-    send_block.destination = destination;
+    send_block.destination = destination & 0x1FFFFFFF;
     barrier();
 
     writeWord(kDmaSif0 + kTadr, reinterpret_cast<uintptr_t>(&send_block));
     writeWord(kDmaSif0 + kBcr, kDmaBlock);
     writeWord(kDmaSif0 + kChcr, kDmaSendChcr);   // start
+}
 
-    writeWord(kSifSmflg, kReplyBit);             // our write sets: it is ready
+// BOOT-12c: the answer that completes the client's `SifInitRpc` -- SET_SREG
+// of register 0 to 1, as a command packet to the buffer the client named.
+void sendSetSreg(uint32_t index, uint32_t value) {
+    if (ee_packet_buffer == 0) {
+        return;                                  // nowhere to answer yet
+    }
+    auto *header = reinterpret_cast<CommandHeader *>(payload);
+    header->size = sizeof(CommandHeader) + 8;    // psize 0x18, no dsize
+    header->dest = 0;
+    header->cid = kCidSetSreg;
+    header->opt = 0;
+    payload[4] = index;
+    payload[5] = value;
+    send(6, ee_packet_buffer);
+}
+
+// The kernel's file request: a name, a verb, and where the answer goes.
+void serveFile(const Request &request) {
+    const File file = lookup(request.name);
+    uint32_t words;
+    if (request.verb == kVerbSize) {
+        // One quadword, so the asker knows how large the file is before
+        // asking for its bytes.
+        payload[0] = file.size;
+        payload[1] = 0;
+        payload[2] = 0;
+        payload[3] = 0;
+        words = 4;
+    } else {
+        words = fillContent(file, request.offset, request.length);
+    }
+    send(words, request.destination);
+}
+
+// BOOT-11i: arm the receiving channel before waiting to be told anything. The
+// EE's transfer runs only once this end is ready for it, so arming after a
+// packet is due would leave each side waiting. The size byte is cleared first:
+// it is the mark a landing packet sets.
+void armReceive() {
+    writeWord(reinterpret_cast<uintptr_t>(receive), 0);
+    writeWord(kSifCtrl, kCtrlSif1Path);          // BOOT-11f, for this path
+    writeWord(kDmaSif1 + kBcr, kDmaBlock);
+    writeWord(kDmaSif1 + kChcr, kDmaRecvChcr);
+}
+
+// The size byte is in the packet's first word and lands first; the rest of
+// the packet follows it. The channel's busy bit says when it has all landed
+// -- where that bit works (spec/03 BOOT-11h: on one target it never clears),
+// so the wait for it is bounded rather than trusted.
+void waitForPacket() {
+    while ((readWord(reinterpret_cast<uintptr_t>(receive)) & 0xFF) == 0) {
+    }
+    for (uint32_t n = 0; n < 4096; n++) {
+        if ((readWord(kDmaSif1 + kChcr) & kDmaBusy) == 0) {
+            break;
+        }
+    }
+    barrier();
 }
 
 [[noreturn]] void serve() {
+    armReceive();
+    writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
     for (;;) {
-        writeWord(kSifCtrl, kCtrlSif1Path);      // BOOT-11f, for this path
-
-        // BOOT-11i: arm the receiving channel before waiting to be told
-        // anything. The EE's transfer runs only once this end is ready for it,
-        // so arming after the flag arrives would leave each side waiting.
-        writeWord(kDmaSif1 + kBcr, kDmaBlock);
-        writeWord(kDmaSif1 + kChcr, kDmaRecvChcr);
-
-        waitUntilSet(kSifMsflg, kRequestBit);
-        writeWord(kSifMsflg, kRequestBit);       // acknowledge by clearing
-        barrier();
-
-        // The request has landed where the packet's own header said, which is
-        // the address published in SMCOM.
-        const File file = lookup(request.name);
-        uint32_t words;
-        if (request.verb == kVerbSize) {
-            // One quadword, so the asker knows how large the file is before
-            // asking for its bytes.
-            payload[0] = file.size;
-            payload[1] = 0;
-            payload[2] = 0;
-            payload[3] = 0;
-            words = 4;
-        } else {
-            words = fillContent(file, request.offset, request.length);
+        waitForPacket();
+        const auto &header = *reinterpret_cast<const CommandHeader *>(receive);
+        const uint32_t *body = reinterpret_cast<const uint32_t *>(
+            receive + sizeof(CommandHeader));
+        switch (header.cid) {
+        case kCidInitCmd:
+            // BOOT-12c: `opt` 0 carries the client's receive buffer; `opt` 1
+            // is the RPC layer asking to be told it may start.
+            if (header.opt == 0) {
+                ee_packet_buffer = body[0];
+            } else {
+                sendSetSreg(0, 1);
+            }
+            break;
+        case kCidChangeAddress:
+            ee_packet_buffer = body[0];
+            break;
+        case kCidFile:
+            serveFile(*reinterpret_cast<const Request *>(body));
+            break;
+        default:
+            break;                               // nothing registered for it
         }
-        send(words, request.destination);
+        armReceive();
     }
 }
 
@@ -279,7 +365,7 @@ extern "C" {
     // and BOOT-11f: open both data paths first, one bit per write.
     writeWord(kSifCtrl, kCtrlSif0Path);
     writeWord(kSifCtrl, kCtrlSif1Path);
-    writeWord(kSifSmcom, reinterpret_cast<uintptr_t>(&request));
+    writeWord(kSifSmcom, reinterpret_cast<uintptr_t>(receive));
     writeWord(kSifSmflg, kHandshakeBit);         // our write sets
 
     // Record what the EE published, then clear its flag: our write to MSFLG

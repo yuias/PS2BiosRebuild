@@ -317,6 +317,13 @@ To satisfy `SifInitRpc` on an SDK-built EE client:
   EE's receive-buffer address, what the other 3 extra words carry) was not
   directly located — inferred from the client's send parameters (§1 step 5)
   and doc 24's independently-observed boot traffic, not a disassembled handler.
+  *Settled from the client's side since:* the client sends `INIT_CMD` twice.
+  `sceSifInitCmd` sends it with `opt = 0` and its receive-buffer address as
+  the one word after the header (`psize 0x14`); `sceSifInitRpc` sends it with
+  `opt = 1` and nothing after the header (`psize 0x10`), and that is the one
+  a `SET_SREG(0, 1)` answers. An IOP service that keeps the address from the
+  first and answers the second completes `SifInitRpc` on both emulators
+  (`src/iop/eesync.cpp`, `spec/03` BOOT-12c).
 - The unexported helper at `SIFCMD 0x1660` (called by nearly every RPC
   function with a single pointer argument) was not identified — guessed as
   "get a correlation/rec id," not confirmed.

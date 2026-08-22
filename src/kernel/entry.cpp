@@ -21,6 +21,13 @@ constexpr uintptr_t kBootResult = 0x70003FF0;
 
 constexpr uint32_t kStatusBev = 1u << 22;
 
+// What a program runs under: interrupts enabled (IE and EIE, SYS-12d) with the
+// INTC and DMAC lines unmasked (IM2, IM3) and `ei`/`di` allowed (EDI). The
+// SDK's client toggles EIE itself and relies on the rest being set already;
+// the reference's interrupt exit leaves IE set on its way back to a program
+// (docs/analysis/35).
+constexpr uint32_t kStatusProgram = 0x00030C01;
+
 [[nodiscard]] uint32_t readWord(uintptr_t address) {
     return *reinterpret_cast<volatile uint32_t *>(address);
 }
@@ -133,7 +140,10 @@ void printHex32(uint32_t value) {
     print(reinterpret_cast<const char *>(romver));
 
     // EE-9c: and then the boot ends the way the reference's does, by running
-    // the program the archive holds for it.
+    // the program the archive holds for it. Nothing is unmasked in either
+    // controller yet, so enabling interrupts here arms them for the program
+    // without delivering any to the kernel's own boot.
+    writeStatus(readStatus() | kStatusProgram);
     bootDefault();
 
     // Only reached when there was nothing to run. Stop where it can be seen.

@@ -385,7 +385,13 @@ bool interruptReschedule(uint32_t *frame) {
     ThreadRecord &thread = thread_table[next];
     current_thread = next;
     thread.state = Run;
+    // The frame's slot 26 is Status, which the exit restores; a thread's block
+    // has nothing meaningful there. The interrupted thread's Status -- with
+    // interrupts enabled, since one was just taken -- is what the picked
+    // thread resumes under.
+    const uint32_t status = frame[26 * 4];
     copyWords(frame, reinterpret_cast<const uint32_t *>(thread.context), kBlockWords);
+    frame[26 * 4] = status;
     frame[0] = thread.resume_pc;
     return true;
 }
