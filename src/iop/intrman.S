@@ -30,9 +30,12 @@
 // Push the frame: every register but $zero, $k0 and $k1, then hi/lo, then
 // the Status and EPC the vector saved. $sp's own slot holds the value it had
 // before the push, so a restore finds the interrupted stack again.
+// The R3000 delivers a load one instruction late (docs/spec/03 BOOT-8): a
+// `nop` sits between every `lw` here and the first use of what it loaded.
 .macro push_frame
     addiu $sp, $sp, -FRAME_BYTES
     lw    $k0, SAVED_AT($zero)
+    nop
     sw    $k0, SLOT_REG + 1 * 4($sp)
     .irp reg, 2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,30,31
     sw    $\reg, SLOT_REG + \reg * 4($sp)
@@ -44,8 +47,10 @@
     mflo  $k0
     sw    $k0, SLOT_LO($sp)
     lw    $k0, SAVED_STATUS($zero)
+    nop
     sw    $k0, SLOT_STATUS($sp)
     lw    $k0, SAVED_EPC($zero)
+    nop
     sw    $k0, SLOT_EPC($sp)
 .endm
 

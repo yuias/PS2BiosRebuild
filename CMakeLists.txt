@@ -124,6 +124,8 @@ ps2AddModule(excepman MODULE Exception_Manager VERSION 1.00
     SOURCES src/iop/excepman.cpp)
 ps2AddModule(intrman MODULE Interrupt_Manager VERSION 1.00
     SOURCES src/iop/intrman.S src/iop/intrman.cpp)
+ps2AddModule(threadman MODULE Multi_Thread_Manager VERSION 1.00
+    SOURCES src/iop/threadman.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
@@ -196,7 +198,8 @@ add_custom_command(
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf excepman.elf intrman.elf eesync.elf osdsys.elf
+            loadcore.elf excepman.elf intrman.elf threadman.elf eesync.elf
+            osdsys.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
@@ -206,13 +209,19 @@ add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
 add_custom_target(check
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/imgcheck.py" "${PS2_IMAGE}"
-    # The R3000A's load delay slot (docs/analysis/31): the one place IOP code
-    # is still written by hand is the boot block's IOP half, so it is the one
-    # place the check is still needed.
+    # The R3000A's load delay slot (docs/analysis/31): IOP code written by
+    # hand is the boot block's IOP half and the exception paths of EXCEPMAN
+    # and INTRMAN, so those are where the check is needed -- one emulator
+    # honours the slot and one does not, and the hazard only shows on the
+    # first.
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/loaddelay.py"
             --objdump "${PS2_OBJDUMP}"
             "$<TARGET_FILE:reset.elf>" --between _iop_reset eeReset
-    DEPENDS "${PS2_IMAGE}" reset.elf
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/loaddelay.py"
+            --objdump "${PS2_OBJDUMP}"
+            "$<TARGET_FILE:excepman.elf>" "$<TARGET_FILE:intrman.elf>"
+    DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")
