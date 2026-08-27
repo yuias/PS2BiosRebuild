@@ -133,6 +133,7 @@ reference and the reason for it.
 | The disc and the EE's file service (IOP-8, IOP-9) | **built, untested against a disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC; nothing reads a disc yet, so only the boot's own gates cover them |
 | IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
+| The disc's own boot target | **read from the disc** — the program in the `OSDSYS` slot binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`. With a retail disc attached the console prints that path; with none, it says so and stops |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 79 slots served, the rest report themselves |
 | EE interrupt delivery (SYS-12) | **built, gated statically, not yet observed** — handler lists, the interrupt entry and the reschedule on exit; nothing raises an interrupt until the IOP's command service exists |
@@ -390,6 +391,11 @@ timeout 40 ~/tools/squashfs-root/AppRun -bios -batch -nogui
 grep -E '^\[.*\] #' ~/.config/PCSX2/logs/emulog.txt      # our kernel's output
 ```
 
+To exercise the disc path the run needs a disc: point the emulator at a retail
+ISO and the last console line becomes the `BOOT2=` path read off it rather than
+the "no disc" one. Any 2048-byte-sector ISO with a `SYSTEM.CNF` will do; the
+image itself is not part of this repository.
+
 Two things about the harness will otherwise cost an hour each:
 
 - **PCSX2 rewrites its ini on startup.** `[Logging] EnableEEConsole = true` set
@@ -442,7 +448,9 @@ simulator, in this order:
   own final line.
 - **M2 — a retail title boots from disc.** Our `OSDSYS` reads `SYSTEM.CNF`
   from `cdrom0:` and runs `BOOT2` through the loader; the title reaches its own
-  steady state on PCSX2. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
+  steady state on PCSX2. The first half of that is done: with a disc attached,
+  the boot prints the `BOOT2=` path it read off the disc and hands it to the
+  loader. What the title then needs of the image is the rest. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
   loads from `rom0:`. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).

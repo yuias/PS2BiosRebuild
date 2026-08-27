@@ -109,6 +109,20 @@ The vector page, EE-5a's identical `0x000`/`0x180`, EE-6b's single common
 handler, EE-8a to EE-8c's slot count, absence of nulls and alias blocks, and
 EE-8e's KSEG1 cache trio all pass already.
 
+**The `OSDSYS` slot reads the disc's own boot target.** The retail `OSDSYS` is
+a menu behind a compressed payload, and `docs/clean-room-policy.md` puts its
+artwork out of bounds; what stands in that slot here is the one job the rest of
+the boot depends on (`docs/analysis/41` §4, `43` §10): bind `FILEIO`, open
+`cdrom0:\SYSTEM.CNF;1`, take `BOOT2=`, and hand the path to syscall `0x06`.
+The `SYSTEM.CNF` parse is deliberately tolerant -- the retail file spaces its
+`=` out and ends its lines with CRLF -- and every failure along the way names
+itself on the console and stops, which is what a run with no disc attached
+does.
+
+The SIF client both this and `EELOAD` reach the IOP through is one translation
+unit, `src/ee/sifclient.cpp`, linked into each separately: the second program
+initialises the command layer again from scratch, with state of its own.
+
 **The IOP reaches `IOPBOOT` and reads its boot list.**
 
 ```sh
