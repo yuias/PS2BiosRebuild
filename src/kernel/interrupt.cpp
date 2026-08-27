@@ -95,17 +95,22 @@ void writeWord(uintptr_t address, uint32_t value) {
 
 // SYS-12b: every handler on the list, youngest first; the return values are
 // not consulted, as the reference's dispatch does not consult them.
-// SYS-12b: a handler is entered with the `$gp` its installer had, which is
-// what SYS-12a keeps that value for. A compiled handler reaches its own
-// globals through `$gp` and the interrupted context's is not its own -- one
-// entered on the wrong one runs to completion and quietly does nothing, which
-// is far worse than crashing. The SDK's own SIF handler is exactly that shape:
-// it finds its packet buffer and its software registers through `$gp`.
+// SYS-12b: a handler is entered with the `$gp` its installer had -- which is
+// what SYS-12a keeps that value for, and what the reference's own dispatch
+// does (`docs/analysis/35`: "+0x0C=$gp (caller's, so the handler runs with the
+// installer's gp)") -- and on a **quadword-aligned stack**.
 //
-// Written as assembly because the argument registers, the call and the `$gp`
-// swap have to happen in one piece. `$16` is callee-saved, so it carries the
-// kernel's own `$gp` across the call; naming it as a clobber is what makes the
-// compiler preserve it for whoever called us.
+// The alignment is not housekeeping. `sq` ignores the low four bits of its
+// address, so a handler that saves its frame with one -- and a compiled EE
+// handler does, its registers being 128 bits wide -- has its stores land up to
+// eight bytes below where it put them if it was entered on a merely
+// doubleword-aligned `$sp`. It then reads its own frame back at the offsets it
+// wrote, finds them shifted, and acts on the wrong words. Nothing faults.
+//
+// Written as assembly because the argument registers, the two swaps and the
+// call have to happen in one piece. `$16` and `$17` are callee-saved, so they
+// carry the kernel's own `$gp` and `$sp` across the call; naming them as
+// clobbers is what makes the compiler preserve them for whoever called us.
 void callHandlers(uint16_t head, int cause) {
     for (uint16_t at = head; at != kNone; at = records[at].next) {
         const Record &record = records[at];
@@ -115,15 +120,19 @@ void callHandlers(uint16_t head, int cause) {
         register uint32_t handler_gp asm("$8") = record.gp;
         asm volatile(
             "move  $16, $gp\n\t"
+            "move  $17, $sp\n\t"
+            "addiu $3, $zero, -16\n\t"
+            "and   $sp, $sp, $3\n\t"
             "move  $gp, %[gp]\n\t"
             "jalr  %[target]\n\t"
             "nop\n\t"
+            "move  $sp, $17\n\t"
             "move  $gp, $16"
             : "+r"(argument), "+r"(installed), [target] "+r"(target),
               [gp] "+r"(handler_gp)
             :
             : "$2", "$3", "$6", "$7", "$9", "$10", "$11", "$12", "$13", "$14",
-              "$15", "$16", "$24", "$31", "memory");
+              "$15", "$16", "$17", "$24", "$31", "memory");
     }
 }
 
