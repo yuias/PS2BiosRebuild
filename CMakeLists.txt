@@ -156,7 +156,7 @@ ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
 
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
-add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp)
+add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp src/ee/sifclient.cpp)
 # Without a small page size the linker aligns the segment's file offset to
 # 64 KiB, which would store sixty-odd kilobytes of padding in the archive for
 # a program of a few hundred bytes.
@@ -168,7 +168,8 @@ set_target_properties(osdsys.elf PROPERTIES
 
 # EELOAD is raw code at the address the kernel stages it to (spec/04 EE-9a,
 # docs/analysis/41), lifted out of its ELF like the other components.
-ps2AddComponent(eeload SCRIPT eeload.ld SOURCES src/ee/eeload.S src/ee/eeload.cpp)
+ps2AddComponent(eeload SCRIPT eeload.ld SOURCES
+    src/ee/eeload.S src/ee/eeload.cpp src/ee/sifclient.cpp)
 
 ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/vectors.S
