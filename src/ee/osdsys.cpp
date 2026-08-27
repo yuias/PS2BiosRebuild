@@ -23,55 +23,13 @@
 
 #include <stdint.h>
 
+#include "console.hpp"
 #include "sifclient.hpp"
 
 namespace {
 
 using namespace ps2::sifclient;
-
-constexpr uintptr_t kSioIsr = 0xB000F130;
-constexpr uintptr_t kSioTx = 0xB000F180;
-constexpr uint32_t kSioTxReady = 0x8000;
-
-[[nodiscard]] uint32_t readWord(uintptr_t address) {
-    return *reinterpret_cast<volatile uint32_t *>(address);
-}
-
-void writeByte(uintptr_t address, uint8_t value) {
-    *reinterpret_cast<volatile uint8_t *>(address) = value;
-}
-
-// The EE's serial console, which is the only output this program has: a byte
-// goes out once the ready bit clears.
-void print(const char *text) {
-    for (const char *at = text; *at != '\0'; at++) {
-        while ((readWord(kSioIsr) & kSioTxReady) != 0) {
-        }
-        writeByte(kSioTx, static_cast<uint8_t>(*at));
-    }
-}
-
-// A driver's refusal is a small negative number and the difference between
-// them is the whole diagnosis -- "no such device" and "no such file" fail the
-// boot identically otherwise.
-void printSigned(int32_t value) {
-    char text[12];
-    uint32_t n = 0;
-    uint32_t magnitude = value < 0 ? -static_cast<uint32_t>(value) : value;
-    if (value < 0) {
-        print("-");
-    }
-    do {
-        text[n++] = static_cast<char>('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude != 0);
-    char out[13];
-    for (uint32_t k = 0; k < n; k++) {
-        out[k] = text[n - 1 - k];
-    }
-    out[n] = '\0';
-    print(out);
-}
+using namespace ps2::console;
 
 // --- FILEIO's RPC (docs/analysis/43 §3, §4; spec/06 IOP-9) ------------------
 

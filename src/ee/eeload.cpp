@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 
+#include "console.hpp"
 #include "sifclient.hpp"
 
 extern "C" {
@@ -26,6 +27,7 @@ alignas(16) uint32_t eeload_args[1 + 16 + 64];    // SYS-8b's block
 namespace {
 
 using namespace ps2::sifclient;
+using namespace ps2::console;
 
 // --- the loader (spec/06 IOP-5f's fno 1) -----------------------------------------
 
@@ -91,18 +93,31 @@ extern "C" {
         bound = bindRpc(kLoadfileServer);
     }
     if (!bound) {
+        print("# EELOAD: the IOP has no LOADFILE to ask.\n");
         eeloadHalt();
     }
+    print("# EELOAD: loading ");
+    print(path);
+    print("\n");
     request.epc = 0;
     request.gp = 0;
     copyString(request.path, path, kPathMax);
     copyString(request.secname, "all", kPathMax);
     callRpc(kFunctionElfLoad, &request, sizeof(request), answer, sizeof(answer));
     if (static_cast<int32_t>(answer[0]) < 0) {
+        print("# EELOAD: LOADFILE refused it, error ");
+        printSigned(static_cast<int32_t>(answer[0]));
+        print("\n");
         eeloadHalt();
     }
+    print("# EELOAD: entry ");
+    printHex(answer[0]);
+    print(", gp ");
+    printHex(answer[1]);
+    print("\n");
     (void)syscall(kSysExecPs2, answer[0], answer[1],
                   static_cast<uint32_t>(program_argc), reinterpret_cast<uintptr_t>(program_argv));
+    print("# EELOAD: ExecPS2 came back; nothing was entered.\n");
     eeloadHalt();
 }
 
