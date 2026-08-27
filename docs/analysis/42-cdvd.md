@@ -269,9 +269,14 @@ debug-print-and-retry wrapper around it: on a `-1` result it prints
    `sceCdGetError`, ordinal 8, later returns).
 2. Reads `0xBF402008` bit 0. **Clear**: bumps a retry counter at `record+3`,
    acknowledges by writing `2` to `0xBF402008`. **Set**: reads `0xBF402005`
-   bit 0 to decide `record+4 = 1` (ok) or `-1` (error) — the word
-   `sceCdCheckCmd` (ordinal 21) later returns raw — and acknowledges by
-   writing `1` to `0xBF402008`.
+   bit 0 to decide `record+4` — **bit 0 set is the error**, giving `-1`, and
+   bit 0 clear gives `1` — the word `sceCdCheckCmd` (ordinal 21) later
+   returns raw — and acknowledges by writing `1` to `0xBF402008`.
+   The polarity is easy to read backwards, because the `-1` is assigned in
+   the branch's **delay slot** and so runs on both paths:
+   `2840 bnez $2, 0x284c; 2844 addiu $2,$zero,-1; 2848 addiu $2,$zero,1;
+   284c sw $2, 4($16)`. Taking the branch (bit 0 set) keeps the delay slot's
+   `-1`; falling through overwrites it with `1`.
 3. Depending on a caller-set selector at `record+0xC` (e.g. `sceCdRead`
    writes `2` into `.bss+0x5828` right before issuing its command), calls one
    of two registered function-pointer callbacks (`.bss+0x5820`/`+0x5824`),

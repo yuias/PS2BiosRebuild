@@ -112,10 +112,13 @@ volatile int g_done;              // 0 pending, 1 ok, -1 error -- the IRQ-2 hand
 volatile uint8_t g_result;        // the command's raw result byte (sceCdGetError)
 volatile uint32_t g_issuer_thread;  // stashed at issue time, not consumed -- §2b step 3
 
+// `data` is a DMA destination, so it is aligned rather than packed in behind
+// the two bookkeeping fields: channel 3 writes RAM directly and the address it
+// is handed is not rounded for it.
 struct SectorCache {
     uint32_t lba;
     bool valid;
-    uint8_t data[kSectorSize];
+    alignas(16) uint8_t data[kSectorSize];
 };
 SectorCache cache;
 
@@ -216,7 +219,11 @@ int cdvdIrqHandler(void *) {
         writeReg8(kNIrqStat, 2);                   // ack, retry path
         return 1;
     }
-    g_done = (readReg8(kNStatus) & 1) ? 1 : -1;
+    // Bit 0 of the status byte is the command's *error* flag: set means the
+    // command failed. The reference decides this in a branch delay slot --
+    // `addiu $2,$zero,-1` sits in the slot of the `bnez` and so runs on both
+    // paths, which is why the taken (bit set) path is the -1 one.
+    g_done = (readReg8(kNStatus) & 1) ? -1 : 1;
     writeReg8(kNIrqStat, 1);                       // ack, done path
     return 1;
 }
