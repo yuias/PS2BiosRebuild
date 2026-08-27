@@ -426,9 +426,12 @@ instead of blocking. Other confirmed codes: `KE_UNKNOWN_EVFID` (`-409`),
 object is deleted).
 
 **IOP-3g — semaphores.** `iop_sema_t { attr, option, initial, max }`
-[header], `0x2C` bytes, pool tag `0x7F02`; `attr` must have `~0x102 == 0`
+[header], `0x2C` bytes, pool tag `0x7F02`; `attr` must have `~0x101 == 0`
 (`SA_THFIFO`=`0`/`SA_THPRI`=`1`/`SA_IHTHPRI`=`0x100` [header] legal), else
-`KE_ILLEGAL_ATTR`. `SignalSema`/`iSignalSema`, no waiter: `current < max`
+`KE_ILLEGAL_ATTR`. The reference forms the mask as the immediate `-0x102`,
+which is `0xfffffefe` — a rebuild that takes `0x102` for the mask instead
+rejects `SA_THPRI`, and with it every driver that asks for a
+priority-ordered semaphore. `SignalSema`/`iSignalSema`, no waiter: `current < max`
 increments it; **`current >= max` returns `0` without incrementing and
 without `KE_SEMA_OVF`** — the header names that error, but this firmware
 silently caps instead. With a waiter: pops the first (FIFO by default; with

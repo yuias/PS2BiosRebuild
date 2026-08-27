@@ -69,7 +69,7 @@ enum WaitType : uint8_t { NotWaiting = 0, Sleep = 1, Delay = 2, OnSema = 3, OnEv
 
 constexpr uint32_t kAttrMask = 0xE3000008;      // IOP-3b
 constexpr uint32_t kEventMulti = 2;             // EA_MULTI [header]
-constexpr uint32_t kSemaAttrMask = 0x102;
+constexpr uint32_t kSemaAttrMask = 0x101;
 constexpr uint32_t kSemaPriority = 1;           // SA_THPRI [header]
 constexpr uint32_t kWaitOr = 1;                 // WEF_OR [header]
 constexpr uint32_t kWaitClear = 0x10;           // WEF_CLEAR [header]

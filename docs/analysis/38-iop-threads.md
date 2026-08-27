@@ -493,7 +493,7 @@ Record, `0x2c` bytes, pool tag `0x7f02`:
 | Off | Field | Off | Field |
 |---|---|---|---|
 | `+0x8`/`+0xa` | pool tag / generation | `+0x1c` | option |
-| `+0xc` | attr (`~0x102` must be zero — `SA_THFIFO`(0)/`SA_THPRI`(1)/`SA_IHTHPRI`(0x100) [header] legal) | `+0x20` | current count |
+| `+0xc` | attr (`~0x101` must be zero — `SA_THFIFO`(0)/`SA_THPRI`(1)/`SA_IHTHPRI`(0x100) [header] legal; the gate is `addiu $3,$zero,-0x102; and; bnez`, and `-0x102` as a 32-bit word is `0xfffffefe`, which is `~0x101` and not `~0x102` — reading the immediate as the mask would reject `SA_THPRI`, the one attribute this same document's own wait-ordering note depends on) | `+0x20` | current count |
 | `+0x10` | numWaitThreads | `+0x24` | max |
 | `+0x14` | wait-list head (self-referencing sentinel) | `+0x28` | initial |
 
