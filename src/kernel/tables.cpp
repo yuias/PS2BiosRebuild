@@ -33,6 +33,7 @@ void sysSetSyscall() asm("_sys_set_syscall");
 void sysNothing() asm("_sys_nothing");
 
 // program.cpp
+void sysBootBrowser() asm("_sys_boot_browser");
 void sysLoadProgram() asm("_sys_load_program");
 void sysLoadOsd() asm("_sys_load_osd");
 void sysExecPs2() asm("_sys_exec_ps2");
@@ -87,7 +88,19 @@ void sysWaitSema() asm("_sys_wait_sema");
 void sysPollSema() asm("_sys_poll_sema");
 void sysReferSemaStatus() asm("_sys_refer_sema_status");
 
+// gs.cpp and gs.S
+void sysSetGsCrt() asm("_sys_set_gs_crt");
+void sysSetVSyncFlag() asm("_sys_set_vsync_flag");
+void sysGetGsImr() asm("_sys_get_gs_imr");
+void sysSetGsImr() asm("_sys_set_gs_imr");
+
+// osdconfig.cpp
+void sysSetOsdConfigParam() asm("_sys_set_osd_config_param");
+void sysGetOsdConfigParam() asm("_sys_get_osd_config_param");
+void sysGetOsdConfigParam2() asm("_sys_get_osd_config_param2");
+
 // cache.S
+void sysFlushCache() asm("_sys_flush_cache");
 void sysReadCop0() asm("_sys_read_cop0");
 void cop0Read0() asm("_cop0_read_0");
 void cop0Read1() asm("_cop0_read_1");
@@ -124,8 +137,12 @@ void sysDisableCacheUncached() asm("_sys_disable_cache_kseg1");
 [[gnu::section(".syscalls"), gnu::used]]
 Handler syscall_table[256] = {
     // 0x00
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
-    sysUndefined, sysUndefined,
+    sysUndefined,
+    sysUndefined,
+    sysSetGsCrt,                                           // 0x02  SYS-14a
+    sysUndefined,
+    sysBootBrowser,                                        // 0x04  SYS-6a
+    sysUndefined,
     sysLoadProgram,                                        // 0x06  EE-9a
     sysExecPs2,                                            // 0x07  SYS-8d
     // 0x08
@@ -166,7 +183,8 @@ Handler syscall_table[256] = {
     sysUndefined,                                          // 0x3F  retired
     sysCreateSema, sysDeleteSema, sysSignalSema, sysSignalSemaDirect,   // 0x40  SYS-9
     sysWaitSema, sysPollSema, sysPollSema, sysReferSemaStatus,   // 0x44..0x47
-    sysReferSemaStatus, sysDeleteSemaDirect, sysUndefined, sysUndefined,   // 0x48..0x4B
+    sysReferSemaStatus, sysDeleteSemaDirect,              // 0x48..0x49
+    sysSetOsdConfigParam, sysGetOsdConfigParam,           // 0x4A..0x4B  SYS-15a
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x4c
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x50
     sysUndefined, sysUndefined, sysUndefined, sysUndefined,   // 0x54
@@ -177,14 +195,20 @@ Handler syscall_table[256] = {
     sysEnableCacheUncached,                                // 0x61  EE-8e
     sysDisableCacheUncached,                               // 0x62  EE-8e
     sysReadCop0,                                           // 0x63  cached
-    sysUndefined, sysUndefined, sysUndefined,
+    sysFlushCache,                                         // 0x64  SYS-16
+    sysUndefined, sysUndefined,
     sysReadCop0,                                           // 0x67  = 0x63
     // 0x68
-    sysUndefined, sysUndefined, sysUndefined,
+    sysFlushCache,                                         // 0x68  = 0x64
+    sysUndefined, sysUndefined,
     sysSifStopDChain,                                      // 0x6B  SYS-13b
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
+    sysUndefined, sysUndefined, sysUndefined,
+    sysGetOsdConfigParam2,                                 // 0x6F  SYS-15c
     // 0x70
-    sysUndefined, sysUndefined, sysUndefined, sysUndefined,
+    sysGetGsImr,                                           // 0x70  SYS-7c
+    sysSetGsImr,                                           // 0x71  SYS-7c
+    sysUndefined,
+    sysSetVSyncFlag,                                       // 0x73  SYS-14b
     sysSetSyscall,                                         // 0x74
     sysNothing,                                            // 0x75
     sysSifDmaStat,                                         // 0x76  SYS-13d

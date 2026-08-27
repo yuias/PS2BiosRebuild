@@ -10,7 +10,7 @@ the working document and is kept current.
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
 > is thin is *depth*: twelve of the boot list's twenty-nine modules exist
-> plus one loadable on request, sixty-eight of the 125 syscall slots are
+> plus one loadable on request, seventy-nine of the 125 syscall slots are
 > served, and both processors take interrupts and switch threads from them.
 >
 > Five specifications are written and every one has a gate that has been tested
@@ -134,7 +134,7 @@ reference and the reason for it.
 | IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
-| EE kernel: vector page, dispatch, syscall table | **built** — 62 slots served, the rest report themselves |
+| EE kernel: vector page, dispatch, syscall table | **built** — 79 slots served, the rest report themselves |
 | EE interrupt delivery (SYS-12) | **built, gated statically, not yet observed** — handler lists, the interrupt entry and the reschedule on exit; nothing raises an interrupt until the IOP's command service exists |
 | EE main-thread setup (SYS-8) | **built and gated** — `0x3C`/`0x3D`/`0x3E`, the argument block, entry with the launcher's registers |
 | EE threads and semaphores (SYS-9, SYS-10, SYS-11) | **built and gated** — records, ready queues, the switch through the dispatcher's block; 256-slot table |

@@ -84,6 +84,11 @@ python3 tools/eesim.py build/rom.bin --syscall 0x14 3
 | `-0x14` | reaches `0x14`'s handler | EE-7b |
 | `0x0D` | writes the exception table; out of range returns `0` | EE-6e |
 | `0x74` | writes the syscall table | SYS-5a |
+| `0x71` then `0x70` | a doubleword out and the same doubleword back | SYS-7c |
+| `0x02` | NTSC's and PAL's timings, and nothing for a mode it does not serve | SYS-14a, SYS-14c |
+| `0x4a` then `0x4b` | a word out and the same word back | SYS-15a |
+| `0x6f` | an over-long request shortened, one past the end refused | SYS-15b |
+| `0x64` | returns for every operation, and `0x68` is the same handler | SYS-16, EE-8c |
 | `0x75` | returns, quietly | SYS-3b |
 | an unimplemented slot | `# syscall not implemented: 0x21` | EE-8d, SYS-3a |
 
@@ -97,7 +102,7 @@ judges a `KERNEL` file structurally, and ours now fails it on a single count,
 ```sh
 python3 tools/romdir.py build/rom.bin --extract <outdir>
 python3 tools/eeksys.py <outdir>/KERNEL --check
-# EE-8d: slots [...] also use the undefined reporter    (105 unimplemented)
+# EE-8d: slots [...] also use the undefined reporter    (33 of them)
 ```
 
 The vector page, EE-5a's identical `0x000`/`0x180`, EE-6b's single common

@@ -114,6 +114,20 @@ COP0_STABLE = (2, 3, 0)
 COP0_CONFIG, CACHE_BOTH, CACHE_ENABLE_BITS = 16, 3, 3 << 16
 EXCEPTION_CODE, EXCEPTION_HANDLER = 2, 0x80005678
 UNDEFINED_SLOT = 0x51            # still the reporter's, until it is not
+# The GS privileged registers the display slots write, by the offset the bus
+# records them at, and a mask value with a bit in both halves so a handler that
+# lost the upper one is caught (SYS-7c).
+GS_SMODE1, GS_SMODE2, GS_SRFSH = 0x12000010, 0x12000020, 0x12000030
+GS_SYNCH1, GS_IMR = 0x12000040, 0x12001010
+GS_IMR_VALUE = 0x0123456789ABCDEF
+# SYS-14a's two modes, and one the reference's dispatcher carries past NTSC and
+# PAL into code this image does not serve.
+CRT_NTSC, CRT_PAL, CRT_UNSERVED = 2, 3, 0x52
+CRT_NTSC_SMODE1, CRT_NTSC_SYNCH1 = 0x0000000740834504, 0x0007f5b61f06f040
+CRT_PAL_SYNCH1 = 0x0007f5c21fc83030
+# SYS-15's blocks: the caller-side scratch these are called with, the second
+# block's size, and a pattern no zeroed block could be mistaken for.
+OSD_BLOCK, OSD_PARAM2_SIZE, OSD_PATTERN = 0x330000, 0x80, 0xABCD1234
 
 
 def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
@@ -274,6 +288,130 @@ def checkEe(image: pathlib.Path) -> tuple[list[str], int]:
     return problems, unservedSlots(machine)
 
 
+def checkDisplaySyscalls(machine: eesim.Machine) -> list[str]:
+    """The GS slots: 0x02, 0x70/0x71 and 0x73 (SYS-7c, SYS-14).
+
+    Every value these deal in is 64 bits wide, which is the point of testing
+    them by calling: a handler that lost the upper half would look correct to
+    anything that only compared words.
+    """
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    def io(offset: int) -> int:
+        return machine.bus.io.get(offset, 0)
+
+    # SYS-7c: 0x71 answers with what it just set, not what it replaced, and
+    # 0x70 has nothing but the shadow to answer from -- the register does not
+    # read back. `machine.syscall` narrows its result to a word, so the whole
+    # register is read straight out of the CPU.
+    require(machine.syscall(0x71, GS_IMR_VALUE) is not None, "SYS-7c",
+            "slot 0x71 did not return")
+    require(machine.cpu.get(2) == GS_IMR_VALUE, "SYS-7c",
+            f"slot 0x71 answered {machine.cpu.get(2):#018x}, not the "
+            f"{GS_IMR_VALUE:#018x} it was given")
+    require(io(GS_IMR) == GS_IMR_VALUE, "SYS-7c",
+            f"the GS interrupt mask holds {io(GS_IMR):#018x}, not the "
+            f"{GS_IMR_VALUE:#018x} slot 0x71 was given: the write is a "
+            f"doubleword, and half of one is a different transaction")
+    require(machine.syscall(0x70) is not None, "SYS-7c",
+            "slot 0x70 did not return")
+    require(machine.cpu.get(2) == GS_IMR_VALUE, "SYS-7c",
+            f"slot 0x70 answered {machine.cpu.get(2):#018x}; without a shadow "
+            f"of 0x71's argument it has no answer at all")
+
+    # SYS-14a: NTSC and PAL each program their own timings, and the mode
+    # argument is the only thing that chooses between them.
+    require(machine.syscall(0x02, 1, CRT_NTSC, 0) is not None, "SYS-14a",
+            "slot 0x02 did not return")
+    require(io(GS_SMODE1) == CRT_NTSC_SMODE1, "SYS-14a",
+            f"NTSC left SMODE1 {io(GS_SMODE1):#018x}, "
+            f"want {CRT_NTSC_SMODE1:#018x}")
+    require(io(GS_SYNCH1) == CRT_NTSC_SYNCH1, "SYS-14a",
+            f"NTSC left SYNCH1 {io(GS_SYNCH1):#018x}, "
+            f"want {CRT_NTSC_SYNCH1:#018x}")
+    machine.syscall(0x02, 1, CRT_PAL, 0)
+    require(io(GS_SYNCH1) == CRT_PAL_SYNCH1, "SYS-14a",
+            f"PAL left SYNCH1 {io(GS_SYNCH1):#018x}, "
+            f"want {CRT_PAL_SYNCH1:#018x}: the two modes must not have been "
+            f"collapsed into one set of timings")
+
+    # SYS-14a again: `field` reaches SMODE2 only when the mode is interlaced,
+    # and the progressive branch writes a literal zero rather than a masked
+    # argument.
+    for interlace, field, want in ((1, 0, 1), (1, 1, 3), (0, 1, 0)):
+        machine.syscall(0x02, interlace, CRT_NTSC, field)
+        require(io(GS_SMODE2) == want, "SYS-14a",
+                f"interlace={interlace}, field={field} left SMODE2 "
+                f"{io(GS_SMODE2):#018x}, want {want:#x}")
+
+    # SYS-14c: a mode this image does not serve leaves the GS alone rather
+    # than programming it with something invented.
+    machine.syscall(0x02, 1, CRT_NTSC, 0)
+    settled = (io(GS_SMODE1), io(GS_SYNCH1), io(GS_SRFSH))
+    machine.syscall(0x02, 1, CRT_UNSERVED, 0)
+    require((io(GS_SMODE1), io(GS_SYNCH1), io(GS_SRFSH)) == settled, "SYS-14c",
+            f"mode {CRT_UNSERVED:#x} changed the GS; an unserved mode must "
+            f"leave the raster as it found it")
+
+    # SYS-14b: nothing here can see where the two pointers went -- the words
+    # are the kernel's own -- so this gates only that the slot returns, which
+    # is the whole of what it does besides storing them.
+    require(machine.syscall(0x73, OSD_BLOCK, OSD_BLOCK + 8) is not None,
+            "SYS-14b", "slot 0x73 did not return")
+    return problems
+
+
+def checkOsdConfigSyscalls(machine: eesim.Machine) -> list[str]:
+    """The configuration slots: 0x4a/0x4b and 0x6f (SYS-15)."""
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    # SYS-15a: the pair is a round trip through the kernel's own block, and
+    # the six fields between them account for every bit of the word -- so a
+    # pattern with bits everywhere has to come back whole.
+    machine.bus.write(OSD_BLOCK, 4, OSD_PATTERN)
+    machine.syscall(0x4A, OSD_BLOCK)
+    machine.bus.write(OSD_BLOCK, 4, 0)
+    machine.syscall(0x4B, OSD_BLOCK)
+    got = machine.bus.read(OSD_BLOCK, 4)
+    require(got == OSD_PATTERN, "SYS-15a",
+            f"0x4a then 0x4b returned {got:#010x}, not the {OSD_PATTERN:#010x} "
+            f"that went in: the masks must tile the whole word")
+
+    # SYS-15b: the clamp shortens an over-long request instead of refusing it,
+    # and an offset already at the end copies nothing at all. The block is at
+    # rest, so a copied byte is a zero and an untouched one is the caller's.
+    machine.bus.write(OSD_BLOCK, 8, eesim.MASK64)
+    machine.syscall(0x6F, OSD_BLOCK, 8, OSD_PARAM2_SIZE - 4)
+    got = machine.bus.read(OSD_BLOCK, 8)
+    require(got == eesim.MASK64 << 32 & eesim.MASK64, "SYS-15b",
+            f"a request for 8 bytes at {OSD_PARAM2_SIZE - 4:#x} left "
+            f"{got:#018x}; it should have been shortened to the 4 the block "
+            f"has left, not refused and not run past the end")
+
+    machine.bus.write(OSD_BLOCK, 8, eesim.MASK64)
+    machine.syscall(0x6F, OSD_BLOCK, 8, OSD_PARAM2_SIZE)
+    got = machine.bus.read(OSD_BLOCK, 8)
+    require(got == eesim.MASK64, "SYS-15b",
+            f"a request at the end of the block left {got:#018x}; there is "
+            f"nothing there to copy, so nothing may be written")
+
+    # SYS-15c: the result comes out of the display slots' configuration word,
+    # not out of any argument. That word is at rest, so its mode-select field
+    # is clear and the answer is zero -- the branch a rebuild reaches first.
+    require(machine.syscall(0x6F, OSD_BLOCK, 4, 0) == 0, "SYS-15c",
+            "slot 0x6f did not answer zero while the configuration word's "
+            "mode-select field is clear")
+    return problems
+
+
 def checkSyscalls(machine: eesim.Machine) -> list[str]:
     """The syscall interface, called rather than read.
 
@@ -388,6 +526,18 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
     require(enabled & ~CACHE_ENABLE_BITS == before & ~CACHE_ENABLE_BITS,
             "SYS-4", f"the cache pair changed Config outside its own bits: "
                      f"{before:#010x} became {enabled:#010x}")
+
+    problems += checkDisplaySyscalls(machine)
+    problems += checkOsdConfigSyscalls(machine)
+
+    # SYS-16, and EE-8c doubling it: the flush terminates for every operation
+    # it names and for one it does not, and 0x68 is the same handler.
+    for operation in (0, 1, 2, 3, 9):
+        require(machine.syscall(0x64, operation) is not None, "SYS-16",
+                f"slot 0x64 did not return for operation {operation}")
+    require(machine.word(SYSCALL_TABLE + 0x68 * 4)
+            == machine.word(SYSCALL_TABLE + 0x64 * 4), "EE-8c",
+            "slots 0x64 and 0x68 disagree; the block is published twice")
 
     before = len(machine.bus.console)
     machine.syscall(UNDEFINED_SLOT)

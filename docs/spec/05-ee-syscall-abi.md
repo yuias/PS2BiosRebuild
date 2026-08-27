@@ -496,6 +496,138 @@ packs list positions into it, and 0 means the list was refused.
 the transfer is complete — and a non-negative value while it is still
 running. The SDK's `SifDmaStat` loop waits for the `-1`.
 
+## SYS-14: The display slots
+
+Derived from `docs/analysis/46-ee-syscalls-for-a-title.md` §1 and §6. These are
+the slots a title calls before it draws anything, and the first of them is the
+only place in the interface where the kernel programs the GS's raster.
+
+**SYS-14a — `0x02 (interlace, mode, field)`.** Each of the three arguments is a
+**signed 16-bit value in the low half of its register**, and the reference
+sign-extends every one of them before use; a rebuild reading the full 32 bits
+would accept a caller the reference does not. `mode` is `2` for NTSC and `3`
+for PAL — the kernel-level numbering, which is not the SDK's separate display
+mode enumeration.
+
+For each of those two modes the kernel writes **six GS privileged registers, in
+this order**: SMODE1 (`0x12000010`), SYNCH1 (`0x12000040`), SYNCH2
+(`0x12000050`), SYNCHV (`0x12000060`), SMODE2 (`0x12000020`), SRFSH
+(`0x12000030`). Every one is a **64-bit `sd`**; a pair of word stores is a
+different transaction on this bus and not an equivalent. The values:
+
+| Register | `mode == 2` (NTSC) | `mode == 3` (PAL) |
+| --- | --- | --- |
+| SMODE1 | `0x0000000740834504` | `0x0000000740836504` |
+| SYNCH1 | `0x0007f5b61f06f040` | `0x0007f5c21fc83030` |
+| SYNCH2 | `0x000000000033a4d8` | `0x00000000003484bc` |
+| SYNCHV | `0x00c7800601a01801` | `0x00a9000502101401` |
+| SRFSH | `0x0000000000000008` | `0x0000000000000008` |
+
+SMODE1 additionally carries **bit 0 of the kernel's display-configuration
+doubleword at bit 25**. SYNCHV takes an alternate value — `...1802` for NTSC,
+`...1404` for PAL — when that same word's bits `8..6` are non-zero **and** its
+bit 40 is set. That word is kernel-resident and no caller names its address: it
+is reached only through the syscalls that read it, so its **layout** is part of
+the interface and its **address is not**.
+
+SMODE2 is the only register the caller's own arguments reach: interlaced
+(`interlace != 0`) writes `(field & 1) << 1 | 1` — INT set, FFMD carrying
+`field` — and progressive writes a **literal zero**, not a masked argument.
+
+The slot **produces no value**. No path that programs the GS assigns the result
+register, so SYS-1's `-> $v0` is satisfied by whatever was already there; a
+rebuild inventing a status would be answering a question the interface does not
+ask.
+
+**SYS-14b — `0x73 (flagPtr, alarmPtr)`.** Stores the two arguments verbatim, as
+raw pointers, into two fixed kernel words. No validation, no dereference, no
+hardware access, no return value. That is the entire syscall; the vsync-time
+bookkeeping that reads them back belongs to whichever interrupt path installs
+the VBLANK handler, not to this slot.
+
+**SYS-14c — what `0x02` does not have to serve.** The reference reaches the
+dispatcher above through gates that read boot-configuration state a reset
+machine leaves at rest, and at rest every one of them falls through to it
+(`docs/analysis/46` §1a). What that dispatcher then reaches **beyond** NTSC and
+PAL — the `mode == 0`/`1` "keep the current mode" shorthand, modes `0x72` and
+`0x73`, the `0x1a..0x51` range and `0x52`, the alternative timings a GS
+revision other than 1 selects, and the settling spin that precedes all of them
+— is **not required**, and neither is the second SMODE1-shaped value the
+reference hands unstored to a helper below the analysed range. A rebuild that
+serves only NTSC and PAL must leave every other mode's registers **as it found
+them** rather than program them with a guess.
+
+## SYS-15: The configuration blocks
+
+Derived from `docs/analysis/46` §3 and §5. Three slots that move bytes between
+a caller and a kernel-resident block. None touches hardware, and — as in
+SYS-14a — the blocks' **addresses are not part of the interface**, only their
+sizes, layouts and clamping.
+
+**SYS-15a — `0x4a (addr)` and `0x4b (addr)`.** A matched pair over one 32-bit
+kernel word, `0x4a` copying from the caller and `0x4b` to it; the reference is
+the same code with its load and store operands swapped. The **low half is
+copied a field at a time** through six masks — `0x1`, `0x6`, `0x8`, `0x10`,
+`0x1fe0`, `0xe000` — which together account for every bit of it, and the **high
+half is copied whole** as one 16-bit halfword at `addr + 2`. What any individual
+field configures is not settled. Neither slot produces a value it computed:
+the reference leaves whatever its last load put in the result register.
+
+**SYS-15b — `0x6f (config, size, offset)`, the copy.** A byte copy out of a
+**128-byte** kernel block: `config[i] = block[offset + i]` for `i` in
+`0..size`. The bound is **clamped, not enforced** — a request whose
+`size + offset` exceeds `0x80` is *shortened* to what the block has left, and
+an `offset` already at or past `0x80` copies nothing rather than failing. The
+bound test is **unsigned**, so a `size` or `offset` large enough to look
+negative fails it and is clamped rather than read as a negative count. Whether
+the clamp's own `offset < 0x80` comparison is signed was not read off the
+bytes, so a *pair* of arguments that wraps back inside the bound — `offset`
+`-4` with `size` `8` sums to `4` — is **not settled** here; the reference
+reads below its block for that call, and a rebuild that guards it would differ.
+
+**SYS-15c — `0x6f`'s result has nothing to do with its arguments.** On every
+path, whether or not a byte was copied, the slot returns bits `47..44` of
+**SYS-14a's display-configuration doubleword** — or `0` when that word's
+mode-select field (bits `8..6`) is clear. It reads no argument to produce this
+and touches neither block. A rebuild deriving the result from the copy instead
+would agree with the reference only by accident, and only while the
+configuration word is at rest.
+
+## SYS-16: The cache flush
+
+Derived from `docs/analysis/46` §4 and `docs/analysis/18`. Slot `0x64`, and
+`0x67`–`0x6A`'s doubling of `0x63`–`0x66` publishes it at `0x68` as well; the
+two share **one handler**, unlike the rescheduling operations SYS-2 covers,
+because there is nothing here for an interrupts-disabled entry point to do
+differently.
+
+**SYS-16a — `0x64 (operation)`.** Four behaviours, dispatched on the argument:
+
+| `operation` | Sweep | `cache` op | Span | Ways |
+| --- | --- | --- | --- | --- |
+| `0` | write back the data cache | `0x14` | `0x1000` | both |
+| `1` | invalidate the data cache | `0x16` | `0x1000` | both |
+| `2` | invalidate the instruction cache | `0x07` | `0x2000` | both |
+| anything else | operation `1`, then operation `2` | | | |
+
+Each walk goes one 64-byte line at a time, over both ways of every line, with a
+sync on either side of each `cache` instruction.
+
+**SYS-16b — every unmatched value is the combined form.** `3` is what a caller
+names it by, but the reference tests only `0`, `1` and `2` and lets everything
+else fall through to the pair. **Write-back is reachable only by asking for
+`0` exactly** — it is not part of the combined path.
+
+**SYS-16c — the flush sweeps unconditionally.** Unlike SYS-4b's pair it does
+not consult `Config`, does not skip a cache that is in the wanted state, and
+does not change any enable bit. A caller reaches it having just written code or
+about to hand memory to the IOP, not to reconfigure anything.
+
+The reference's leaf routines are not the same routines SYS-4b's pair calls,
+and `docs/analysis/46` did not distinguish which of the two `sync` forms each
+uses. A rebuild carrying over the form `docs/analysis/18` read off the bytes
+for the same `cache` operation is not contradicted by any evidence in hand.
+
 ## Verification
 
 `tools/eeabi.py --check` re-derives every signature from a `KERNEL` image by
@@ -529,7 +661,11 @@ python3 tools/eesim.py assets/SCPH-50000.bin --syscall 0x14 3
 ```
 
 SYS-3b, SYS-5a, SYS-7a, SYS-7b and SYS-7c are confirmed that way, as is the
-`$v1` convention every call depends on. SYS-7b's open question is closed from
+`$v1` convention every call depends on. `tools/imgcheck.py` calls the same
+slots on a **rebuilt** image: SYS-7c's doubleword round trip through the shadow,
+SYS-14a's two modes and their SMODE2 branches, SYS-14c's "leave an unserved
+mode alone", SYS-15a's round trip and SYS-15b's two clamps, and SYS-16a for
+every operation it names and one it does not. SYS-7b's open question is closed from
 the other direction too: the kernel announces its own TLB layout at boot, and
 the scratchpad mapping of `spec/04` EE-1a is entry 0 while the allocatable
 range starts at 13.
@@ -539,4 +675,8 @@ range starts at 13.
 and it establishes that a register is read, never what the value means —
 executing a syscall confirms it returns, not that it consumed every argument
 listed. SYS-7d's SIF channels are not exercised, because that traffic ends at
-an IOP the EE simulator does not have.
+an IOP the EE simulator does not have. SYS-16's sweeps are executed but not
+*observed*: the simulator has no cache for a walk to have an effect on, so what
+is gated there is that each operation terminates, not that it swept. SYS-15c's
+non-zero branch is likewise unexercised, since nothing in the image writes the
+configuration word it reads.

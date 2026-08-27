@@ -1,7 +1,8 @@
-// The cache and CP0 band: syscall slots 0x60 to 0x63, and the fourth table the
-// last of them dispatches through.
+// The cache and CP0 band: syscall slots 0x60 to 0x64, and the fourth table
+// 0x63 dispatches through.
 //
-// docs/spec/04-ee-kernel.md EE-8e and docs/spec/05-ee-syscall-abi.md SYS-4.
+// docs/spec/04-ee-kernel.md EE-8e and docs/spec/05-ee-syscall-abi.md SYS-4 and
+// SYS-16.
 // The first three are published through KSEG1 rather than KSEG0, and that is a
 // hardware requirement, not a convention: each one reconfigures or invalidates
 // the very cache its own instruction fetches would come through. The link
@@ -9,7 +10,8 @@
 // does.
 //
 // Each takes one argument. The three cache calls return nothing (SYS-4); the
-// CP0 read returns the register (SYS-4c).
+// CP0 read returns the register (SYS-4c); the flush (SYS-16) returns nothing
+// either, and does not even leave a value behind.
 
 #include <stdint.h>
 
@@ -95,6 +97,7 @@ void walk(uint32_t span) {
 extern "C" {
 
 void sysSetCacheMode(uint32_t mode) asm("_sys_set_cache_mode");
+void sysFlushCache(int32_t operation) asm("_sys_flush_cache");
 void sysEnableCache(uint32_t which) asm("_sys_enable_cache");
 void sysDisableCache(uint32_t which) asm("_sys_disable_cache");
 uint32_t sysReadCop0(uint32_t index) asm("_sys_read_cop0");
@@ -160,6 +163,36 @@ void sysDisableCache(uint32_t which) {
     syncL();
     writeConfig(readConfig() & ~(which << kConfigEnableShift));
     syncP();
+}
+
+// Slots 0x64 and 0x68: sweep the caches the argument names.
+//
+// SYS-16. The four operations are write-back the data cache, invalidate the
+// data cache, invalidate the instruction cache, and both invalidations
+// together -- and "both" is what *every* value outside the first three gets,
+// because the reference dispatches on the three and lets the rest fall through
+// to the pair. Write-back is reachable only by asking for it exactly.
+//
+// Unlike 0x61 and 0x62 these sweep unconditionally: they are a caller saying
+// "I have just written code" or "the IOP is about to read this", not a
+// reconfiguration that can be skipped when the cache is already in the wanted
+// state. Nothing here reads or writes Config.
+void sysFlushCache(int32_t operation) {
+    switch (operation) {
+    case 0:
+        walk<kDCacheWriteback, false>(kDCacheSpan);
+        break;
+    case 1:
+        walk<kDCacheInvalidate, false>(kDCacheSpan);
+        break;
+    case 2:
+        walk<kICacheInvalidate, true>(kICacheSpan);
+        break;
+    default:
+        walk<kDCacheInvalidate, false>(kDCacheSpan);
+        walk<kICacheInvalidate, true>(kICacheSpan);
+        break;
+    }
 }
 
 // Slot 0x63: read the CP0 register the argument names.

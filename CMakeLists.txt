@@ -178,6 +178,9 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
     src/kernel/sif.cpp
     src/kernel/program.cpp
     src/kernel/cache.cpp
+    src/kernel/gs.S
+    src/kernel/gs.cpp
+    src/kernel/osdconfig.cpp
     src/kernel/thread.cpp
     src/kernel/interrupt.cpp
     src/kernel/tlb.cpp

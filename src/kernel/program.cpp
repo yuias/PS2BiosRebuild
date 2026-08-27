@@ -52,6 +52,7 @@ void print(const char *text) asm("_print");
 int sysLoadProgram(const char *path, int argc, char **argv)
     asm("_sys_load_program");
 int sysLoadOsd(int argc, char **argv) asm("_sys_load_osd");
+int sysBootBrowser() asm("_sys_boot_browser");
 int sysExecPs2(uint32_t entry, uint32_t gp, int argc, char **argv)
     asm("_sys_exec_ps2");
 int bootDefault();
@@ -71,6 +72,7 @@ namespace {
 
 constexpr char kEeloadName[] = "EELOAD";
 constexpr char kRom0Osdsys[] = "rom0:OSDSYS";
+constexpr char kBootBrowser[] = "BootBrowser";
 constexpr char kNoEeload[] = "# no EELOAD: the archive has nothing by that name.\n";
 
 // Fetch a whole file to `to`. The channel writes whole quadwords at a
@@ -175,6 +177,18 @@ int sysLoadProgram(const char *path, int argc, char **argv) {
 // four-instruction wrapper that shifts the arguments along; so is this.
 int sysLoadOsd(int argc, char **argv) {
     return sysLoadProgram(kRom0Osdsys, argc, argv);
+}
+
+// Slot 0x04: how a program ends. SYS-6a, and docs/analysis/46 §2 for the
+// mechanism: the reference reads no argument at all -- not even the exit code
+// its SDK header declares -- and calls its own 0x06 with `rom0:OSDSYS` and a
+// single argument, the browser's name. It does not come back, because 0x06
+// does not: whatever `jr $ra` follows the call is unreachable. Written as that
+// same call rather than as a jump, since ours is a function and the
+// dispatcher's `eret` is what enters EELOAD either way.
+int sysBootBrowser() {
+    char *argv[] = {const_cast<char *>(kBootBrowser)};
+    return sysLoadProgram(kRom0Osdsys, 1, argv);
 }
 
 // Slot 0x07: exec(entry, gp, argc, argv) -- the program EELOAD has put in
