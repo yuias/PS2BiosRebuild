@@ -447,7 +447,23 @@ in `INTC_STAT` before any handler runs**, and calls each handler installed
 for it, youngest first, with the cause number in `$a0` (and the installed
 argument in `$a1`; the reference passes only `$a0` at the dispatch it was
 read at). DMAC likewise from `D_STAT & D_MASK`, per channel, acknowledged
-in `D_STAT` first. Return values are not consulted by the dispatch. Handlers
+in `D_STAT` first. Return values are not consulted by the dispatch.
+
+**Each handler is entered on the `$gp` its installer had** -- which is what
+SYS-12a keeps that value for, and what the reference's own dispatch does
+(`docs/analysis/35`: the record's `+0x0C` is "the caller's, so the handler runs
+with the installer's gp"). A handler built with small-data addressing reaches
+its globals through it.
+
+**Each handler is entered on a quadword-aligned `$sp`.** This is not
+housekeeping: `sq` ignores the low four bits of its address, and a compiled EE
+handler saves its frame with `sq` because its registers are that wide. Entered
+on a merely doubleword-aligned stack it stores its frame up to eight bytes
+below where it believes it put it, reads the frame back at the offsets it
+wrote, and acts on the wrong words -- without faulting. A rebuild that hands a
+handler whatever `$sp` its own dispatcher happened to have will see a retail
+title's SIF handler consume a command packet and then dispatch on the wrong
+word of it. Handlers
 run in kernel mode with `EXL` clear and interrupts masked by `EIE`, so a
 handler may make syscalls — the SDK's SIF handler calls the direct forms and
 `0x78` from inside — and may re-enable interrupts with `ei` at its own risk.

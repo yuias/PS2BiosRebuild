@@ -95,9 +95,35 @@ void writeWord(uintptr_t address, uint32_t value) {
 
 // SYS-12b: every handler on the list, youngest first; the return values are
 // not consulted, as the reference's dispatch does not consult them.
+// SYS-12b: a handler is entered with the `$gp` its installer had, which is
+// what SYS-12a keeps that value for. A compiled handler reaches its own
+// globals through `$gp` and the interrupted context's is not its own -- one
+// entered on the wrong one runs to completion and quietly does nothing, which
+// is far worse than crashing. The SDK's own SIF handler is exactly that shape:
+// it finds its packet buffer and its software registers through `$gp`.
+//
+// Written as assembly because the argument registers, the call and the `$gp`
+// swap have to happen in one piece. `$16` is callee-saved, so it carries the
+// kernel's own `$gp` across the call; naming it as a clobber is what makes the
+// compiler preserve it for whoever called us.
 void callHandlers(uint16_t head, int cause) {
     for (uint16_t at = head; at != kNone; at = records[at].next) {
-        records[at].handler(cause, records[at].arg);
+        const Record &record = records[at];
+        register int argument asm("$4") = cause;
+        register void *installed asm("$5") = record.arg;
+        register Handler target asm("$25") = record.handler;
+        register uint32_t handler_gp asm("$8") = record.gp;
+        asm volatile(
+            "move  $16, $gp\n\t"
+            "move  $gp, %[gp]\n\t"
+            "jalr  %[target]\n\t"
+            "nop\n\t"
+            "move  $gp, $16"
+            : "+r"(argument), "+r"(installed), [target] "+r"(target),
+              [gp] "+r"(handler_gp)
+            :
+            : "$2", "$3", "$6", "$7", "$9", "$10", "$11", "$12", "$13", "$14",
+              "$15", "$16", "$24", "$31", "memory");
     }
 }
 
