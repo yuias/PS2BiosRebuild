@@ -136,7 +136,7 @@ reference and the reason for it.
 | The disc's own boot target | **read from the disc** — the program in the `OSDSYS` slot binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`. With a retail disc attached the console prints that path; with none, it says so and stops |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 79 slots served, the rest report themselves |
-| EE interrupt delivery (SYS-12) | **built, gated statically, not yet observed** — handler lists, the interrupt entry and the reschedule on exit; nothing raises an interrupt until the IOP's command service exists |
+| EE interrupt delivery (SYS-12) | **built and reached, not yet driving a client** — handler lists, the interrupt entry and the reschedule on exit; the entry is taken during a disc boot, but a retail title that installs a DMAC channel-5 handler and waits on it does not get woken |
 | EE main-thread setup (SYS-8) | **built and gated** — `0x3C`/`0x3D`/`0x3E`, the argument block, entry with the launcher's registers |
 | EE threads and semaphores (SYS-9, SYS-10, SYS-11) | **built and gated** — records, ready queues, the switch through the dispatcher's block; 256-slot table |
 | M1 test program (`tests/m1/`) | **stages 1–2 pass on both emulators** — main, arguments, a semaphore, a second thread; stops in `SifInitRpc` polling `0x7A` for an IOP RPC service |
