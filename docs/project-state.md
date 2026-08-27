@@ -136,7 +136,7 @@ reference and the reason for it.
 | The disc's own boot target | **read from the disc** — the program in the `OSDSYS` slot binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`. With a retail disc attached the console prints that path; with none, it says so and stops |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
 | EE kernel: vector page, dispatch, syscall table | **built** — 79 slots served, the rest report themselves |
-| EE interrupt delivery (SYS-12) | **built and reached, not yet driving a client** — handler lists, the interrupt entry and the reschedule on exit; the entry is taken during a disc boot, but a retail title that installs a DMAC channel-5 handler and waits on it does not get woken |
+| EE interrupt delivery (SYS-12) | **built and driving a client** — handler lists, the interrupt entry and the reschedule on exit; a retail title's own SIF handler runs on our channel-5 interrupt and its `SifInitRpc` completes, which is what the `$gp` and quadword-alignment requirements of SYS-12b exist for |
 | EE main-thread setup (SYS-8) | **built and gated** — `0x3C`/`0x3D`/`0x3E`, the argument block, entry with the launcher's registers |
 | EE threads and semaphores (SYS-9, SYS-10, SYS-11) | **built and gated** — records, ready queues, the switch through the dispatcher's block; 256-slot table |
 | M1 test program (`tests/m1/`) | **stages 1–2 pass on both emulators** — main, arguments, a semaphore, a second thread; stops in `SifInitRpc` polling `0x7A` for an IOP RPC service |
@@ -448,9 +448,11 @@ simulator, in this order:
   own final line.
 - **M2 — a retail title boots from disc.** Our `OSDSYS` reads `SYSTEM.CNF`
   from `cdrom0:` and runs `BOOT2` through the loader; the title reaches its own
-  steady state on PCSX2. The first half of that is done: with a disc attached,
-  the boot prints the `BOOT2=` path it read off the disc and hands it to the
-  loader. What the title then needs of the image is the rest. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
+  steady state on PCSX2. With a disc attached the boot now reads `BOOT2=` off
+  the disc, loads the named ELF and enters it, and the title's own runtime
+  comes up far enough to complete `SifInitRpc` over our SIF and start binding
+  RPC servers. It stops at the first one the image does not provide,
+  `0x80000592` — `CDVDFSV`'s, which is the next thing to build. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
   loads from `rom0:`. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
