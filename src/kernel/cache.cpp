@@ -16,24 +16,28 @@
 namespace {
 
 // Config's cache-enable bits sit at 16 and 17, so an argument naming caches is
-// shifted there; its low two bits are the two caches, in that order.
+// shifted there; its low two bits are the two caches, in that order -- data
+// first, instruction second, which is the order Config itself uses.
 constexpr uint32_t kConfigEnableShift = 16;
 constexpr uint32_t kCacheArgumentMask = 3;
+constexpr uint32_t kDataCache = 1;
+constexpr uint32_t kInstructionCache = 2;
 
 // The tag walks: one line at a time, both ways of each line, over the size of
-// the cache being swept. The instruction cache's tags cover half what the data
-// cache's do.
+// the cache being swept. The instruction cache's tags cover twice what the
+// data cache's do -- 16 KiB against 8 KiB, both across two ways.
 constexpr uint32_t kCacheLine = 0x40;
-constexpr uint32_t kICacheSpan = 0x1000;
-constexpr uint32_t kDCacheSpan = 0x2000;
+constexpr uint32_t kDCacheSpan = 0x1000;
+constexpr uint32_t kICacheSpan = 0x2000;
 
-// The `cache` operations each walk uses. They differ between enabling and
-// disabling because the two directions want different things done with a line
-// that is already valid. Each is a *field of the instruction*, so it has to
-// reach the assembler as a literal -- hence the template parameter.
-constexpr int kICacheInvalidate = 0x16;
-constexpr int kICacheWriteback = 0x14;
-constexpr int kDCacheOp = 0x07;
+// The `cache` operations each walk uses. Each names its cache in the operation
+// itself -- the instruction has no other way to say which -- so the data and
+// instruction forms are different numbers, not the same number applied twice.
+// Each is a *field of the instruction*, so it has to reach the assembler as a
+// literal, hence the template parameter.
+constexpr int kDCacheInvalidate = 0x16;
+constexpr int kDCacheWriteback = 0x14;
+constexpr int kICacheInvalidate = 0x07;
 
 // `sync.p` has no mnemonic in this assembler, so it goes in as the word it is.
 void syncP() {
@@ -129,11 +133,11 @@ void sysSetCacheMode(uint32_t mode) {
 // alone, so the call is safe to repeat.
 void sysEnableCache(uint32_t which) {
     which &= kCacheArgumentMask;
-    if (!cacheIsOn(1)) {
-        walk<kICacheInvalidate, false>(kICacheSpan);
+    if (!cacheIsOn(kDataCache)) {
+        walk<kDCacheInvalidate, false>(kDCacheSpan);
     }
-    if (!cacheIsOn(2)) {
-        walk<kDCacheOp, true>(kDCacheSpan);
+    if (!cacheIsOn(kInstructionCache)) {
+        walk<kICacheInvalidate, true>(kICacheSpan);
     }
     syncL();
     writeConfig(readConfig() | (which << kConfigEnableShift));
@@ -147,11 +151,11 @@ void sysEnableCache(uint32_t which) {
 // dirty lines are the only copy of what they hold. One already off is skipped.
 void sysDisableCache(uint32_t which) {
     which &= kCacheArgumentMask;
-    if (cacheIsOn(1)) {
-        walk<kICacheWriteback, false>(kICacheSpan);
+    if (cacheIsOn(kDataCache)) {
+        walk<kDCacheWriteback, false>(kDCacheSpan);
     }
-    if (cacheIsOn(2)) {
-        walk<kDCacheOp, true>(kDCacheSpan);
+    if (cacheIsOn(kInstructionCache)) {
+        walk<kICacheInvalidate, true>(kICacheSpan);
     }
     syncL();
     writeConfig(readConfig() & ~(which << kConfigEnableShift));
