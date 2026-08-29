@@ -64,7 +64,7 @@ analysis could not follow. Both do return a value.
 | `0x73` | `($a0, $a1) -> -` | `0x74` | `($a0, $a1) -> -` | `0x75` | `(-) -> -` |
 | `0x76` | `($a0) -> $v0` | `0x77` | `($a0, $a1) -> $v0` | `0x78` | `(-) -> $v0` |
 | `0x79` | `($a0, $a1) -> $v0` | `0x7A` | `($a0) -> $v0` | `0x7B` | `($a0, $a1) -> $v0` |
-| `0x7C` | `(-) -> -` | | | | |
+| `0x7C` | `(fno, param) -> result` | | | | SYS-3c |
 
 **SYS-1a:** `0x29`, `0x2A`: the gap is not a typo. These read `$a0`, `$a1` and
 `$a3` and **not** `$a2`. A rebuild that packs the arguments densely would take
@@ -102,14 +102,36 @@ one of these eight pairs in the rescheduling direction only.
 ## SYS-3: The undefined slots take nothing
 
 The thirteen slots of `spec/04` EE-8d — `0x00`, `0x03`, `0x08`, `0x3F`,
-`0x54`–`0x5B`, `0x7C` — take no arguments and return no value. They report and
-return.
+`0x54`–`0x5B` — take no arguments and return no value. They report and
+return. `0x7C`'s table entry is bound to the same reporter, but the number
+never arrives there in its positive form (`spec/04` EE-7f); SYS-3c is what a
+caller of `0x7C` actually gets.
 
 **SYS-3a:** The reporter reads the syscall number from `$v1` **multiplied by
 four**: the dispatcher leaves the value as the byte index it used, and the
 reporter divides it back down. This refines `spec/04` EE-7a — `$v1` holds the
 number at the dispatcher, the scaled form at the handler — and a rebuild that
 un-scales it earlier must adjust the reporter to match.
+
+**SYS-3c:** Number `0x7C` is `Deci2Call(fno, param)` — the DECI2 host-debugger
+protocol, sixteen sub-functions selected by `fno`, dispatched on a frame of its
+own rather than through the syscall table (`spec/04` EE-7f). Every register is
+restored from that frame on the way out, which makes the ABI unusual in two
+ways a rebuild must reproduce:
+
+- **`$v0` comes back as the caller's own**, not as anything the kernel
+  computed. A sub-function delivers a result by writing one slot of the frame;
+  one that writes nothing is invisible.
+- **`$v1` comes back as `0x7C`**, the number the caller passed, not the
+  dispatcher's scaled index SYS-3a describes for every other slot.
+
+An `fno` outside `1`–`0x10` is the one case with an answer of its own: `-1`.
+
+Every sub-function is gated on state that only `fno 1`, which opens a channel,
+establishes, so on an image that never opens one they all do nothing. That is
+not an excuse to answer `0`: a title polling `fno 4` compares what came back
+against what it passed in, and a kernel that returns `0` instead of the
+caller's own register leaves it polling forever. This was found that way.
 
 **SYS-3b:** Slot `0x75` is **not** one of them. It is an empty handler that
 returns immediately, taking nothing and reporting nothing. A rebuild must keep

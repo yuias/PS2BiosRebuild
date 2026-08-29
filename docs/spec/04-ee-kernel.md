@@ -192,7 +192,10 @@ images agree. This is observable from outside the kernel, so a rebuild that
 helpfully puts the number back has changed the interface.
 
 **EE-7f:** Number `0x7C` is special-cased before the table lookup and takes its
-own path.
+own path -- and **only in its positive form**. The dispatcher tests for a
+negative number first and sends it straight to the table, so `syscall -0x7C`
+reaches the slot's table entry while `syscall 0x7C` never does. What the
+positive form reaches is `Deci2Call`; `spec/05` SYS-3c states its behaviour.
 
 ## EE-8: The syscall table
 
@@ -214,7 +217,12 @@ plus isolated pairs at `0x30`/`0x31`, `0x35`/`0x36`, `0x37`/`0x38`,
 
 **EE-8d:** Thirteen slots — `0x00`, `0x03`, `0x08`, `0x3F`, `0x54`–`0x5B`,
 `0x7C` — are bound to a handler that **reports the undefined number** rather
-than returning quietly. Slots `0x03` and `0x3F` are retired rather than never
+than returning quietly. `0x7C`'s entry is the reporter like the rest, but it
+is a table entry almost nothing reaches: EE-7f takes the positive form of that
+number away before the lookup, leaving only `syscall -0x7C` to arrive here.
+The entry is reproduced anyway — the table is what it is — but a rebuild that
+treats `0x7C` as *undefined behaviour* rather than as *an entry that is
+bypassed* breaks a caller of `Deci2Call`, which is what happened here. Slots `0x03` and `0x3F` are retired rather than never
 defined: the kernel carries a message for each blaming the caller's startup
 code. A rebuild keeps them occupied so an old caller is diagnosed instead of
 jumping into nothing.
