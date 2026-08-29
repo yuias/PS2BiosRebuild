@@ -118,6 +118,102 @@ rather than cosmetic — modules that already bound to `SYSCLIB`'s provisional
 Flags bit 0 is thus a "pin me" marker. It sits alongside the low-three-bits test
 `06` found on the import side, which the same flags field feeds.
 
+## The 42 `sysclib` ordinals
+
+This section exists because a retail title's own IOP modules, loaded from
+disc, import fifteen of them by number (8, 11, 12, 14, 17, 19, 20, 21, 22,
+23, 27, 29, 30, 32, 36 -- `docs/analysis/43` §8's twelve `.irx`), and a
+rebuild that answers the wrong one is worse than one that answers none.
+Every function below was identified from its own code, not from a name:
+
+```sh
+python3 tools/irxinfo.py <outdir>/SYSCLIB --dump-load <outdir>/SYSCLIB.load
+python3 tools/romdis.py <outdir>/SYSCLIB.load --cpu iop --vma 0 --range 0x0 0x1b90
+```
+
+Addresses are module-relative. Ordinals a title's disc modules import are in
+bold.
+
+| Ord | Addr | What it is | Signature, as implemented |
+| --- | --- | --- | --- |
+| 0 | `0x0` | the module entry | calls ordinal 1 and returns its result |
+| 1 | `0x20` | re-register both libraries | see "Superseding" above |
+| 2, 3, 39 | `0x130` | stubs | a bare `jr $ra` |
+| 4 | `0x16a0` | `setjmp` | `int setjmp(int buf[12])` -- ra, sp, fp, s0-s7, gp |
+| 5 | `0x16dc` | `longjmp` | returns `$a1` **unchanged**, so `longjmp(env, 0)` makes `setjmp` return 0 |
+| 6 | `0x960` | `toupper` | ctype flag `0x02` -> `c - 0x20` |
+| 7 | `0x9b0` | `tolower` | ctype flag `0x01` -> `c + 0x20` |
+| **8** | `0xa00` | look up the ctype table | `int f(int c)` -- one byte from the 256-entry table at `0x1af1`, **unmasked index** |
+| 9 | `0xa14` | the ctype table itself | returns the constant `0x1af1` |
+| 10 | `0xa30` | `memchr` | NULL or `n <= 0` -> NULL |
+| **11** | `0xa68` | `memcmp` | unsigned compare, but returns only -1/0/+1 |
+| **12** | `0xab0` | `memcpy` | word-copies through ordinal 40 when `(dst\|src\|n) & 3 == 0` |
+| 13 | `0xb18` | `memmove` | forward when `dst < src`, backward otherwise |
+| **14** | `0xb8c` | `memset` | word-fills through ordinal 41 when `c == 0` and `(s\|n) & 3 == 0` |
+| 15 | `0xbec` | `bcmp` | a plain call to `memcmp` |
+| 16 | `0xc0c` | `bcopy` | `(src, dst, n)` -- BSD order, then `memmove` |
+| **17** | `0xc34` | `bzero` | `memset(s, 0, n)` |
+| 18 | `0x1a0` | `prnt` | the formatting engine, `(out, ctx, fmt, ap)` |
+| **19** | `0x1750` | `sprintf` | `prnt` over a cursor writer |
+| **20** | `0xccc` | `strcat` | |
+| **21** | `0xd74` | `strchr` | |
+| **22** | `0xda8` | `strcmp` | |
+| **23** | `0xe0c` | `strcpy` | |
+| 24 | `0xe5c` | `strcspn` | |
+| 25 | `0xed0` | `index` | the same body as ordinal 21 |
+| 26 | `0xf04` | `rindex` | |
+| **27** | `0xf54` | `strlen` | NULL -> 0 |
+| 28 | `0xf80` | `strncat` | |
+| **29** | `0xff4` | `strncmp` | |
+| **30** | `0x107c` | `strncpy` | NUL-pads a short source |
+| 31 | `0x10f0` | `strpbrk` | |
+| **32** | `0x1154` | `strrchr` | the same body as ordinal 26 |
+| 33 | `0x11a4` | `strspn` | |
+| 34 | `0x1218` | `strstr` | |
+| 35 | `0x1288` | `strtok` | static state at `0x1b80`; not reentrant |
+| **36** | `0x1398` | `strtol` | |
+| 37 | `0x1524` | `atob` | `char *atob(char *s, int *v)` -- Sony's, **returns the end pointer** |
+| 38 | `0x1558` | `strtoul` | |
+| 40 | `0x1790` | word copy | `(dst, src, nbytes)`, copies `nbytes >> 2` words, 4-way unrolled |
+| 41 | `0x180c` | word fill | fills with the **whole 32-bit value**, not a byte pattern |
+
+The two duplicate pairs -- `0xd74`/`0xed0` and `0xf04`/`0x1154` -- are
+byte-identical bodies. Which ordinal Sony called `strchr` and which `index`
+is convention, not something the binary states; the customary assignment is
+used above and the choice does not matter to a caller.
+
+### Where these deviate from standard C
+
+A rebuild that writes "the obvious C function" gets several of these subtly
+wrong, and the callers are Sony's own modules, which were built against
+exactly this behaviour:
+
+- **`strcmp` and `strncmp` compare *signed* chars** (`lb`, then `subu`),
+  where the standard requires unsigned. `memcmp` does compare unsigned, but
+  answers only -1, 0 or +1 rather than the byte difference.
+- **Almost everything tolerates NULL** instead of faulting: `strlen(NULL)` is
+  0, `strcpy`/`strcat`/`strncpy` return NULL, and `strcmp`/`strncmp` define
+  an ordering in which NULL sorts below any string.
+- **`strcat` has an alias guard**: if the two arguments end at the same
+  address it returns NULL and copies nothing.
+- **`strtol`/`strtoul` let a prefix override the caller's base,
+  unconditionally** -- the base register is never tested before the prefix
+  scan, so `0x`/`0X` forces 16, `0b`/`0B` forces 2, and a leading `o`/`O`
+  forces 8 even when the caller asked for base 10. `strtol` accepts no `+`
+  and toggles sign on each consecutive `-`; `strtoul` accepts no sign at all.
+- **`longjmp(env, 0)` makes `setjmp` return 0**, not 1: the value is passed
+  through untouched.
+- **`prnt` has no floating-point conversions.** It handles the flags
+  `-`, `+`, space, `#`, `0`, `*` width and precision, the `h`/`l`/`L` size
+  prefixes and the conversions `c d i D u U o O x X p s n`; anything else is
+  emitted literally. A NULL `%s` prints `(null)`. It brackets its output with
+  two out-of-band calls to its writer, `0x200` before and `0x201` after.
+- **Ordinal 8 does not mask its index**, so a character outside `[-1, 0xFE]`
+  reads past the end of the ctype table.
+
+`SYSCLIB`'s own `stdio` table is 14 entries of `jr $ra`: it exists only to be
+superseded, per the section above.
+
 ## HEAPLIB builds on SYSMEM
 
 `HEAPLIB` (18 exports, no `.bss`) imports `sysmem` ordinals 4, 5 and 10 — and
