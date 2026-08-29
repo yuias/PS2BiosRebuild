@@ -198,8 +198,24 @@ exactly this behaviour:
   address it returns NULL and copies nothing.
 - **`strtol`/`strtoul` let a prefix override the caller's base,
   unconditionally** -- the base register is never tested before the prefix
-  scan, so `0x`/`0X` forces 16, `0b`/`0B` forces 2, and a leading `o`/`O`
-  forces 8 even when the caller asked for base 10. `strtol` accepts no `+`
+  scan. The shape is worth stating exactly, because it is not C's:
+
+  ```
+  143c  lb    $4, 0($16)          # the first character
+  1444  bne   $4, '0', 0x14a4     # not '0': try the bare-letter form
+  144c  $16++                     # it was '0'; look at the one after it
+  1458  beq   $3, 'X', +base 16
+  1468  beq   $3, 'B', +base 2
+  147c  beq   $3, 'b', +base 2
+  1484  bne   $3, 'x', +no prefix
+  14a4  jal   toupper             # the first character was NOT '0'
+  14b8  bne   $2, 'O', +no prefix
+  14c4  $16++ ; base = 8          # a bare leading `o` or `O`
+  ```
+
+  So `0x`/`0X`/`0b`/`0B` are two-character prefixes on a leading zero, and
+  octal is selected by a **bare** leading `o` or `O` -- not `0o`. All four
+  override whatever base the caller passed. `strtol` accepts no `+`
   and toggles sign on each consecutive `-`; `strtoul` accepts no sign at all.
 - **`longjmp(env, 0)` makes `setjmp` return 0**, not 1: the value is passed
   through untouched.
