@@ -177,7 +177,6 @@ struct HeldHi16 {
     uint32_t *address[kHeldHi16Max];
     uint32_t stored[kHeldHi16Max];         // what the file had in each `lui`
     uint32_t count;
-    bool applied;                          // a LO16 has used this run
 };
 
 // One REL entry, with the held HI16s (IRX-3a) threaded through by the caller.
@@ -196,34 +195,42 @@ static void applyRelocation(const Elf32Rel &entry, uint8_t *base, HeldHi16 &held
         break;
     }
     case kRMipsHi16:
-        // A HI16 after a run was used starts the next run; one right after
-        // another HI16 joins the run.
-        if (held.applied || held.count >= kHeldHi16Max) {
+        // IRX-3a: hold it for the LO16 that pairs with it. A HI16 right after
+        // another joins the run; a run is cleared by the LO16 that consumes
+        // it, so reaching here with entries held means this one joins them.
+        if (held.count >= kHeldHi16Max) {
             held.count = 0;
-            held.applied = false;
         }
-        held.address[held.count] = word;      // IRX-3a: hold it for its LO16
+        held.address[held.count] = word;
         held.stored[held.count] = *word;
         held.count++;
         break;
     case kRMipsLo16: {
-        // A LO16 with no HI16 held is malformed (IRX-3a) and is left alone:
-        // its high half is nowhere to be found, and address zero is not it.
-        if (held.count == 0) {
-            break;
-        }
         const uint32_t instruction = *word;
         const auto low = static_cast<int32_t>(
             static_cast<int16_t>(instruction & 0xFFFF));
-        const uint32_t address = (held.stored[0] << 16)
-                                  + static_cast<uint32_t>(low)
-                                  + reinterpret_cast<uint32_t>(base);
+        const uint32_t rebased =
+            static_cast<uint32_t>(low) + reinterpret_cast<uint32_t>(base);
+
+        // IRX-3a: a LO16 with nothing held repeats an address some earlier
+        // LO16 already paired a `lui` with, so that `lui` already carries the
+        // right high half and must not be touched again -- only this
+        // instruction's own low half moves. Rewriting a held `lui` here is
+        // what a previous version did, and when two runs interleave (`lui`,
+        // its LO16, another `lui`, its LO16, then a repeat of the first
+        // address) it wrote the first address's high half into the *second*
+        // `lui`. That only shows when the two carries differ, which depends
+        // on the load address -- so it was invisible until a module was
+        // inserted ahead of the affected one.
+        if (held.count == 0) {
+            *word = (instruction & 0xFFFF0000) | (rebased & 0xFFFF);
+            break;
+        }
+
+        const uint32_t address = (held.stored[0] << 16) + rebased;
         *word = (instruction & 0xFFFF0000) | (address & 0xFFFF);
 
-        // The carry out of the low half belongs to the high one. The run is
-        // kept, not dropped, so a compiler's `lui` shared by several LO16s of
-        // the same address (IRX-3a) has its high half recomputed for each --
-        // to the same value, since `stored` still holds what the file had.
+        // The carry out of the low half belongs to the high one.
         uint32_t high = address >> 16;
         if ((address & 0x8000) != 0) {
             high += 1;
@@ -232,7 +239,7 @@ static void applyRelocation(const Elf32Rel &entry, uint8_t *base, HeldHi16 &held
             const uint32_t hi_instruction = *held.address[k];
             *held.address[k] = (hi_instruction & 0xFFFF0000) | (high & 0xFFFF);
         }
-        held.applied = true;
+        held.count = 0;                       // consumed by this LO16
         break;
     }
     default:
@@ -256,7 +263,6 @@ static void relocate(const uint8_t *file, uint32_t base_address) {
         const uint8_t *rel_end = rel + sh.size;
         HeldHi16 held;
         held.count = 0;
-        held.applied = false;
         for (; rel < rel_end; rel += sizeof(Elf32Rel)) {
             applyRelocation(*reinterpret_cast<const Elf32Rel *>(rel), base,
                              held);

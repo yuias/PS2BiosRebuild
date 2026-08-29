@@ -84,10 +84,20 @@ addresses once a load-time delta is added — and `tools/mkirx.py` refuses a
 module where it cannot see that: a `HI16` must be followed, after at most
 eight other `HI16`, by a `LO16` of its symbol, and a `LO16` with no `HI16`
 before it must repeat, symbol and low half, one that was paired. A loader
-holds the run of `HI16` rather than one, applies the `LO16`'s carry to every
-one of it, and keeps the run after applying it, rather than dropping it, so
-that each further `LO16` recomputes the same high half; a `LO16` with nothing
-held is left alone. `tools/irxinfo.py --check` requires the pairing and no
+holds the run of `HI16` rather than one and applies the pairing `LO16`'s carry
+to every one of it, then **drops the run**: it has been consumed. A `LO16`
+that finds nothing held is one of the repeats above, so the `lui` it belongs
+to already carries the right high half from the pairing that did happen, and
+only this instruction's own low half is rebased -- no held `HI16` is touched.
+
+*A loader that keeps the run instead, and lets each further `LO16` rewrite it,
+is wrong and fails in a way that hides.* When two pairings interleave -- a
+`lui`, its `LO16`, a second `lui`, its `LO16`, then a repeat of the first
+address -- the repeat rewrites the **second** `lui` with the first address's
+high half. The two high halves differ only when the two addresses' low halves
+carry differently, which depends on where the module was loaded, so the module
+runs correctly until something is inserted ahead of it on the boot list. This
+project shipped that loader and found it exactly that way. `tools/irxinfo.py --check` requires the pairing and no
 longer equal counts.
 
 ## IRX-4: Library table header
