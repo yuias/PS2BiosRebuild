@@ -462,7 +462,7 @@ it as every `RegisterRpc`'s `qd` argument. Five `sceSifRegisterRpc` calls
 callback; every request served synchronously off `RpcLoop`, the same shape as
 `LOADFILE`, `docs/analysis/39` §4):
 
-| Thread | `sid` | Dispatch fn | Reply buffer |
+| Thread | `sid` | Dispatch fn | Request buffer |
 | --- | --- | --- | --- |
 | `0x44ac` | `0x80000592` | `0x204` | `.bss 0x67f0` |
 | `0x44ac` | `0x8000059A` | `0x32d8` | `.bss 0x6920` |
@@ -474,17 +474,25 @@ The task description that prompted this document named a `0x80000592`–
 `0x8000059C` range; the five actually registered fall inside it but do not
 fill it (`593`, `595`, `597`, `59A` — not, e.g., `594`/`596`/`598`/`599`).
 
-### `sid 0x80000592`: init and break
+### 5a. `sid 0x80000592`: init
 
-Not `fno`-switched at all: its dispatch function (`0x204`) reads the request
-buffer's first word and calls `sceCdInit` (ordinal 4, via `CDVDFSV`'s own
-import stub at `0x47f0`) with it, then unconditionally calls `sceCdBreak`
-(ordinal 39, stub `0x48d8`) with no argument, and acknowledges. This is a
-dedicated, single-purpose **init/reset** service — the natural binding for
-the EE's own `sceCdInit(mode)` call, distinct from the large multiplexed
-service below.
+Not `fno`-switched at all: `$a0` is never read anywhere in its dispatch
+function (`0x204`..`0x27c`). The body reads the request buffer's first word
+and calls `sceCdInit` (ordinal 4, via `CDVDFSV`'s own import stub at
+`0x47f0`) with it, brackets that call with two debug prints gated on the
+verbosity word at `0x5158`, stores `1` into `0x51b0` — an "initialised" flag
+whose reader was not found — and acknowledges. This is a dedicated,
+single-purpose **init** service, the natural binding for the EE's own
+`sceCdInit(mode)` call, distinct from the large multiplexed service below.
 
-### `sid 0x80000593`: the 25-`fno` table
+> **Correction.** An earlier pass of this section read the body as calling
+> `sceCdBreak` (ordinal 39, stub `0x48d8`) unconditionally after `sceCdInit`.
+> Re-reading the whole function finds **no call to `0x48d8` anywhere in it**;
+> the service does not break a command in flight. Reproduce with
+> `python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range
+> 0x204 0x280`.
+
+### 5b. `sid 0x80000593`: the 25-`fno` table
 
 `docs/analysis/27-osdsys-payload-and-config.md` had already found this
 service's dispatch function (`0x41b8`) jumping through a 25-entry table at
@@ -527,6 +535,53 @@ structurally the same shape as `LOADFILE`'s fixed 8-byte answer area
 (`docs/analysis/39` §4), sized to the largest single reply this service
 needs (the OSD configuration quartet's 16-byte block, `docs/analysis/26`).
 
+**The `fno` space is exactly 1..25, and an out-of-range `fno` is answered,
+not dropped.** The dispatch function's own bounds check is three
+instructions:
+
+```
+41c8  addiu $3, $7, -0x1        # $7 is fno
+41cc  sltiu $2, $3, 0x19        # (fno - 1) <u 25
+41d4  beqz  $2, 0x4470          # out of range
+41dc  sll   $2, $3, 0x2         # index = (fno - 1) * 4
+41e8  lw    $2, 0x50e8($1)      # table[fno - 1]
+41f0  jr    $2
+```
+
+The compare is unsigned on `fno - 1`, so `fno = 0` wraps to `0xFFFFFFFF` and
+is rejected along with everything above 25. The rejected path at `0x4470`
+prints `"sce_cdvd block IO :unrecognized code 0x%02x\n"` — but only if the
+verbosity word at `0x5158` is positive — and then **falls into the same
+shared epilogue at `0x4494` every served `fno` uses**, so the client still
+gets its acknowledgement, pointed at the same fixed `0x5e08` reply context
+with whatever the last call left in it. An unknown `fno` is a silent no-op
+here, never a stall.
+
+This matters for a rebuild because **a retail title sends an `fno` outside
+this range**: `SLPS-25918` was observed calling `fno = 0x22` on this `sid`
+and carrying on regardless (`docs/analysis/43` §11 records the same title's
+bind cluster). `fno 0x22` is not in this generation's table at all — it
+belongs to `XCDVDFSV`, the `X`-generation module in the same archive, whose
+own `0x80000593` dispatcher (`0x71e0`) is the identical shape with the bound
+widened to `sltiu (fno - 1), 0x38` — `fno 1..56` — over a table at `0x86b0`.
+There, `fno 0x22` reaches a trampoline at `0x73d8` and a wrapper at `0x595c`
+that calls `XCDVDMAN` ordinal 75, `sceCdMmode` [header], corroborated by the
+wrapper's own debug string `"Media_Mode\n"` at `0x82c4`. `XCDVDMAN` (v2.0b)
+exports 129 ordinals, so 75 exists there; it is above plain `CDVDMAN`'s
+62-slot ceiling (§0), exactly as §6's `sceCdMmode` row already noted.
+`XCDVDFSV`'s table also has holes — `fno`s `0x24`-`0x27`, `0x2a`-`0x2f`,
+`0x33`-`0x34` and `0x36`-`0x37` all point at `0x7630`, which is also that
+dispatcher's own out-of-range target — which is what confirms `0x22` is a
+genuine entry rather than filler.
+
+```sh
+python3 tools/irxinfo.py <outdir>/XCDVDFSV --dump-load <outdir>/XCDVDFSV.load
+python3 tools/romdis.py <outdir>/CDVDFSV.load  --cpu iop --vma 0 --range 0x41b8 0x4300
+python3 tools/romdis.py <outdir>/CDVDFSV.load  --cpu iop --vma 0 --range 0x4440 0x44b0
+python3 tools/romdis.py <outdir>/XCDVDFSV.load --cpu iop --vma 0 --range 0x71e0 0x7240
+python3 tools/romdis.py <outdir>/XCDVDFSV.load --cpu iop --vma 0 --range 0x595c 0x59b4
+```
+
 **`fno` 22 is structurally different from every other entry**: its wrapper
 (module offset `0x280`) is a multi-hundred-instruction function, not the
 2–4-instruction trampoline every other `fno` uses, and it reaches `sceCdRead`
@@ -542,33 +597,126 @@ through from the EE** — every ordinal a read-and-wait sequence needs is
 reachable from it — but its internal sub-opcode field was not decoded in this
 pass; see §9.
 
-### `sid`s `0x80000595`, `0x80000597`, `0x8000059A`: unresolved
+### 5c. `sid`s `0x80000597` and `0x8000059A`: search and disc-ready
 
-Registered (dispatch addresses `0x3f3c`, `0x2f0`, `0x32d8` respectively) but
-their dispatch bodies were not disassembled in this pass. `sceCdSearchFile`
-(ordinal 10) **is** among `CDVDFSV`'s 49 imported `CDVDMAN` ordinals but does
-**not** appear anywhere in `0x80000593`'s 25-entry table or in `0x80000592`'s
-fixed init/break pair — it must be reached through one of these three
-undecoded services (or nested inside `fno` 22's sub-dispatch). `libcdvd-rpc.h`
-[header] names four packet-shape groups, `cdvdfsv_rpc1`–`rpc4`, and documents
-`rpc4`'s wire shape as `sceCdlFILE` + `path[256]` + an EE destination address
-(optionally a DVD layer number) — exactly `sceCdSearchFile`/
-`sceCdLayerSearchFile`'s [header] argument shape — which is the strongest
-lead that one of these three sids is the search-file service, but modern
-`cdvdfsv.c`'s RPC grouping is a structural rewrite (6 exports vs. this
-retail image's 10, and it imports `dmacman`, which this retail `CDVDFSV`
-does not), so the header's `rpc1`–`rpc4` numbering cannot be mapped onto this
-retail image's five `sid`s by name alone — only by disassembling these three
-dispatch functions, which is left open (§9).
+Both are single-purpose, and neither is `fno`-switched: `$a0` is never read
+in either dispatch body.
 
-`sceCdDiskReady` (ordinal 13) is, notably, **not** among `CDVDFSV`'s imported
-`CDVDMAN` ordinals at all — so no `CDVDFSV` service can call it directly.
-Either a title's `sceCdDiskReady()` is served by folding into another
-ordinal's answer (`sceCdGetDiskType`/`sceCdStatus`, both present) somewhere
-inside one of the three undecoded services, or the EE-side `libcdvd` client
-computes disk-readiness itself from `sceCdStatus`'s returned drive state
-(`SCECdStatPause = 0x0A`, matching register `0xBF40200A` exactly, §2b) without
-a distinct RPC round trip. Left open, §9.
+**`0x80000597` is `sceCdSearchFile`**, and it settles `libcdvd-rpc.h`'s
+`rpc4` wire shape against this ROM's own bytes. The request buffer **is** the
+output struct:
+
+| Offset | What |
+| --- | --- |
+| `+0x00` | the `sceCdlFILE` the call fills, 0x20 bytes |
+| `+0x20` | the path, NUL-terminated |
+| `+0x120` | the EE address the filled `sceCdlFILE` goes back to |
+
+```
+31c  move  $4, $16                 # $a0 = the buffer          -> sceCdlFILE *file
+320  jal   0x4820                  # cdvdman.10  sceCdSearchFile
+324  addiu $5, $16, 0x20           # delay slot: $a1 = buffer + 0x20 -> const char *name
+330  sw    $16, 0x10($sp)          # SifDmaTransfer.src  = the buffer
+334  lw    $5,  0x120($16)         #              .dest  = the EE address
+33c  sw    $3,  0x18($sp)          #              .size  = 0x20
+344  jal   0x46e4                  # intrman.17 CpuSuspendIntr
+350  jal   0x47bc                  # sifman.7   sceSifSetDma(&transfer, 1)
+35c  jal   0x46ec                  # intrman.18 CpuResumeIntr
+36c  sw    $16, 0x0($2)            # reply[0] = sceCdSearchFile's return code
+```
+
+The answer therefore goes back **two ways at once**: the struct by DMA to the
+address the request named, and the return code alone in the service's own
+reply cell at `.bss 0x51f0`. There is no `sceSifDmaStat` wait — the reply
+packet `RpcLoop` sends afterwards travels the same channel, so the data is
+already ahead of it — and no drive-ready poll, retry or semaphore.
+
+**`0x8000059A` is `sceCdDiskReady`, and it calls no `CDVDMAN` ordinal at
+all.** Request word 0 is the mode: `0` spins on the N-command status register
+until `(status & 0xC0) == 0x40`, anything else checks once. The answer is `2`
+when ready and `6` otherwise (`SCECdComplete`/`SCECdNotReady` [header]),
+written to `.bss 0x5db8`.
+
+```
+32f0  lw   $16, 0x0($5)                        # mode
+3314  bnez $16, +skip                          # non-zero: check once
+3370  loop: lbu [0xBF402005]; andi 0xC0; bne 0x40 -> loop
+33bc  beq  $2, 0x40, +ready
+33c0  addiu $3, $zero, 0x2                     # delay slot, BOTH paths: ready = 2
+33d4  addiu $3, $zero, 0x6                     # not ready = 6
+```
+
+This closes §5's own open question about ordinal 13. `sceCdDiskReady` is
+absent from `CDVDFSV`'s import list because **no service needs it**: the one
+that answers a title's `sceCdDiskReady()` reads the register itself, the same
+register `CDVDMAN`'s ordinal 13 reads. Neither the "folded into another
+ordinal's answer" nor the "EE client computes it from `sceCdStatus`" reading
+offered there is what happens.
+
+### 5d. `sid 0x80000595`: a second, 14-`fno` table
+
+Not unresolved after all, and not a different mechanism: the same dispatch
+shape as `0x80000593` with a narrower bound — `sltiu (fno - 1), 0xe`, so
+`fno 1..14` — over a table at module offset `0x5060`, with the same
+acknowledged no-op for anything outside it (`0x417c`) and the same single
+shared exit, returning one reply cell at `0x5dc8`.
+
+| `fno` | Wrapper | `CDVDMAN` ordinal(s) reached |
+| --- | --- | --- |
+| 1 | `0x3f7c` → `0x4d8` | 6, 8, 11, 21 |
+| 2 | `0x3f94` → `0x15ac` | 8, 11, 21, 40 (+ `sifman.7`, `intrman.17/18`) |
+| 3 | `0x3fac` → `0xd8c` | 8, 11, 20, 21 |
+| 4 | `0x3fc4` → `0x340c` | 9 (+ `sifman.7/8`, `intrman.17/18`) |
+| 5 | `0x3fdc` | 7, then 11(2) |
+| 6 | `0x4040` | 5, then 11(2) |
+| 7 | `0x4074` | 15, then 11(2) |
+| 8 | `0x40a8` | 38, then 11(2) |
+| 9 | `0x411c` → `0x1d5c` | 6, 11, 46, 49, 50 |
+| 10 | `0x414c` → `0x273c` | 11, 40, 46, 49, 50 |
+| 11 | `0x4164` → `0x3c90` | 35 |
+| 12 | `0x40ec` → `0x3e0c` | 11, 54 |
+| 13 | `0x4104` → `0x380` | 6, 8, 11, 21, 44 (+ `sifman.7/8`, `intrman.17/18`, `thbase.33`) — the read-and-wait path |
+| 14 | `0x4134` → `0x3ee0` | **none** — the same `(status & 0xC0) == 0x40 ? 2 : 6` check as `0x8000059A`, without the blocking mode |
+
+`fno`s 1/2/3/9/10/12/13 hand their helper `($a0 = buffer, $a2 = 0x5dc8)`, so
+the helper writes the reply cell itself; 5/6/7/8/14 have the trampoline store
+`$v0` there.
+
+The five helpers at `0x4d8`, `0x15ac`, `0xd8c`, `0x1d5c` and `0x273c` were
+scanned for `jal` targets over a 0x400-byte window that did not reach their
+`jr $ra`, so **their ordinal lists may be truncated** — they cannot contain a
+wrong entry, only miss a late one. The other five terminated inside the
+window and are complete. The per-`fno` request-word layouts were not read
+except for `fno`s 5 and 6.
+
+### 5e. The buffers: one request buffer per service, one reply cell
+
+§5's table above lists what `sceSifRegisterRpc`'s `$a3` was given for each
+service. That argument is the **request** buffer — where the EE's arguments
+land before the call packet — not a reply buffer; the reply pointer is
+whatever each dispatch function *returns*, and those are four separate
+`.bss` cells. Sorting the five request buffers gives each service's size from
+the gap to the next:
+
+| `sid` | Request buffer | Size | Reply cell |
+| --- | --- | --- | --- |
+| `0x592` | `0x67f0` | `0x8` | — |
+| `0x597` | `0x67f8` | `0x128` | `0x51f0` |
+| `0x595` | `0x67b0` | `0x40` | `0x5dc8` |
+| `0x593` | `0x63a8` | `0x408` | `0x5e08` |
+| `0x59A` | `0x6920` | (last) | `0x5db8` |
+
+`0x597`'s `0x128` matches its `rpc4` shape exactly (`0x20 + 0x100 + 4`), and
+`0x593`'s `0x408` is what makes room for the configuration blocks
+`docs/analysis/26` describes. Nothing in any dispatch body checks the EE's
+`send_size` against the buffer it is about to fill.
+
+```sh
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x2f0  0x380
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x32d8 0x340c
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x3f3c 0x41b8
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x44ac 0x4620
+```
 
 ## 6. The exports a title's EE client calls
 
@@ -581,9 +729,9 @@ against §0/§5:
 | `sceCdRead(lbn, sectors, buf, mode)` | 6 | `fno 22` of `sid 0x80000593` (probable, §5) | non-blocking; issues the N-command and arms DMA channel 3, §3; requires a follow-up `sceCdSync` |
 | `sceCdSync(mode)` | 11 | `fno 11` and/or `fno 22` | `mode 0`=block until done, `mode 1`=poll once; polls `sceCdCheckCmd`'s word, §2b/§3 — not a semaphore wait |
 | `sceCdGetError()` | 8 | `fno 4` | returns the IRQ-2 handler's stored result byte |
-| `sceCdDiskReady(mode)` | 13 | **not directly reachable from `CDVDFSV`'s import list** — open, §5/§9 | polls `0xBF40200A` for `0x0A` via a bare register spin loop in blocking mode — **not** an event-flag wait, correcting the sibling-project lead in §7 |
+| `sceCdDiskReady(mode)` | 13 | `sid 0x8000059A` (and `fno 14` of `0x80000595`), which read the register themselves rather than calling the ordinal — §5c | polls `0xBF402005` for `(v & 0xC0) == 0x40` via a bare register spin loop in blocking mode — **not** an event-flag wait, correcting the sibling-project lead in §7. `CDVDMAN`'s own ordinal 13 polls `0xBF40200A` for `0x0A` instead; the two are different registers reaching the same answer |
 | `sceCdGetDiskType()` | 12 | `fno 3` | returns `0xBF40200F` raw, mapped onto `enum SCECdvdMediaType` [header] |
-| `sceCdSearchFile(file, name)` | 10 | one of `sid 0x80000595/597/59A` (unresolved which) | ISO9660 path walk, §4 |
+| `sceCdSearchFile(file, name)` | 10 | `sid 0x80000597` — §5c | ISO9660 path walk, §4; the filled `sceCdlFILE` goes back by DMA to the EE address at request `+0x120`, the return code through the reply cell |
 | `sceCdMmode(media)` | **absent** | — | ordinal `75` in current ps2sdk; **does not exist in this retail image's 62-entry export table** |
 | `sceCdStatus()` | 28 | `fno 12` | raw `0xBF40200A` mapped onto `enum SCECdvdDriveState` [header] (`Stop=0`, `ShellOpen=1`, `Spin=2`, `Read=6`, `Pause=0xA`, `Seek=0x12`, `Emg=0x20`) |
 | `sceCdStInit`/`StRead`/`StSeek`/`StStart`/`StStat`/`StPause`/`StResume`/`StStop` | 56–61 (`Pause`/`Resume` absent — see §0) | not yet resolved to a specific `fno` (out of scope for M2's boot-time reads; the CD streaming path is not on `SYSTEM.CNF`'s critical path) | the streaming API — `docs/analysis/12` already noted these exist; not chased further here |
@@ -669,16 +817,19 @@ own tools where possible, and marked accordingly:
   relies on the path table for performance) should still walk directory
   extents component by component the way the reference does, since nothing
   here confirms the path table is ever actually read by `CDVDMAN`.
-- **`CDVDFSV` is five RPC services on two threads**, not one: a fixed
-  init/reset service (`0x80000592`), the large 25-`fno` multiplexer
-  (`0x80000593`, `docs/analysis/27` plus this document), and three services
-  (`0x80000595`/`597`/`59A`) whose bodies remain to decode — very likely
-  including `sceCdSearchFile` and, on `0x593`'s own `fno 22`, the actual
-  `sceCdRead`/`sceCdSync` sector-read/wait pair a title's boot depends on.
-  A minimal M2 rebuild needs, at minimum: `0x80000592` for `sceCdInit`, and
-  whichever service+`fno` reaches `sceCdRead`/`sceCdSync`/`sceCdGetDiskType`
-  (most likely `0x80000593` `fno 22`/`fno 3`) for `SYSTEM.CNF` and `BOOT2` to
-  load.
+- **`CDVDFSV` is five RPC services on two threads**, not one: an init
+  service (`0x80000592`), two `fno` tables — the 25-entry one at
+  `0x80000593` (`docs/analysis/27` plus this document) and a 14-entry one at
+  `0x80000595` (§5d) — and two single-purpose services, `sceCdSearchFile`
+  (`0x80000597`) and `sceCdDiskReady` (`0x8000059A`), §5c. Both tables
+  reject an out-of-range `fno` by *answering* it, never by dropping it
+  (§5b), which is what lets a title built against a later generation's wider
+  table run against this one.
+- **A rebuild's own `CDVDFSV` needs its `CDVDMAN` to be deeper than the boot
+  path alone requires.** `0x80000595` reaches ordinals 5, 7, 9, 15, 20, 35,
+  38, 40, 44, 49, 50 and 54 across its fourteen `fno`s (§5d); a driver that
+  implements only the read/seek/search core answers thirteen of them with
+  nothing.
 
 ## 10. Open questions
 
@@ -687,10 +838,10 @@ own tools where possible, and marked accordingly:
   `sceCdReadCDDA`/`sceCdGetReadPos`/etc.) was not decoded. This is the
   single highest-value remaining gap: it is very likely the actual EE-facing
   entry point for a title's data-sector reads.
-- **`sid`s `0x80000595`, `0x80000597`, `0x8000059A`**: registered (dispatch
-  addresses `0x3f3c`, `0x2f0`, `0x32d8`) but their bodies were not
-  disassembled. `sceCdSearchFile` and (possibly) `sceCdDiskReady` must be
-  reachable through one of these three, or nested inside `fno 22`.
+- **`0x80000595`'s per-`fno` request-word layouts**, and the tails of its
+  five helpers at `0x4d8`, `0x15ac`, `0xd8c`, `0x1d5c` and `0x273c` — their
+  ordinal lists in §5d are from a bounded scan that did not reach `jr $ra`,
+  so they may be missing late calls.
 - **`fno 17`'s apparent call to both ordinal 34 (`sceCdWriteConfig`) and
   ordinal 35 (`sceCdReadKey`)** needs re-verification by direct disassembly
   of module offset `0x3c0c` — as reported this looks like two unrelated
@@ -724,6 +875,8 @@ own tools where possible, and marked accordingly:
   what actually blocks past that point (presumably a second semaphore) was
   not traced to an instruction.
 - **`sceCdMmode`'s absence**: confirmed absent from this retail image's
-  62-entry export table (it is ordinal `75` in current ps2sdk headers); if
-  any title this project targets calls it, the SDK client's own bind-failure
-  behaviour (not a working call) is what a faithful rebuild should produce.
+  62-entry export table (it is ordinal `75` in current ps2sdk headers), and
+  present in `XCDVDMAN`'s 129-entry one, where `XCDVDFSV`'s `fno 0x22`
+  reaches it (§5b). A title that calls it against this generation gets the
+  acknowledged no-op §5b describes, not a bind failure — which is what
+  `SLPS-25918` was observed relying on.
