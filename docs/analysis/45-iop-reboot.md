@@ -498,11 +498,21 @@ disc's own ELF load — which this pass did not disassemble.
   value) writes `SMFLG` at all — no ps2sdk header was available in this pass
   to confirm, and BOOT-10c's asymmetric write rule (`spec/03`) means an IOP
   write there could only set, not clear, that bit if it does.
-- **Whether a distinct `SIF_STAT_BOOTEND`-shaped bit exists** for an EE
-  client's `sceSifIopSync` to poll, versus a rebuild only ever needing
-  `SIF_STAT_SIFINIT`'s reappearance (§1's "What is inferred" reasoning). No
-  EE-side client code that actually calls `sceSifIopReset`/`sceSifIopSync`
-  was available to trace in this pass.
+- ~~**Whether a distinct `SIF_STAT_BOOTEND`-shaped bit exists**~~ —
+  **answered by observation, not by disassembly.** `SLPS-25918`, run against
+  this project's own image, sends the `0x80000003` packet and then spins on
+  syscall `0x7A` (`sceSifGetReg`) with `reg = 4` (`SMFLG`) from one
+  instruction, testing `0x40000` — and it spins there forever until that bit
+  is *raised*. So the bit exists, it is distinct from `SIF_STAT_SIFINIT`
+  (`0x10000`) and `SIF_STAT_CMDINIT` (`0x20000`), and the client waits for it
+  to **appear**, having cleared it itself before sending (a write from the EE
+  clears `SMFLG`, `spec/03` BOOT-10c). This corrects
+  `docs/analysis/43-fileio-and-title-boot.md` §8, which read the same loop as
+  polling "until it clears". Reproduce by running the image under an emulator
+  with a retail disc and the EE syscall trace on; the loop is the last thing
+  in it. What raises the bit on the reference — the merged kernel's own
+  `SIFMAN`/`SIFCMD` bring-up, or `REBOOT`'s conditional `sifman.5`/`sifman.22`
+  pair — is still not read from the ROM.
 - **`MODLOAD+0x12e0`'s final `jalr $16`** — very likely the hand-over into
   `UDNL`'s `entry(argc, argv, 0, module_record)`, but its four argument
   values were not cleanly decoded.

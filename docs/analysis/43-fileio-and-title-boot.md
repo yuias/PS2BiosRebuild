@@ -421,7 +421,9 @@ see §10.
 Immediately **before** the twelve loads, the same init function polls a
 function (`0x181de0`) with the literal path `"cdrom0:\MODULES\IOPRP310.IMG;1"`
 and then polls `SifGetReg(4) & 0x40000` (the same SBUS/SIF bit `sceSifInitCmd`
-polls, §7) until it clears — `0x181de0` internally references the string
+polls, §7) — **until it is set, not until it clears**; the polarity is
+corrected in `docs/analysis/45` §"Open questions", from a run of the title
+against this project's image where the loop was observed directly — `0x181de0` internally references the string
 `"rom0:UDNL"` (found once, nowhere else in the ELF), which is the pattern
 `docs/project-state.md`'s carried lead names for `sceSifIopReset` ("SIFCMD
 cid `0x80000003` reboots the IOP without the ROM stub"). **This was not
@@ -494,9 +496,14 @@ findings.
 
 ## 12. Unresolved
 
-- **`FILEIO`'s second RPC service, `sid = 0x80000003`** (§1): registered,
-  thread-backed, and its 3-mode dispatch fully read (alloc / free / open-
-  read-whole-file), but no caller or purpose was identified in this pass.
+- ~~**`FILEIO`'s second RPC service, `sid = 0x80000003`**~~ — **its caller
+  is now known.** `SLPS-25918` binds it, and only it, immediately after its
+  IOP reboot returns (§8's sequence), before any of the twelve module loads:
+  observed as a `0x80000009` bind packet for that `sid`, retried
+  indefinitely, once this project's image answered the reboot. Its *purpose*
+  is still open — the 3-mode dispatch (alloc / free / open-read-whole-file)
+  was read in §1, but which of the three the title asks for first was not
+  observed, since nothing answered the bind.
 - **The fno-6/fno-7 (`remove`/`mkdir`) fallthrough** (§3): read directly off
   the jump table's raw bytes and the thunks' instruction counts, but not
   exercised under a simulator or emulator, so whether it is genuinely

@@ -565,7 +565,66 @@ int sifDmaStat(uint32_t) {
     return send_running ? 0 : -1;
 }
 
-[[gnu::used]] ps2::module::ExportTable<9> sifman_exports = {
+void armReceive();
+
+// sifman ordinal 5, `sceSifSetDChain`: re-arm the receiving channel. The only
+// caller is REBOOT, which needs it because a reboot discards the channel's
+// in-flight state (docs/analysis/45 §1's outside lead, and the same thing an
+// emulator does on the reset command).
+int sifSetDChain() {
+    armReceive();
+    return 0;
+}
+
+// sifman ordinal 22: raise bits in SMFLG. From this side a write to SMFLG
+// only ever *sets* (BOOT-10c), so this cannot clear the EE's own bits, which
+// is what makes it safe to call after a reboot. The ordinal's identity is
+// inferred from the argument REBOOT passes it -- `0x00020000`,
+// SIF_STAT_CMDINIT's bit value -- and is one of docs/analysis/45's own open
+// questions.
+int sifSetSmFlag(uint32_t bits) {
+    writeWord(kSifSmflg, bits);
+    return 0;
+}
+
+// docs/analysis/34 §5 and 45 §1: a module can claim a command id of its own
+// and be called with the packet when one arrives, in the handler's own
+// context. The reference keeps two such tables, one for the system range and
+// one for the rest; ours is one, since a registration names its whole cid.
+struct CommandHandler {
+    uint32_t cid;
+    void (*function)(void *packet, void *arg);
+    void *arg;
+};
+
+constexpr uint32_t kCommandHandlers = 8;
+CommandHandler command_handlers[kCommandHandlers];
+
+// sifcmd ordinal 10, `sceSifAddCmdHandler(cid, handler, harg)` (analysis 45
+// §1 names the argument shape from REBOOT's own call site). A cid the built-in
+// dispatch already answers cannot be claimed.
+int addCmdHandler(uint32_t cid, void *function, void *arg) {
+    for (auto &entry : command_handlers) {
+        if (entry.cid == 0 || entry.cid == cid) {
+            entry.arg = arg;
+            entry.function = reinterpret_cast<void (*)(void *, void *)>(function);
+            entry.cid = cid;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+[[nodiscard]] const CommandHandler *findCommandHandler(uint32_t cid) {
+    for (const auto &entry : command_handlers) {
+        if (entry.cid == cid && entry.function != nullptr) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+[[gnu::used]] ps2::module::ExportTable<23> sifman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -577,10 +636,24 @@ int sifDmaStat(uint32_t) {
         ps2::module::slot(ps2::module::reservedHook),   // 2
         ps2::module::slot(ps2::module::reservedHook),   // 3
         ps2::module::slot(ps2::module::reservedHook),   // 4
-        ps2::module::slot(ps2::module::reservedHook),   // 5
+        ps2::module::slot(sifSetDChain),                // 5  sceSifSetDChain
         ps2::module::slot(ps2::module::reservedHook),   // 6
         ps2::module::slot(sifSetDma),                   // 7  sceSifSetDma
         ps2::module::slot(sifDmaStat),                  // 8  sceSifDmaStat
+        ps2::module::slot(ps2::module::reservedHook),   // 9
+        ps2::module::slot(ps2::module::reservedHook),   // 10
+        ps2::module::slot(ps2::module::reservedHook),   // 11
+        ps2::module::slot(ps2::module::reservedHook),   // 12
+        ps2::module::slot(ps2::module::reservedHook),   // 13
+        ps2::module::slot(ps2::module::reservedHook),   // 14
+        ps2::module::slot(ps2::module::reservedHook),   // 15
+        ps2::module::slot(ps2::module::reservedHook),   // 16
+        ps2::module::slot(ps2::module::reservedHook),   // 17
+        ps2::module::slot(ps2::module::reservedHook),   // 18
+        ps2::module::slot(ps2::module::reservedHook),   // 19
+        ps2::module::slot(ps2::module::reservedHook),   // 20
+        ps2::module::slot(ps2::module::reservedHook),   // 21
+        ps2::module::slot(sifSetSmFlag),                // 22 raises SMFLG bits
         nullptr,
     },
 };
@@ -603,7 +676,7 @@ int sifDmaStat(uint32_t) {
         ps2::module::slot(ps2::module::reservedHook),   // 7
         ps2::module::slot(ps2::module::reservedHook),   // 8
         ps2::module::slot(ps2::module::reservedHook),   // 9
-        ps2::module::slot(ps2::module::reservedHook),   // 10
+        ps2::module::slot(addCmdHandler),               // 10 sceSifAddCmdHandler
         ps2::module::slot(ps2::module::reservedHook),   // 11
         ps2::module::slot(ps2::module::reservedHook),   // 12
         ps2::module::slot(ps2::module::reservedHook),   // 13
@@ -665,7 +738,10 @@ int servePacket(void *) {
         serveFile(*reinterpret_cast<const Request *>(body));
         break;
     default:
-        break;                                   // nothing registered for it
+        if (const CommandHandler *entry = findCommandHandler(header.cid)) {
+            entry->function(receive, entry->arg);
+        }
+        break;
     }
     armReceive();
     return 1;

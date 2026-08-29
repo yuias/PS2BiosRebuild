@@ -531,6 +531,27 @@ later `XCDVDFSV`'s wider table sends `fno 0x22` here and carries on when the
 answer is a no-op. The reference's own debug printing, and the "initialised"
 flag `0x80000592` raises for no reader, are not reproduced.
 
+**`REBOOT` answers the reset command but does not reboot.** `docs/analysis/45`.
+The wire protocol is the reference's: `sceSifAddCmdHandler(0x80000003, ...)`
+from a worker thread, a dispatch-context handler that only records the
+packet's `arglen`/`mode`/`arg` and wakes that thread, and the worker doing
+everything blocking. What the worker does, though, is re-arm the receiving
+channel and raise `SMFLG`'s `SIF_STAT_SIFINIT`, `SIF_STAT_CMDINIT` and
+`SIF_STAT_BOOTEND` — not tear down the resident modules, re-apply the bus
+table, or hand the argument to `UDNL` for the version merge. Nothing opens
+the image the argument names. A client therefore comes back to the same
+modules it had, where a real reboot would give it whichever of the named
+image's and `rom0:`'s modules is the newer per name. The bits are raised
+after a 20 ms delay, because whether a client clears `SMFLG` before or after
+sending the packet was not established and an instant raise would be erased
+by the later order. `EESYNC` gained the three library calls this needs:
+`sifcmd` ordinal 10 (`sceSifAddCmdHandler`, an eight-entry table consulted
+for any command id the built-in dispatch does not answer), `sifman` ordinal 5
+(`sceSifSetDChain`, which re-arms the receiver) and `sifman` ordinal 22
+(raise `SMFLG` bits — the ordinal's identity is inferred from the argument
+the reference's `REBOOT` passes it, and is one of `docs/analysis/45`'s open
+questions).
+
 **`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
 and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with
 `{ "EELOAD", path, argv... }`, and `EELOAD` asks the IOP's `LOADFILE` for the
