@@ -9,7 +9,7 @@ the working document and is kept current.
 > kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus in
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
-> is thin is *depth*: seventeen of the boot list's twenty-nine modules exist
+> is thin is *depth*: eighteen of the boot list's twenty-nine modules exist
 > plus one loadable on request, seventy-nine of the 125 syscall slots are
 > served, and both processors take interrupts and switch threads from them.
 >

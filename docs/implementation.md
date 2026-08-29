@@ -536,6 +536,20 @@ later `XCDVDFSV`'s wider table sends `fno 0x22` here and carries on when the
 answer is a no-op. The reference's own debug printing, and the "initialised"
 flag `0x80000592` raises for no reader, are not reproduced.
 
+**`SYSCLIB` is built, and follows the reference's C rather than the
+standard's.** `docs/analysis/08`'s ordinal table. All 42 ordinals exist,
+including the ones the standard would call wrong: signed character
+comparison in `strcmp`/`strncmp`, NULL tolerance throughout, `strcat`'s alias
+guard, `strtol`'s base prefix overriding the caller's base, and a `longjmp`
+that passes its value through so `longjmp(env, 0)` makes `setjmp` return 0.
+The ctype table is built from the classification the reference's own table
+carries, digits without a hex flag and the space character as punctuation
+included. `setjmp`/`longjmp` are hand-written assembly, since no C body can
+save and restore raw registers. The provisional `stdio` table is registered
+at 1.01 directly rather than by storing 1.02 and decrementing it the way the
+reference does; the registration a client sees is the same, and `rom0:STDIO`
+supersedes it either way.
+
 **`REBOOT` answers the reset command but does not reboot.** `docs/analysis/45`.
 The wire protocol is the reference's: `sceSifAddCmdHandler(0x80000003, ...)`
 from a worker thread, a dispatch-context handler that only records the

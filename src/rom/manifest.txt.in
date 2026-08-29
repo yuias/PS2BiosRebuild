@@ -17,6 +17,7 @@ EXCEPMAN      @PS2_BINARY_DIR@/excepman.irx   @@PS2_BINARY_DIR@/excepman.extinfo
 INTRMAN       @PS2_BINARY_DIR@/intrman.irx    @@PS2_BINARY_DIR@/intrman.extinfo
 TIMRMAN       @PS2_BINARY_DIR@/timrman.irx    @@PS2_BINARY_DIR@/timrman.extinfo
 THREADMAN     @PS2_BINARY_DIR@/threadman.irx  @@PS2_BINARY_DIR@/threadman.extinfo
+SYSCLIB       @PS2_BINARY_DIR@/sysclib.irx    @@PS2_BINARY_DIR@/sysclib.extinfo
 DMACMAN       @PS2_BINARY_DIR@/dmacman.irx    @@PS2_BINARY_DIR@/dmacman.extinfo
 IOMAN         @PS2_BINARY_DIR@/ioman.irx      @@PS2_BINARY_DIR@/ioman.extinfo
 MODLOAD       @PS2_BINARY_DIR@/modload.irx    @@PS2_BINARY_DIR@/modload.extinfo

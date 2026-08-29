@@ -209,7 +209,33 @@ exactly this behaviour:
   emitted literally. A NULL `%s` prints `(null)`. It brackets its output with
   two out-of-band calls to its writer, `0x200` before and `0x201` after.
 - **Ordinal 8 does not mask its index**, so a character outside `[-1, 0xFE]`
-  reads past the end of the ctype table.
+  reads past the end of the ctype table. The table is not even 256 bytes
+  long: it runs to `0x9e` and the module image ends there, so every index
+  from `0x9f` up is already off the end.
+
+The table's own contents, read off the image rather than assumed, are:
+
+| Flags | Characters |
+| --- | --- |
+| `0x20` control | `0x00`-`0x08`, `0x0E`-`0x1F`, `0x7F` |
+| `0x08` space | `0x09`-`0x0D` |
+| `0x18` space + punct | `0x20`, the space character itself |
+| `0x10` punct | `0x21`-`0x2F`, `0x3A`-`0x40`, `0x5B`-`0x60`, `0x7B`-`0x7E` |
+| `0x04` digit | `0x30`-`0x39` |
+| `0x41` upper + hex | `A`-`F` |
+| `0x01` upper | `G`-`Z` |
+| `0x42` lower + hex | `a`-`f` |
+| `0x02` lower | `g`-`z` |
+| `0x00` | `0x80`-`0x9e`, and nothing beyond |
+
+Two of those are not what a fresh implementation would write: **a digit
+carries no hex flag** -- only the six letters at each case do -- and **the
+space character is `0x18`**, punctuation as well as space, where every other
+whitespace character is `0x08` alone.
+
+```sh
+python3 -c "d=open('<outdir>/SYSCLIB.load','rb').read(); print(d[0x1af1:0x1b91].hex())"
+```
 
 `SYSCLIB`'s own `stdio` table is 14 entries of `jr $ra`: it exists only to be
 superseded, per the section above.
