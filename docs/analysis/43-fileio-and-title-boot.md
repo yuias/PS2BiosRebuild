@@ -497,13 +497,38 @@ findings.
 ## 12. Unresolved
 
 - ~~**`FILEIO`'s second RPC service, `sid = 0x80000003`**~~ — **its caller
-  is now known.** `SLPS-25918` binds it, and only it, immediately after its
-  IOP reboot returns (§8's sequence), before any of the twelve module loads:
-  observed as a `0x80000009` bind packet for that `sid`, retried
-  indefinitely, once this project's image answered the reboot. Its *purpose*
-  is still open — the 3-mode dispatch (alloc / free / open-read-whole-file)
-  was read in §1, but which of the three the title asks for first was not
-  observed, since nothing answered the bind.
+  is now known, and so is what it is.** `SLPS-25918` binds it immediately
+  after its IOP reboot returns (§8's sequence), before any of the twelve
+  module loads. Reading the dispatch to the byte (below) names it: it is the
+  **IOP-heap service** the SDK's `sceSifAllocIopHeap` /
+  `sceSifFreeIopHeap` / `sceSifLoadIopHeap` trio talks to. Its own strings
+  say as much — `"sce_iopmem: unrecognized code %x\n"` on the dispatch's
+  reject path and `"iop heap service (99/11/03)\n"` as the thread's banner.
+
+  The switch is on the RPC `fno` itself, not on a word in the request, and
+  every path — including a rejected `fno` — returns the same four-byte
+  `.bss` cell at `0x1a90`, so a rejected call is acknowledged with whatever
+  the previous call left there. The request buffer is `0x1b00` and, from the
+  module's own end, exactly `0x100` bytes.
+
+  | `fno` | Request | Reply at `0x1a90` |
+  | --- | --- | --- |
+  | 1 | `+0`: size | the pointer from `AllocSysMemory(type 0, size, addr 0)`, or 0 |
+  | 2 | `+0`: pointer | `FreeSysMemory`'s return |
+  | 3 | `+0`: destination IOP address; `+4`: the path, inline | 0, or -1 if `open` was refused |
+
+  `fno 3` is `open(path, flags 1)`, `lseek(fd, 0, SEEK_END)` for the size,
+  `lseek(fd, 0, SEEK_SET)`, one `read` of the whole file **straight into the
+  IOP address the request named** — no staging through §2's bounce buffer,
+  no chunking — then `close`. The size is never reported back and neither
+  `read`'s nor `close`'s return is checked; a refused `open` is the only
+  failure it can answer. One instruction is load-bearing and easy to lose:
+  the `SEEK_END` result is captured in the *delay slot* of the second
+  `lseek`'s call, before that call clobbers `$v0`.
+
+  ```sh
+  python3 tools/romdis.py <outdir>/FILEIO.load --cpu iop --vma 0 --range 0xdb0 0x1000
+  ```
 - **The fno-6/fno-7 (`remove`/`mkdir`) fallthrough** (§3): read directly off
   the jump table's raw bytes and the thunks' instruction counts, but not
   exercised under a simulator or emulator, so whether it is genuinely

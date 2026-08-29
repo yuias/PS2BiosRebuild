@@ -4,11 +4,13 @@
 // docs/spec/06-iop-kernel.md IOP-5f/g/h (LOADFILE's own thread/RPC shape,
 // mirrored here) and docs/analysis/43-fileio-and-title-boot.md §1-§5, which
 // is the analysis this file follows. The module exports nothing: its entry
-// starts one thread, priority 0x60 on a 4 KiB stack, and that thread
-// registers server `sid 0x80000001` and loops on its queue forever. The
-// reference also registers a second, unidentified service (`sid
-// 0x80000003`, analysis §1) -- not needed here, since nothing this project
-// builds calls it (analysis §12).
+// starts two threads, both priority 0x60, and each registers one server and
+// loops on its own queue forever. `sid 0x80000001` is the file RPC proper,
+// on a 4 KiB stack; `sid 0x80000003` is the IOP-heap service -- allocate,
+// free, and load a whole file into IOP memory -- on a 2 KiB one. The second
+// was analysis §12's "registered, dispatch read, no caller identified"; the
+// caller is a retail title, which binds it immediately after rebooting the
+// IOP and before loading any of its own modules.
 //
 // Deviation from the reference (docs/implementation.md carries the summary):
 // our EESYNC does not implement `sceSifGetOtherData` (sifcmd ordinal 23,
@@ -39,6 +41,11 @@ constexpr uint32_t kThreadPriority = 0x60;
 constexpr uint32_t kThreadStack = 0x1000;
 constexpr uint32_t kThreadAttr = 0x02000000;    // TH_C [header]
 
+// The heap service (§1): its own server, buffers and thread.
+constexpr uint32_t kHeapServerId = 0x80000003;
+constexpr uint32_t kHeapRequestBytes = 0x100;   // §1: what the reference's .bss leaves it
+constexpr uint32_t kHeapThreadStack = 0x800;
+
 struct ThreadParameters {
     uint32_t attr;
     uint32_t option;
@@ -63,12 +70,19 @@ int _import_ioman_lseek(int fd, int offset, int whence);
 int _import_ioman_getstat(const char *path, void *stat);
 int _import_intrman_suspend(uint32_t *state);
 int _import_intrman_resume(uint32_t state);
+int _import_sysmem_allocate(uint32_t mode, uint32_t size, uint32_t address);
+int _import_sysmem_release(uint32_t address);
 }
 
 alignas(16) uint32_t request[kRequestBytes / 4];
 alignas(16) int32_t answer[4];
 Server server;
 Queue queue;
+
+alignas(16) uint32_t heap_request[kHeapRequestBytes / 4];
+alignas(16) int32_t heap_answer[4];
+Server heap_server;
+Queue heap_queue;
 
 // --- fno dispatch table (analysis §3; only what M2 needs is served) ---------
 
@@ -254,6 +268,69 @@ void *serve(uint32_t fno, void *buffer, uint32_t) {
     return answer;
 }
 
+// --- the heap service, `sid 0x80000003` (analysis §1) ------------------------
+//
+// Its three functions are switched on the RPC `fno` itself, not on a word in
+// the request, and every one of them -- including an fno it does not know --
+// answers from the same four-byte cell. An unknown fno leaves that cell
+// alone, so the reply carries whatever the previous call left there; that is
+// the reference's own behaviour, the same acknowledged-no-op shape
+// `CDVDFSV`'s two tables use (`docs/analysis/42` §5b).
+
+constexpr uint32_t kHeapAlloc = 1;
+constexpr uint32_t kHeapFree = 2;
+constexpr uint32_t kHeapLoad = 3;
+constexpr uint32_t kAllocLowest = 0;            // SMEM_Low [header]
+constexpr int kOpenReadOnly = 1;
+constexpr int kSeekSet = 0;
+constexpr int kSeekEnd = 2;
+constexpr uint32_t kHeapPathOffset = 4;
+
+// fno 3: read a whole file straight into the IOP address the request names.
+// No staging through the bounce buffer and no chunking, and the file's size
+// is never reported back -- a refused `open` is the only failure answered.
+[[nodiscard]] int32_t loadIntoHeap(const uint32_t *words) {
+    const auto *path = reinterpret_cast<const char *>(
+        reinterpret_cast<const uint8_t *>(words) + kHeapPathOffset);
+    const int fd = _import_ioman_open(path, kOpenReadOnly);
+    if (fd < 0) {
+        return -1;
+    }
+    const int size = _import_ioman_lseek(fd, 0, kSeekEnd);
+    _import_ioman_lseek(fd, 0, kSeekSet);
+    (void)_import_ioman_read(fd, reinterpret_cast<void *>(words[0]), size);
+    _import_ioman_close(fd);
+    return 0;
+}
+
+void *serveHeap(uint32_t fno, void *buffer, uint32_t) {
+    auto *words = static_cast<uint32_t *>(buffer);
+    switch (fno) {
+    case kHeapAlloc:
+        heap_answer[0] = _import_sysmem_allocate(kAllocLowest, words[0], 0);
+        break;
+    case kHeapFree:
+        heap_answer[0] = _import_sysmem_release(words[0]);
+        break;
+    case kHeapLoad:
+        heap_answer[0] = loadIntoHeap(words);
+        break;
+    default:
+        break;                                  // acknowledged, cell untouched
+    }
+    return heap_answer;
+}
+
+void heapThread(void *) {
+    _import_sifcmd_init_rpc(0);
+    _import_sifcmd_set_rpc_queue(&heap_queue,
+                                 static_cast<uint32_t>(_import_thbase_get_id()));
+    _import_sifcmd_register_rpc(&heap_server, kHeapServerId,
+                                reinterpret_cast<void *>(serveHeap), heap_request,
+                                nullptr, nullptr, &heap_queue);
+    _import_sifcmd_rpc_loop(&heap_queue);
+}
+
 void serverThread(void *) {
     _import_sifcmd_init_rpc(0);
     _import_sifcmd_set_rpc_queue(&queue, static_cast<uint32_t>(_import_thbase_get_id()));
@@ -295,20 +372,32 @@ PS2_IMPORT(_import_intrman_suspend, 17)
 PS2_IMPORT(_import_intrman_resume, 18)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("sysmem\0\0", 0x0101)
+PS2_IMPORT(_import_sysmem_allocate, 4)
+PS2_IMPORT(_import_sysmem_release, 5)
+PS2_IMPORTS_END()
+
 extern "C" {
 
-int _module_start(int, char **) {
+[[nodiscard]] bool startThread(void (*entry)(void *), uint32_t stack_size) {
     ThreadParameters parameters;
     parameters.attr = kThreadAttr;
     parameters.option = 0;
-    parameters.entry = serverThread;
-    parameters.stack_size = kThreadStack;
+    parameters.entry = entry;
+    parameters.stack_size = stack_size;
     parameters.priority = kThreadPriority;
     const int id = _import_thbase_create(&parameters);
     if (id < 0) {
+        return false;
+    }
+    return _import_thbase_start(static_cast<uint32_t>(id), 0) >= 0;
+}
+
+int _module_start(int, char **) {
+    if (!startThread(serverThread, kThreadStack) ||
+        !startThread(heapThread, kHeapThreadStack)) {
         return 1;
     }
-    _import_thbase_start(static_cast<uint32_t>(id), 0);
     return 0;                                   // resident
 }
 

@@ -500,8 +500,13 @@ ordinals outside the twelve it implements share one "return 0" stub so a
 client's import still binds. That shallowness is what bounds `CDVDFSV`
 below. Our `FILEIO` serves
 `open`/`close`/`read`/`lseek`/`getstat` and answers every other function of
-its table `-1`; the reference's second service (`sid 0x80000003`) does not
-exist here. `EESYNC` has no `sceSifGetOtherData` (`sifcmd` ordinal 23), which
+its table `-1`. Its second service, `sid 0x80000003` -- the IOP-heap
+service, `docs/analysis/43` §12 -- is built: all three of its functions
+(allocate, free, and read a whole file into an IOP address the request
+names), on its own thread and queue, with the same acknowledged-no-op for an
+`fno` it does not know. Its allocations come from `SYSMEM`'s bump allocator,
+so a free that is not the most recent one is refused where the reference's
+would succeed (IOP-4). `EESYNC` has no `sceSifGetOtherData` (`sifcmd` ordinal 23), which
 the reference uses to place a `read`'s unaligned head and tail at an EE
 address of any alignment, so ours sends the whole quadword those bytes fall
 in, zero-filled around them -- the same thing `LOADFILE` does for a segment's
