@@ -495,9 +495,10 @@ manager exists (IOP-3j), which the gate lists.
 **`CDVDMAN` serves one datapattern, and `FILEIO` has no arbitrary-alignment
 push.** IOP-8 and IOP-9. Our `CDVDMAN` implements the plain 2048-byte sector
 (datapattern 0) and ignores `sceCdRead`'s mode; the S-command families
-(`docs/analysis/26`), the streaming API and `CDVDFSV`'s RPC surface are not
-built, and the fifty ordinals outside the twelve it implements share one
-"return 0" stub so a client's import still binds. Our `FILEIO` serves
+(`docs/analysis/26`) and the streaming API are not built, and the fifty
+ordinals outside the twelve it implements share one "return 0" stub so a
+client's import still binds. That shallowness is what bounds `CDVDFSV`
+below. Our `FILEIO` serves
 `open`/`close`/`read`/`lseek`/`getstat` and answers every other function of
 its table `-1`; the reference's second service (`sid 0x80000003`) does not
 exist here. `EESYNC` has no `sceSifGetOtherData` (`sifcmd` ordinal 23), which
@@ -507,6 +508,28 @@ in, zero-filled around them -- the same thing `LOADFILE` does for a segment's
 unaligned lead (IOP-5h), and it clobbers up to fifteen bytes on either side
 of the caller's range. The bounce buffer is a fixed 4 KiB rather than the
 reference's probe from 16 KiB downward.
+
+**`CDVDFSV` registers all five services and serves three of them.**
+`docs/analysis/42` §5. The module's shape is the reference's: five
+`sceSifRegisterRpc` calls across two long-lived threads, each thread reusing
+one queue, no completion callback anywhere, one request buffer per service
+sized to that service's own largest request and one small fixed reply cell.
+`0x80000592` (`sceCdInit`), `0x80000597` (`sceCdSearchFile`, including the
+DMA of the filled `sceCdlFILE` to the EE address the request names) and
+`0x8000059A` (`sceCdDiskReady`, reading the status register directly as the
+reference does) are served in full. Of the two `fno` tables, `0x80000593`
+serves the three `fno`s that are one implemented `CDVDMAN` ordinal each
+(`sceCdGetDiskType`, `sceCdGetError`, `sceCdStatus`) and `0x80000595` serves
+only its `fno 14`, which needs no ordinal at all; every other `fno` in both
+answers zeroes rather than a plausible-looking wrong value. `fno 22` of
+`0x80000593` — the reference's own multi-way dispatcher, and probably the
+route a title's `sceCdRead`/`sceCdSync` actually takes — is among them: its
+sub-opcode field is undecoded (`docs/analysis/42` §10) and is not guessed at.
+Both tables reject an out-of-range `fno` by *answering* it, which is the
+reference's behaviour and is load-bearing: a retail title built against the
+later `XCDVDFSV`'s wider table sends `fno 0x22` here and carries on when the
+answer is a no-op. The reference's own debug printing, and the "initialised"
+flag `0x80000592` raises for no reader, are not reproduced.
 
 **`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
 and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with

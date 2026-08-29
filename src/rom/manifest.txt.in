@@ -26,6 +26,7 @@ EESYNC        @PS2_BINARY_DIR@/eesync.irx     @@PS2_BINARY_DIR@/eesync.extinfo
 LOADFILE      @PS2_BINARY_DIR@/loadfile.irx   @@PS2_BINARY_DIR@/loadfile.extinfo
 CDVDMAN       @PS2_BINARY_DIR@/cdvdman.irx    @@PS2_BINARY_DIR@/cdvdman.extinfo
 FILEIO        @PS2_BINARY_DIR@/fileio.irx     @@PS2_BINARY_DIR@/fileio.extinfo
+CDVDFSV       @PS2_BINARY_DIR@/cdvdfsv.irx    @@PS2_BINARY_DIR@/cdvdfsv.extinfo
 SIO2MAN       @PS2_BINARY_DIR@/sio2man.irx    @@PS2_BINARY_DIR@/sio2man.extinfo
 OSDSYS        @PS2_OSDSYS@                    @@PS2_SOURCE_DIR@/src/rom/extinfo/osdsys.txt
 EELOAD        @PS2_BINARY_DIR@/eeload.bin     @@PS2_SOURCE_DIR@/src/rom/extinfo/eeload.txt

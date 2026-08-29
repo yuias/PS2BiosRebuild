@@ -148,6 +148,8 @@ ps2AddModule(cdvdman MODULE cdvd_driver VERSION 1.00
     SOURCES src/iop/cdvdman.cpp)
 ps2AddModule(fileio MODULE FILEIO_service VERSION 1.00
     SOURCES src/iop/fileio.cpp)
+ps2AddModule(cdvdfsv MODULE cdvd_EE_driver VERSION 1.00
+    SOURCES src/iop/cdvdfsv.cpp)
 # Not on the boot list: the first module a program loads on request.
 ps2AddModule(sio2man MODULE sio2man VERSION 1.00
     SOURCES src/iop/sio2man.cpp)
@@ -234,7 +236,7 @@ add_custom_command(
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf dmacman.elf
             ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
-            cdvdman.elf fileio.elf sio2man.elf osdsys.elf eeload.elf
+            cdvdman.elf fileio.elf cdvdfsv.elf sio2man.elf osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")

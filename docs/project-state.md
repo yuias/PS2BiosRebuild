@@ -9,7 +9,7 @@ the working document and is kept current.
 > kernel, meets the IOP across the SIF, fetches `rom0:OSDSYS` over the bus in
 > the reference's own packet framing and runs it — `spec/03` BOOT-1 to BOOT-11
 > and `spec/04` EE-1 to EE-9, on our own code rather than the reference's. What
-> is thin is *depth*: twelve of the boot list's twenty-nine modules exist
+> is thin is *depth*: sixteen of the boot list's twenty-nine modules exist
 > plus one loadable on request, seventy-nine of the 125 syscall slots are
 > served, and both processors take interrupts and switch threads from them.
 >
@@ -130,7 +130,7 @@ reference and the reason for it.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
-| The disc and the EE's file service (IOP-8, IOP-9) | **built, untested against a disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC; nothing reads a disc yet, so only the boot's own gates cover them |
+| The disc and the EE's file service (IOP-8, IOP-9) | **built and exercised against a retail disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC, and `CDVDFSV`'s five RPC services, of which `sceCdInit`, `sceCdSearchFile` and `sceCdDiskReady` are served in full and the two `fno` tables only as deep as `CDVDMAN` goes (`docs/implementation.md`) |
 | IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
 | The disc's own boot target | **read from the disc** — the program in the `OSDSYS` slot binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`. With a retail disc attached the console prints that path; with none, it says so and stops |
@@ -451,9 +451,14 @@ simulator, in this order:
   steady state on PCSX2. With a disc attached the boot now reads `BOOT2=` off
   the disc, loads the named ELF and enters it, and the title's own runtime
   comes up far enough to complete `SifInitRpc` over our SIF and start binding
-  RPC servers. It stops at the first one the image does not provide,
-  `0x80000592` — `CDVDFSV`'s, which is the next thing to build. This needs `CDVDMAN`/`CDVDFSV` and the modules a title
-  loads from `rom0:`. `EELOAD` at the address PCSX2's fast boot hooks is
+  RPC servers. Those binds are answered now: it calls `sceCdInit`, asks
+  `0x80000593` for an `fno` only the later `XCDVDFSV` generation has — and is
+  correctly told nothing, as the reference would — and then **reboots the
+  IOP**, `cid 0x80000003` with `"rom0:UDNL cdrom0:\MODULES\IOPRP310.IMG;1"`,
+  where it now waits. Nothing answers that command yet, so the title spins in
+  `sceSifIopSync` on `SMFLG`'s `0x40000`; `docs/analysis/45` is the analysis
+  for what has to happen next. Past it the title loads its own twelve IOP
+  modules from `cdrom0:\MODULES\`. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
