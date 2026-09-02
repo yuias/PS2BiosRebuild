@@ -307,6 +307,41 @@ These are fixed by how importers call them and must not move:
 | `intrman` | 17, 18 | critical section enter / leave (aliased at 19, 20) |
 | `sysmem` | 4, 5 | allocate / free |
 
+## IRX-15: `sysmem`'s allocator
+
+Ordinal 4 is `allocate(mode, size, address)`. Ordinal 5 is `release(address)`.
+
+**IRX-15a:** The allocator works in units of `0x100` bytes. A request is
+rounded up to that unit, every block it hands out starts on that boundary, and
+a size of zero is refused with 0. It is the same granularity IRX-12b's release
+rounding uses.
+
+**IRX-15b:** `mode` has exactly three legal values, and the choice is part of
+the caller's contract, not a hint:
+
+| `mode` | Requirement |
+| --- | --- |
+| 0 | the **lowest** free address the request fits at |
+| 1 | the **highest** free address the request fits at |
+| 2 | at `address`, refused if that range is not free |
+
+**IRX-15c:** Modes 0 and 1 must grow *towards* each other, so that a caller
+alternating between them does not interleave. `MODLOAD` depends on this: it
+takes the raw file it reads a module out of with mode 1, builds the module's
+image with mode 0, and releases the raw file the moment the image exists. A
+rebuild that reads the mode as a hint turns that release into a leak of the
+whole file — one per module loaded — and a title that loads a dozen modules
+exhausts the machine.
+
+**IRX-15d:** Allocation fails with 0 when the free space cannot hold the
+request. It must not fall back to another mode.
+
+**IRX-15e:** The heap is the machine's memory above the loaded kernel, bounded
+below by the end of the image the boot chain has placed and above by the RAM
+size the reset path latched (BOOT-4 step 5), each rounded to `0x100`. A heap
+narrower than one unit leaves the allocator uninitialised, and every entry
+answers 0 until it is.
+
 ## Verification
 
 `tools/irxinfo.py --check` asserts the mechanically checkable requirements

@@ -219,9 +219,61 @@ argument — an allocation mode — is less than 3, and otherwise takes a lock
 before delegating to the worker at `0x9E8`. The query entry (slot 6, offset
 `0x204`) likewise returns 0 when uninitialised.
 
-The allocation-mode argument having exactly three legal values, and the
-behaviour of each, is the level of detail the specification will need; it is
-left to the spec pass rather than settled here.
+### The heap's bounds come from the boot chain and from SYSMEM's own end
+
+```sh
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x60 0xd8
+```
+
+The entry writes a pair of adjacent globals, `.data + 0xc80` and `+ 0xc84`, and
+the whole module tests `+ 0xc84` for "initialised":
+
+- the **high** bound is the RAM size the boot chain passed in `$a0`, clamped to
+  `0x007FFF00` and rounded down to `0x100`;
+- the **low** bound is a relocated address inside SYSMEM's own image --
+  module offset `0xd93`, i.e. **just past SYSMEM's own bss** -- also rounded
+  down to `0x100`.
+
+If the two end up less than `0x100` apart the entry stores zero over the low
+bound, leaving the module permanently uninitialised, and returns 0.
+
+So the reference's heap is *everything above SYSMEM itself*. That only works
+because SYSMEM is the first module the boot list names and **every later
+module's image is allocated out of that heap** rather than placed by the
+loader -- which is what makes a 2 MiB machine enough for a title's own dozen
+modules on top of the ROM's.
+
+### The three allocation modes are first-fit, last-fit and at-an-address
+
+```sh
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x470 0x610
+```
+
+The worker at `0x470` takes `(mode, size, address)`, rounds the size up to
+`0x100` and answers 0 for a zero size. Then:
+
+| mode | what it does |
+| --- | --- |
+| 0 | walks the free list from the head and takes the **first** node large enough -- the **lowest** address that fits |
+| 1 | walks the **whole** list keeping the **last** node large enough -- the **highest** address that fits |
+| 2 | the at-an-address case, at `0x604` |
+
+Modes 0 and 1 also differ in which end of the chosen node they carve: mode 0
+takes the node's start and moves it up, mode 1 leaves the node's start alone
+and shrinks its size, i.e. takes the top. So the two modes are a **deliberate
+pairing** -- long-lived images come off the bottom, scratch buffers off the
+top -- and a caller that asks for mode 1 and then releases is relying on it.
+`MODLOAD` does exactly this: mode 1 for the raw file it reads a module out
+of, mode 0 for the image it builds, and a release of the raw file as soon as
+the image is built.
+
+The free list is a chain of nodes whose `+0x0` is the next pointer and whose
+`+0x4` packs three fields: bit 0 in-use, bits 1-15 the start and bits 17-31
+the size, both in `0x100` units. Nodes come from a block of 31 eight-byte
+entries at `+0xc` of a chunk the worker at `0x9e8` refills. The list's shape
+is not needed to reproduce the interface and is left to a later pass; the
+mode semantics and the `0x100` granularity are what a rebuild has to match,
+and the granularity is the same one IRX-12b's release rounding uses.
 
 ### `Kprintf` is a hook, not a printer (slots 14 and 15)
 
