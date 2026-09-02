@@ -35,7 +35,7 @@ add_custom_command(
             sysmem.elf loadcore.elf excepman.elf intrman.elf timrman.elf
             threadman.elf sysclib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf
             stdio.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf
-            sio2man.elf
+            secrman.elf sio2man.elf
     COMMENT "Computing IOPBOOT's archive-relative link address")
 
 # A bare OUTPUT command with no consumer in its own directory is pruned from

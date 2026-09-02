@@ -597,6 +597,16 @@ rather than written; the reference checks neither its own ordinal 7 nor the
 index an incoming `SET_SREG` names, which from the EE is a write to any
 address that follows the array.
 
+**`SECRMAN` is the interface and not the mechanism.** IOP-11 and
+`docs/clean-room-policy.md`. Its `AuthCard` answers `1` once a card driver
+has registered its command handler and `0` before that, without exchanging
+anything with the card or the mechacon, and its `ResetAuthCard` has nothing
+to undo. The handler slots and their NULL tolerance are the reference's, the
+fourteen-slot table keeps every ordinal where a client expects it, and the
+six encrypted-module entries answer `-1`. Ours therefore imports neither
+`cdvdman` nor `ioman`, where the reference imports both, and does not hand
+`MODLOAD` the callbacks of a path it does not have.
+
 **`VBLANK`'s lists are indices, and nothing is known to raise its lines
 yet.** IOP-10. The module is the reference's shape -- two `INTRMAN`
 registrations on `I_STAT` bits 0 and `0xB`, one pool of sixteen records
