@@ -464,9 +464,23 @@ simulator, in this order:
   `MODHSYN`, `EZMIDI`, `CRI_ADXI`. Getting there took the `LOADFILE` version
   query a title gates every load on (IOP-5f), `thmsgbx` (IOP-3l), the `sifcmd`
   SREG file and its `SendCmd` pair (BOOT-12f/12g), `sysmem`'s `Kprintf` slot,
-  a `VBLANK` module (IOP-10) and a `SECRMAN` interface (IOP-11). Where it
-  stops now is *after* the last of those loads, in the title's own start-up,
-  and that is not yet located. `EELOAD` at the address PCSX2's fast boot hooks is
+  a `VBLANK` module (IOP-10) and a `SECRMAN` interface (IOP-11). **Since
+  2026-09-03 the last of those loads returns**, and the title goes on to drive
+  its drivers: it binds and calls `PADMAN`'s two services, `CDVDFSV`'s
+  `sceCdSearchFile`, and the memory-card server, and then starts a traffic of
+  its own on command ids the `MSIFRPC` it loaded registers handlers for.
+
+  What stood in the way was the IOP's memory manager, and it is worth
+  recording why, because the shape recurs: `sysmem`'s allocation *mode* is a
+  contract, not a hint (`spec/02` IRX-15). `MODLOAD` reads each module's raw
+  file into a mode-1 block and builds the image in a mode-0 one, so that the
+  file is still the topmost block when it releases it a moment later. A
+  one-ended allocator refuses that release — and since the caller does not
+  read the return, every raw file leaked, twelve of them, roughly half the
+  heap. The last module then could not create a thread and hung in its own
+  fatal-error trap, so the loader never answered and the EE waited for ever.
+  With the two ends served, and the heap widened to the memory above the boot
+  image, the same run leaves about 1.2 MiB free. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
