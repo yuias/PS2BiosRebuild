@@ -203,7 +203,33 @@ Server *servers;
 Queue *queues;
 
 alignas(16) uint8_t receive[kPacketBytes];  // published in SMCOM: packets land here
-alignas(16) SendBlock send_blocks[2];
+
+// BOOT-12g: the sender is a ring of runs, not one slot. The reference chains
+// a run of transfers, and a client that sends a burst depends on it -- a
+// title's own SIF bridge registers well over a hundred channels back to back,
+// and a sender with one slot refuses all but the first. Refusing is correct
+// only when there is genuinely no room: BOOT-12g's `0` means "not queued",
+// and a client loops on it.
+//
+// A group is one run: its blocks go out back to back, and its completion
+// callback fires when the last of them has. The blocks are the DMA's own tag
+// list, so a group's storage is what `TADR` points at and must not move while
+// the channel is on it -- which is why the ring holds them rather than one
+// shared pair.
+constexpr uint32_t kTransfersMax = 2;
+constexpr uint32_t kSendGroups = 32;
+
+struct alignas(16) SendGroup {
+    SendBlock blocks[kTransfersMax];
+    uint32_t count;
+    void (*done)(void *);
+    void *arg;
+    uint32_t reserved;                     // keeps `blocks` quadword-aligned
+};
+
+SendGroup send_queue[kSendGroups];
+volatile uint32_t send_head;                // the group the channel is on
+volatile uint32_t send_queued;              // queued groups, the running one included
 alignas(16) uint32_t payload[kPayloadWords];
 uint32_t ee_area;                          // what the EE published at the handshake
 uint32_t ee_packet_buffer;                 // BOOT-12c: where the EE's client listens
@@ -325,19 +351,46 @@ void describe(SendBlock &block, const void *from, uint32_t words,
     block.destination = destination & 0x1FFFFFFF;
 }
 
-// Start the run of send blocks at `send_blocks`: BOOT-11c, then the channel.
-void send() {
+// Start the run at the head of the ring: BOOT-11c, then the channel.
+void startHead() {
     writeWord(kSifCtrl, kCtrlSif0Path);          // BOOT-11f, for this path
     barrier();
-    writeWord(kDmaSif0 + kTadr, reinterpret_cast<uintptr_t>(send_blocks));
+    writeWord(kDmaSif0 + kTadr,
+              reinterpret_cast<uintptr_t>(send_queue[send_head].blocks));
     writeWord(kDmaSif0 + kBcr, kDmaBlock);
     writeWord(kDmaSif0 + kChcr, kDmaSendChcr);   // start
 }
 
-// Send `words` of the payload to `destination`, as one packet.
+// Queue one run, and start it when the channel is idle. Answers 0 only when
+// the ring is full, which is BOOT-12g's "not queued". The caller must have
+// interrupts closed: the sending channel's own handler walks the same ring.
+[[nodiscard]] int enqueue(const SendBlock *blocks, uint32_t count,
+                          void (*done)(void *), void *arg) {
+    if (count == 0 || count > kTransfersMax || send_queued == kSendGroups) {
+        return 0;
+    }
+    SendGroup &group = send_queue[(send_head + send_queued) % kSendGroups];
+    for (uint32_t k = 0; k < count; k++) {
+        group.blocks[k] = blocks[k];
+    }
+    group.count = count;
+    group.done = done;
+    group.arg = arg;
+    const bool idle = send_queued == 0;
+    send_queued++;
+    if (idle) {
+        startHead();
+    }
+    return 1;
+}
+
+// Send `words` of the payload to `destination`, as one packet. The payload is
+// the one shared buffer, so only one of these is ever in flight -- every
+// caller builds it inside the handler or thread that then sends it.
 void sendPayload(uint32_t words, uint32_t destination) {
-    describe(send_blocks[0], payload, words, destination, true);
-    send();
+    SendBlock block;
+    describe(block, payload, words, destination, true);
+    (void)enqueue(&block, 1, nullptr, nullptr);
 }
 
 // BOOT-12c: the answer that completes the client's `SifInitRpc` -- SET_SREG
@@ -552,9 +605,10 @@ void answerCall(Server &server) {
     if (ee_packet_buffer == 0) {
         return;
     }
+    SendBlock run[kTransfersMax];
     uint32_t blocks = 0;
     if (answer != nullptr && server.receive != 0 && server.receive_size != 0) {
-        describe(send_blocks[blocks], answer, (server.receive_size + 3) / 4,
+        describe(run[blocks], answer, (server.receive_size + 3) / 4,
                  server.receive, server.mode == 0);
         blocks++;
     }
@@ -566,12 +620,15 @@ void answerCall(Server &server) {
         request.client = server.client;
         auto &end = *reinterpret_cast<RpcEnd *>(payload);
         fillEnd(end, request, kCidRpcCall, &server);
-        describe(send_blocks[blocks], payload, sizeof(RpcEnd) / 4,
+        describe(run[blocks], payload, sizeof(RpcEnd) / 4,
                  ee_packet_buffer, true);
         blocks++;
     }
     if (blocks != 0) {
-        send();
+        uint32_t state;
+        _import_intrman_suspend(&state);         // this one runs on a thread
+        (void)enqueue(run, blocks, nullptr, nullptr);
+        _import_intrman_resume(state);
     }
 }
 
@@ -586,7 +643,6 @@ void answerCall(Server &server) {
 // SIFMAN number) -- and 0 while it runs.
 
 constexpr uint32_t kSif0Irq = 0x2A;              // IOP_IRQ_DMA_SIF0 [header]
-constexpr uint32_t kTransfersMax = 2;
 
 struct Transfer {
     uint32_t src;
@@ -595,36 +651,42 @@ struct Transfer {
     uint32_t attr;
 };
 
-volatile uint32_t send_running;
-
-// sifman 32's completion callback, if the run that is finishing carried one.
-// The reference keeps a table of them per batch; our sender runs one batch at
-// a time, so one slot is exactly that table.
-void (*send_done)(void *);
-void *send_done_arg;
-
+// The sending channel's interrupt: the head group has gone. Its callback runs
+// after the next run is started, so a callback that queues another send finds
+// the channel already busy rather than racing it.
 int sendFinished(void *) {
-    send_running = 0;
-    if (send_done != nullptr) {
-        void (*const callback)(void *) = send_done;
-        void *const arg = send_done_arg;
-        send_done = nullptr;
+    if (send_queued == 0) {
+        return 1;                                // not one of ours
+    }
+    SendGroup &group = send_queue[send_head];
+    void (*const callback)(void *) = group.done;
+    void *const arg = group.arg;
+    group.done = nullptr;
+    send_head = (send_head + 1) % kSendGroups;
+    send_queued--;
+    if (send_queued != 0) {
+        startHead();
+    }
+    if (callback != nullptr) {
         callback(arg);
     }
     return 1;
 }
 
 int sifSetDma(const Transfer *list, uint32_t count) {
-    if (count == 0 || count > kTransfersMax || send_running) {
+    if (count == 0 || count > kTransfersMax) {
         return 0;                                // BOOT-12g: not queued
     }
+    SendBlock run[kTransfersMax];
     for (uint32_t k = 0; k < count; k++) {
-        describe(send_blocks[k], reinterpret_cast<const void *>(list[k].src),
+        describe(run[k], reinterpret_cast<const void *>(list[k].src),
                  (list[k].size + 3) / 4, list[k].dest, k + 1 == count, false);
     }
-    send_running = 1;
-    send();
-    return 1;
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    const int answer = enqueue(run, count, nullptr, nullptr);
+    _import_intrman_resume(state);
+    return answer;
 }
 
 // sifman 32: ordinal 7 with a completion callback, called once from the
@@ -632,20 +694,23 @@ int sifSetDma(const Transfer *list, uint32_t count) {
 // makes it ordinal 7 exactly.
 int sifSetDmaIntr(const Transfer *list, uint32_t count, void (*function)(void *),
                   void *arg) {
-    if (send_running) {
+    if (count == 0 || count > kTransfersMax) {
         return 0;
     }
-    send_done = function;
-    send_done_arg = arg;
-    const int answer = sifSetDma(list, count);
-    if (answer == 0) {
-        send_done = nullptr;
+    SendBlock run[kTransfersMax];
+    for (uint32_t k = 0; k < count; k++) {
+        describe(run[k], reinterpret_cast<const void *>(list[k].src),
+                 (list[k].size + 3) / 4, list[k].dest, k + 1 == count, false);
     }
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    const int answer = enqueue(run, count, function, arg);
+    _import_intrman_resume(state);
     return answer;
 }
 
 int sifDmaStat(uint32_t) {
-    return send_running ? 0 : -1;
+    return send_queued != 0 ? 0 : -1;
 }
 
 // sifcmd ordinals 6 and 7 (BOOT-12f). The reference bounds-checks neither;
@@ -670,22 +735,21 @@ constexpr uint32_t kSendPacketMin = 16;
 constexpr uint32_t kSendPacketMax = 112;
 
 int sendCmd(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
-            uint32_t dest_extra, uint32_t size_extra) {
+            uint32_t dest_extra, uint32_t size_extra,
+            void (*done)(void *) = nullptr, void *done_arg = nullptr) {
     if (psize < kSendPacketMin || psize > kSendPacketMax) {
         return 0;
     }
-    // The reference chains up to 32 transfers; ours runs one at a time, so a
-    // caller is told "not queued" instead and loops, which is what the
-    // return value is for (docs/implementation.md).
-    if (ee_packet_buffer == 0 || send_running) {
+    if (ee_packet_buffer == 0) {
         return 0;
     }
     auto *header = static_cast<CommandHeader *>(packet);
+    SendBlock run[kTransfersMax];
     uint32_t blocks = 0;
     if (static_cast<int32_t>(size_extra) > 0) {
         header->size = psize | (size_extra << 8);
         header->dest = dest_extra;
-        describe(send_blocks[blocks], src_extra, (size_extra + 3) / 4, dest_extra,
+        describe(run[blocks], src_extra, (size_extra + 3) / 4, dest_extra,
                  false, false);
         blocks++;
     } else {
@@ -693,10 +757,9 @@ int sendCmd(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
         header->dest = 0;
     }
     header->cid = cid;
-    describe(send_blocks[blocks], packet, (psize + 3) / 4, ee_packet_buffer, true);
-    send_running = 1;
-    send();
-    return 1;
+    describe(run[blocks], packet, (psize + 3) / 4, ee_packet_buffer, true);
+    blocks++;
+    return enqueue(run, blocks, done, done_arg);
 }
 
 int sendCmdNormal(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
@@ -724,12 +787,8 @@ int sendCmdIntr(uint32_t cid, void *packet, uint32_t psize, const void *src_extr
                 void *arg) {
     uint32_t state;
     _import_intrman_suspend(&state);
-    send_done = function;
-    send_done_arg = arg;
-    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
-    if (answer == 0) {
-        send_done = nullptr;
-    }
+    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra,
+                               function, arg);
     _import_intrman_resume(state);
     return answer;
 }
@@ -737,13 +796,7 @@ int sendCmdIntr(uint32_t cid, void *packet, uint32_t psize, const void *src_extr
 int sendCmdIntrInterrupt(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
                          uint32_t dest_extra, uint32_t size_extra,
                          void (*function)(void *), void *arg) {
-    send_done = function;
-    send_done_arg = arg;
-    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
-    if (answer == 0) {
-        send_done = nullptr;
-    }
-    return answer;
+    return sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra, function, arg);
 }
 
 void armReceive();

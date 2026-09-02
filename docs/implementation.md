@@ -619,11 +619,15 @@ so it only raises the latch ordinal 29 reads. The tables grew to the
 reference's extents -- `sifman` 36 slots, `sifcmd` 32 -- because an ordinal
 past the end binds to `jr $ra` and disappears.
 
-**`sifman` 32 and `sifcmd` 28/29 keep one callback, not a table.** BOOT-12i.
-The reference queues up to 32 transfers and keeps a completion callback per
-transfer; ours runs one at a time, so one slot is exactly that table. A
-caller waits on a semaphore the callback signals, which is why these are
-implemented rather than left to answer plausibly.
+**The sender queues thirty-two runs, and a completion callback per run.**
+BOOT-12g and BOOT-12i. It used to run one transfer at a time and answer
+BOOT-12g's `0` -- "not queued" -- to everything else, leaving a client that
+sends a burst to loop or defer itself on an alarm. Two other things went with
+that shape: `answerCall` and the payload sender started a run without
+checking whether one was already going, and `sifman` 32 / `sifcmd` 28/29
+shared one global completion-callback slot rather than one per run. The ring
+holds each run's DMA tag list, so the storage the channel is reading never
+moves, and each run carries its own callback.
 
 **`SECRMAN` is the interface and not the mechanism.** IOP-11 and
 `docs/clean-room-policy.md`. Its `AuthCard` answers `1` once a card driver

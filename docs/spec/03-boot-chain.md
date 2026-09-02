@@ -431,6 +431,17 @@ is non-zero rather than treating a send as unconditional, so a rebuild that
 always answers `0` hangs them and one that always answers non-zero drops
 packets with no diagnostic.
 
+**And it must be a queue, not a single slot.** Clients send in bursts far
+larger than one: `SLPS-25918`'s own SIF bridge registers **145 channels back
+to back**, one command each, with no round trip between them, and the
+reference answers each in turn. A sender with one slot answers `0` to all but
+the first of a burst, which is within the letter of the contract and leaves
+the client to loop or to defer itself on an alarm — recovery a rebuild should
+not be relying on. The queue must be at least the 32 runs the reference
+chains, hold each run's tag list for as long as the channel is reading it,
+and start the next run from the sending channel's own interrupt, which is
+also where that run's completion callback belongs.
+
 **BOOT-12h — `sifman`'s init pair, and two ordinals that are not what they
 look like.** `sceSifInit` is ordinal **5** and `sceSifSetDChain` ordinal
 **6**; `sceSifCheckInit` is ordinal **29** and reads the same latch word
