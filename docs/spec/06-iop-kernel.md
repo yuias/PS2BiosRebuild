@@ -899,6 +899,42 @@ read — the reference acknowledges a timer interrupt no other way.
 **IOP-7e — the hold block.** Ordinals 13–15 address `0xBF8014C0 + 4n`
 (mode) and `0xBF8014B0 + 4n` (value); nothing on the boot path uses them.
 
+**IOP-7f — the ordinals a title's driver needs past 16.** Derived from
+`docs/analysis/49`. rom0's table stops at 16, but a title's own modules bind
+against the `timrman` **v1.03** its `IOPRP` image carries, which has 28
+entries. `SLPS-25918`'s `EZMIDI` imports four of them and checks every
+return, so a table that stops at 16 makes its timer set-up fail silently —
+IRX-9 binds a missing ordinal to `jr $ra` and `$v0` keeps whatever the caller
+had. A rebuild that does not perform the `UDNL` merge must serve them itself:
+
+| Ord | Signature | Answers |
+| --- | --- | --- |
+| 20 | `SetTimerHandler(id, compare, handler, arg)` | `0`, or `-151` for a bad id, `-154` for a running timer |
+| 22 | `SetupHardTimer(id, source, mode, prescale)` | `0`, or `-100` from interrupt context, `-151`, `-154`, `-152` for a source the timer lacks, `-153` for a prescale it cannot reach, `-405` for `mode >= 8` |
+| 23 | `StartHardTimer(id)` | `0`, or `-151`, `-154`, `-155` when 22 has not run |
+| 24 | `StopHardTimer(id)` | `0`, or `-151`, `-156` when it is not running |
+
+**IOP-7g — what the four do.** `SetTimerHandler` records `compare`, the
+handler and its argument against the timer, and arms the compare interrupt —
+MODE `0x58`, reset-on-compare with the interrupt and repeat — or disarms it
+when `handler` is null. `SetupHardTimer` validates the source against the
+timer's own mask and the prescale against its maximum, and is where the
+library registers **its own** interrupt handler on that timer's IRQ, once per
+timer. `StartHardTimer` writes MODE `0` first so the hardware is quiet, then
+the compare — a halfword for RTC0–2 and a word for RTC3–5, per IOP-7d — then
+the MODE that starts it. `StopHardTimer` is its inverse.
+
+The interrupt handler is the library's, not the caller's: it reads the MODE
+register once (which is also the acknowledgement, IOP-7d) and calls the
+recorded handler when the compare flag `0x800` is set, and the separately
+recorded overflow handler when `0x1000` is. A caller that registered only one
+of the two leaves the other silent.
+
+**IOP-7h — a timer id is opaque.** No caller builds or inspects one: it comes
+from ordinal 4 and goes back unread. The `v1.03` library encodes it
+differently from rom0's (`docs/analysis/49` §8), and a rebuild is free to keep
+one encoding across its whole table rather than reproduce both.
+
 ## IOP-8: The disc (CDVDMAN)
 
 Derived from `docs/analysis/42-cdvd.md` §0–§4, §7.
