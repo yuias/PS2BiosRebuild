@@ -177,9 +177,40 @@ uint16_t next_module_id;
     return ps2::loader::bind(base, base + info->memory_size) == 0 ? 0 : -1;
 }
 
-// Ordinal 4: the instruction cache. A plain store is seen by the next fetch
-// on the targets this image runs on (docs/implementation.md).
+// Ordinals 4 and 5: the two caches. A plain store is seen by the next fetch
+// and the next load on the targets this image runs on
+// (docs/implementation.md). Ordinal 5 is a void in the reference, so the
+// value here is never read.
 int flushIcache() {
+    return 0;
+}
+
+int flushDcache() {
+    return 0;
+}
+
+// Ordinal 27 (IRX-10c): store two flag bits on an export table. The bits are
+// read by a teardown pass a reboot runs, which this project does not have --
+// but a module's entry can return non-resident when this call fails, so the
+// answer matters even where the bits do not.
+constexpr int kNotRegistered = -213;
+constexpr int kNoTable = -214;
+
+[[nodiscard]] int setLibraryFlags(void *table_ptr, uint32_t flags) {
+    auto *table = reinterpret_cast<LibraryTable *>(table_ptr);
+    if (table == nullptr) {
+        return kNoTable;
+    }
+    bool known = table->link == kExportMagic;    // registration has not eaten it
+    for (auto *walk = reinterpret_cast<LibraryTable *>(registryHead());
+         !known && walk != nullptr;
+         walk = reinterpret_cast<LibraryTable *>(walk->link)) {
+        known = walk == table;
+    }
+    if (!known) {
+        return kNotRegistered;
+    }
+    table->flags = static_cast<uint16_t>((table->flags & ~6u) | (flags & 6u));
     return 0;
 }
 
@@ -207,7 +238,7 @@ struct ExportTable {
     uint16_t version;
     uint16_t flags;
     char tag[8];
-    int (*entries[25])(void *);
+    int (*entries[29])(void *);
 };
 static_assert(offsetof(ExportTable, entries) == 0x14);
 
@@ -231,7 +262,7 @@ template <typename F>
         unimplemented,                  // 2
         unimplemented,                  // 3  GetLibraryEntryTable
         asSlot(flushIcache),            // 4  FlushIcache
-        unimplemented,                  // 5
+        asSlot(flushDcache),            // 5  FlushDcache
         registerVersioned,              // 6  register, versioned
         unimplemented,                  // 7
         asSlot(linkLibraryEntries),     // 8  LinkLibraryEntries
@@ -250,6 +281,10 @@ template <typename F>
         unimplemented,                  // 21 SetCacheCtrl
         asSlot(probeExecutable),        // 22 ProbeExecutableObject
         asSlot(loadExecutable),         // 23 LoadExecutableObject
+        unimplemented,                  // 24
+        unimplemented,                  // 25
+        unimplemented,                  // 26
+        asSlot(setLibraryFlags),        // 27 (IRX-10c)
         nullptr,                        // IRX-5b
     },
 };

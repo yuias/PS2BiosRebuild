@@ -416,6 +416,54 @@ int registerRpc(Server *server, uint32_t sid, void *function, void *buffer,
     return 0;
 }
 
+// sifcmd ordinals 24 and 25 (BOOT-12i), the inverses of 17 and 19. Both
+// answer the record they took out -- the reference answers its predecessor
+// when it had one, which no observed caller looks at -- or null when it was
+// not on the list.
+Server *removeRpc(Server *server, Queue *queue) {
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    Server *found = nullptr;
+    for (Server **link = &servers; *link != nullptr; link = &(*link)->next) {
+        if (*link == server) {
+            *link = server->next;
+            found = server;
+            break;
+        }
+    }
+    // The reference keeps its servers per queue and has nothing else to
+    // unhook. Ours parks a pending call on the queue itself, so a request
+    // waiting there would wake the queue's thread with a record its module
+    // has just taken back.
+    if (found != nullptr && queue != nullptr) {
+        for (Server **link = &queue->pending; *link != nullptr;
+             link = &(*link)->next_pending) {
+            if (*link == server) {
+                *link = server->next_pending;
+                break;
+            }
+        }
+        server->next_pending = nullptr;
+    }
+    _import_intrman_resume(state);
+    return found;
+}
+
+Queue *removeRpcQueue(Queue *queue) {
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    Queue *found = nullptr;
+    for (Queue **link = &queues; *link != nullptr; link = &(*link)->next) {
+        if (*link == queue) {
+            *link = queue->next;
+            found = queue;
+            break;
+        }
+    }
+    _import_intrman_resume(state);
+    return found;
+}
+
 void answerCall(Server &server);
 
 // The queue's thread lives here: asleep until the handler wakes it with a
@@ -549,14 +597,26 @@ struct Transfer {
 
 volatile uint32_t send_running;
 
+// sifman 32's completion callback, if the run that is finishing carried one.
+// The reference keeps a table of them per batch; our sender runs one batch at
+// a time, so one slot is exactly that table.
+void (*send_done)(void *);
+void *send_done_arg;
+
 int sendFinished(void *) {
     send_running = 0;
+    if (send_done != nullptr) {
+        void (*const callback)(void *) = send_done;
+        void *const arg = send_done_arg;
+        send_done = nullptr;
+        callback(arg);
+    }
     return 1;
 }
 
 int sifSetDma(const Transfer *list, uint32_t count) {
-    if (count == 0 || count > kTransfersMax) {
-        return 0;
+    if (count == 0 || count > kTransfersMax || send_running) {
+        return 0;                                // BOOT-12g: not queued
     }
     for (uint32_t k = 0; k < count; k++) {
         describe(send_blocks[k], reinterpret_cast<const void *>(list[k].src),
@@ -565,6 +625,23 @@ int sifSetDma(const Transfer *list, uint32_t count) {
     send_running = 1;
     send();
     return 1;
+}
+
+// sifman 32: ordinal 7 with a completion callback, called once from the
+// sending channel's interrupt after the whole run has gone. A null callback
+// makes it ordinal 7 exactly.
+int sifSetDmaIntr(const Transfer *list, uint32_t count, void (*function)(void *),
+                  void *arg) {
+    if (send_running) {
+        return 0;
+    }
+    send_done = function;
+    send_done_arg = arg;
+    const int answer = sifSetDma(list, count);
+    if (answer == 0) {
+        send_done = nullptr;
+    }
+    return answer;
 }
 
 int sifDmaStat(uint32_t) {
@@ -638,23 +715,76 @@ int sendCmdInterrupt(uint32_t cid, void *packet, uint32_t psize, const void *src
     return sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
 }
 
+// Ordinals 28 and 29: ordinals 12 and 13 with a completion callback, which
+// the reference routes through `sifman` 32 rather than 7. A caller blocks on
+// a semaphore the callback signals, so a send that answers "queued" without
+// ever calling back is worse than one that answers 0.
+int sendCmdIntr(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
+                uint32_t dest_extra, uint32_t size_extra, void (*function)(void *),
+                void *arg) {
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    send_done = function;
+    send_done_arg = arg;
+    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
+    if (answer == 0) {
+        send_done = nullptr;
+    }
+    _import_intrman_resume(state);
+    return answer;
+}
+
+int sendCmdIntrInterrupt(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
+                         uint32_t dest_extra, uint32_t size_extra,
+                         void (*function)(void *), void *arg) {
+    send_done = function;
+    send_done_arg = arg;
+    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
+    if (answer == 0) {
+        send_done = nullptr;
+    }
+    return answer;
+}
+
 void armReceive();
 
-// sifman ordinal 5, `sceSifSetDChain`: re-arm the receiving channel. The only
-// caller is REBOOT, which needs it because a reboot discards the channel's
-// in-flight state (docs/analysis/45 §1's outside lead, and the same thing an
-// emulator does on the reset command).
+// sifman ordinal 6, `sceSifSetDChain`: re-arm the receiving channel. REBOOT
+// needs it because a reboot discards the channel's in-flight state
+// (docs/analysis/45 §1's outside lead, and the same thing an emulator does on
+// the reset command).
 int sifSetDChain() {
     armReceive();
     return 0;
 }
 
-// sifman ordinal 22: raise bits in SMFLG. From this side a write to SMFLG
-// only ever *sets* (BOOT-10c), so this cannot clear the EE's own bits, which
-// is what makes it safe to call after a reboot. The ordinal's identity is
-// inferred from the argument REBOOT passes it -- `0x00020000`,
-// SIF_STAT_CMDINIT's bit value -- and is one of docs/analysis/45's own open
-// questions.
+// sifman ordinals 5 and 29 (BOOT-12h). The reference's `sceSifInit` is
+// idempotent through a latch and `sceSifCheckInit` reads that same latch;
+// every client is written as `if (!CheckInit()) Init()`. Our entry does the
+// handshake before anything can call either, so the latch is raised there and
+// ordinal 5 has nothing left to do -- but both have to exist and answer,
+// because the alternative is a client "initialising" a bus that is already
+// carrying traffic.
+uint32_t sif_initialised;
+
+int sifInit() {
+    sif_initialised = 1;
+    return 0;
+}
+
+int sifCheckInit() {
+    return static_cast<int>(sif_initialised);
+}
+
+// Ordinal 22 writes MSFLG and ordinal 24 SMFLG (docs/analysis/34 §0, against
+// the two register addresses). From this side a write to SMFLG only ever
+// *sets* (BOOT-10c), which is what makes ordinal 24 safe to call after a
+// reboot; the same write to MSFLG *clears*, so ordinal 22 takes the EE's
+// flags down rather than putting them up.
+int sifSetMsFlag(uint32_t bits) {
+    writeWord(kSifMsflg, bits);
+    return 0;
+}
+
 int sifSetSmFlag(uint32_t bits) {
     writeWord(kSifSmflg, bits);
     return 0;
@@ -697,7 +827,7 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
     return nullptr;
 }
 
-[[gnu::used]] ps2::module::ExportTable<23> sifman_exports = {
+[[gnu::used]] ps2::module::ExportTable<36> sifman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -709,8 +839,8 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
         ps2::module::slot(ps2::module::reservedHook),   // 2
         ps2::module::slot(ps2::module::reservedHook),   // 3
         ps2::module::slot(ps2::module::reservedHook),   // 4
-        ps2::module::slot(sifSetDChain),                // 5  sceSifSetDChain
-        ps2::module::slot(ps2::module::reservedHook),   // 6
+        ps2::module::slot(sifInit),                     // 5  sceSifInit
+        ps2::module::slot(sifSetDChain),                // 6  sceSifSetDChain
         ps2::module::slot(sifSetDma),                   // 7  sceSifSetDma
         ps2::module::slot(sifDmaStat),                  // 8  sceSifDmaStat
         ps2::module::slot(ps2::module::reservedHook),   // 9
@@ -726,13 +856,26 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
         ps2::module::slot(ps2::module::reservedHook),   // 19
         ps2::module::slot(ps2::module::reservedHook),   // 20
         ps2::module::slot(ps2::module::reservedHook),   // 21
-        ps2::module::slot(sifSetSmFlag),                // 22 raises SMFLG bits
+        ps2::module::slot(sifSetMsFlag),                // 22 writes MSFLG
+        ps2::module::slot(ps2::module::reservedHook),   // 23
+        ps2::module::slot(sifSetSmFlag),                // 24 writes SMFLG
+        ps2::module::slot(ps2::module::reservedHook),   // 25
+        ps2::module::slot(ps2::module::reservedHook),   // 26
+        ps2::module::slot(ps2::module::reservedHook),   // 27
+        ps2::module::slot(ps2::module::reservedHook),   // 28
+        ps2::module::slot(sifCheckInit),                // 29 sceSifCheckInit
+        ps2::module::slot(ps2::module::reservedHook),   // 30
+        ps2::module::slot(ps2::module::reservedHook),   // 31
+        ps2::module::slot(sifSetDmaIntr),               // 32 sceSifSetDmaIntr
+        ps2::module::slot(ps2::module::reservedHook),   // 33
+        ps2::module::slot(ps2::module::reservedHook),   // 34
+        ps2::module::slot(ps2::module::reservedHook),   // 35
         nullptr,
     },
 };
 
 // IRX-4: the library server modules import (spec/06 IOP-5f's ordinals).
-[[gnu::used]] ps2::module::ExportTable<23> sifcmd_exports = {
+[[gnu::used]] ps2::module::ExportTable<32> sifcmd_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -762,6 +905,15 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
         ps2::module::slot(ps2::module::reservedHook),   // 20
         ps2::module::slot(ps2::module::reservedHook),   // 21
         ps2::module::slot(rpcLoop),                     // 22 sceSifRpcLoop
+        ps2::module::slot(ps2::module::reservedHook),   // 23
+        ps2::module::slot(removeRpc),                   // 24 sceSifRemoveRpc
+        ps2::module::slot(removeRpcQueue),              // 25 sceSifRemoveRpcQueue
+        ps2::module::slot(ps2::module::reservedHook),   // 26
+        ps2::module::slot(ps2::module::reservedHook),   // 27
+        ps2::module::slot(sendCmdIntr),                 // 28 sceSifSendCmdIntr
+        ps2::module::slot(sendCmdIntrInterrupt),        // 29 isceSifSendCmdIntr
+        ps2::module::slot(ps2::module::reservedHook),   // 30
+        ps2::module::slot(ps2::module::reservedHook),   // 31
         nullptr,
     },
 };
@@ -880,6 +1032,7 @@ int _module_start(int, char **) {
     _import_intrman_register(kSif0Irq, 1, sendFinished, nullptr);
     _import_intrman_enable(kSif0Irq);
     writeWord(kSifSmflg, kCommandBit);           // BOOT-12b: listening
+    (void)sifInit();                             // BOOT-12h: the latch 29 reads
     _import_intrman_cpu_enable();
 
     // The service runs in the handler; the entry returns, resident, and

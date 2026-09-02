@@ -157,8 +157,8 @@ PS2_IMPORT(_import_sifcmd_add_cmd_handler, 10)
 PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("sifman\0\0", 0x0101)
-PS2_IMPORT(_import_sifman_set_dchain, 5)
-PS2_IMPORT(_import_sifman_set_smflag, 22)
+PS2_IMPORT(_import_sifman_set_dchain, 6)
+PS2_IMPORT(_import_sifman_set_smflag, 24)
 PS2_IMPORTS_END()
 
 extern "C" {
