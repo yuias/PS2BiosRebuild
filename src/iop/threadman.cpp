@@ -1,7 +1,7 @@
-// THREADMAN: the IOP's threads, event flags and semaphores.
+// THREADMAN: the IOP's threads, event flags, semaphores and message boxes.
 //
-// docs/spec/06-iop-kernel.md IOP-3. Three libraries out of one module --
-// `thbase`, `thevent`, `thsemap` -- over one scheduler: 128 priorities of
+// docs/spec/06-iop-kernel.md IOP-3. Four libraries out of one module --
+// `thbase`, `thevent`, `thsemap`, `thmsgbx` -- over one scheduler: 128 priorities of
 // ready queues, a "current" and a "pending next" thread, and the two hooks
 // INTRMAN calls at the tail of an interrupt (IOP-2j): `shouldPreempt` says
 // whether the two differ, `newContext` swaps the frames. A thread that has
@@ -31,6 +31,7 @@ namespace context = ps2::context;
 constexpr uint32_t kThreads = 48;
 constexpr uint32_t kEvents = 48;
 constexpr uint32_t kSemaphores = 48;
+constexpr uint32_t kMailboxes = 32;
 constexpr uint32_t kPriorities = 128;
 constexpr uint32_t kIdlePriority = 127;         // IOP-3h: below everything creatable
 constexpr uint32_t kBootPriority = 1;           // IOP-3i: the boot's current priority
@@ -53,6 +54,7 @@ constexpr int kIllegalThid = -406;
 constexpr int kUnknownThid = -407;
 constexpr int kUnknownSemid = -408;
 constexpr int kUnknownEvfid = -409;
+constexpr int kUnknownMbxid = -410;
 constexpr int kDormant = -413;
 constexpr int kNotDormant = -414;
 constexpr int kNotWait = -416;
@@ -61,11 +63,14 @@ constexpr int kSemaZero = -419;
 constexpr int kEvfCond = -421;
 constexpr int kEvfMulti = -422;
 constexpr int kEvfIlpat = -423;
+constexpr int kMbxNoMsg = -424;
 constexpr int kWaitDelete = -425;
 
 // IOP-3d
 enum State : uint8_t { Free = 0, Run = 1, Ready = 2, Wait = 4, Dormant = 0x10 };
-enum WaitType : uint8_t { NotWaiting = 0, Sleep = 1, Delay = 2, OnSema = 3, OnEvent = 4 };
+enum WaitType : uint8_t {
+    NotWaiting = 0, Sleep = 1, Delay = 2, OnSema = 3, OnEvent = 4, OnMbx = 5
+};
 
 constexpr uint32_t kAttrMask = 0xE3000008;      // IOP-3b
 constexpr uint32_t kEventMulti = 2;             // EA_MULTI [header]
@@ -73,6 +78,9 @@ constexpr uint32_t kSemaAttrMask = 0x101;
 constexpr uint32_t kSemaPriority = 1;           // SA_THPRI [header]
 constexpr uint32_t kWaitOr = 1;                 // WEF_OR [header]
 constexpr uint32_t kWaitClear = 0x10;           // WEF_CLEAR [header]
+constexpr uint32_t kMbxAttrMask = 0x5;
+constexpr uint32_t kMbxThreadPriority = 1;      // MBA_THPRI [header]
+constexpr uint32_t kMbxMessagePriority = 4;     // MBA_MSPRI [header]
 
 struct Thread {
     uint8_t state;
@@ -90,7 +98,10 @@ struct Thread {
     uint32_t *frame;        // where its registers are while it is out
     uint32_t wait_id;       // the id of what it waits on (IOP-3e)
     uint32_t wakeup_count;
-    uint32_t *wait_result;  // the event-flag wait's out-parameter
+    uint32_t *wait_out;     // the blocked call's out-parameter: an event
+                            // flag's resulting bits, or a message box's
+                            // message. Written only where the wait ends
+                            // normally, never when it is broken (IOP-3l).
     uint32_t wait_bits;
     uint32_t wait_mode;
     uint16_t next;          // the queue it is in: ready or a wait list
@@ -125,9 +136,29 @@ struct Semaphore {
     uint32_t waiter_count;
 };
 
+// IOP-3l: a message is the sender's own memory and the kernel never copies
+// it. The queue is threaded through this header's first word, so a client's
+// payload follows it and comes back untouched through ReceiveMbx.
+struct Message {
+    Message *next;
+    uint8_t priority;
+};
+
+struct Mailbox {
+    uint8_t in_use;
+    uint8_t generation;
+    uint32_t attr;
+    uint32_t option;
+    Queue waiters;
+    uint32_t waiter_count;
+    Message *tail;              // the last queued message; the list is circular
+    uint32_t message_count;
+};
+
 Thread threads[kThreads];
 Event events[kEvents];
 Semaphore semaphores[kSemaphores];
+Mailbox mailboxes[kMailboxes];
 Queue ready[kPriorities];
 uint32_t ready_bits[kPriorities / 32];
 uint32_t current = kNone;
@@ -193,6 +224,15 @@ struct Critical {
         return nullptr;
     }
     return &events[index];
+}
+
+[[nodiscard]] Mailbox *mailboxOf(uint32_t id) {
+    const uint32_t index = (id >> 8) - 1;
+    if (id == 0 || index >= kMailboxes || !mailboxes[index].in_use
+        || mailboxes[index].generation != (id & 0xFF)) {
+        return nullptr;
+    }
+    return &mailboxes[index];
 }
 
 [[nodiscard]] Semaphore *semaphoreOf(uint32_t id) {
@@ -319,19 +359,32 @@ void takeOffReady(uint32_t index) {
     return kNone;                               // never, once the idle thread exists
 }
 
-// The thread's wait object, for unlinking it from wherever it waits.
-Queue *waitQueueOf(Thread &thread) {
+// The thread's wait object: the list it is linked into and the count that
+// list keeps, for taking it back off wherever it waits.
+struct WaitObject {
+    Queue *queue;
+    uint32_t *count;
+};
+
+WaitObject waitObjectOf(Thread &thread) {
     switch (thread.wait_type) {
     case OnSema: {
         Semaphore *sema = semaphoreOf(thread.wait_id);
-        return sema != nullptr ? &sema->waiters : nullptr;
+        return sema != nullptr ? WaitObject{&sema->waiters, &sema->waiter_count}
+                               : WaitObject{nullptr, nullptr};
     }
     case OnEvent: {
         Event *event = eventOf(thread.wait_id);
-        return event != nullptr ? &event->waiters : nullptr;
+        return event != nullptr ? WaitObject{&event->waiters, &event->waiter_count}
+                                : WaitObject{nullptr, nullptr};
+    }
+    case OnMbx: {
+        Mailbox *mailbox = mailboxOf(thread.wait_id);
+        return mailbox != nullptr ? WaitObject{&mailbox->waiters, &mailbox->waiter_count}
+                                  : WaitObject{nullptr, nullptr};
     }
     default:
-        return nullptr;
+        return {nullptr, nullptr};
     }
 }
 
@@ -342,14 +395,10 @@ void leaveWait(uint32_t index) {
     if (thread.wait_type == Delay) {
         cancelDelay(thread);                    // IOP-3k: its alarm goes with it
     }
-    Queue *queue = waitQueueOf(thread);
-    if (queue != nullptr) {
-        unlink(*queue, index);
-        if (thread.wait_type == OnSema) {
-            semaphoreOf(thread.wait_id)->waiter_count--;
-        } else {
-            eventOf(thread.wait_id)->waiter_count--;
-        }
+    const WaitObject object = waitObjectOf(thread);
+    if (object.queue != nullptr) {
+        unlink(*object.queue, index);
+        (*object.count)--;
     }
     thread.wait_type = NotWaiting;
 }
@@ -1329,8 +1378,8 @@ int setEventFlag(uint32_t id, uint32_t bits, bool from_interrupt) {
         const uint16_t following = threads[at].next;
         Thread &waiter = threads[at];
         if (eventSatisfied(event->bits, waiter.wait_bits, waiter.wait_mode)) {
-            if (waiter.wait_result != nullptr) {
-                *waiter.wait_result = event->bits;
+            if (waiter.wait_out != nullptr) {
+                *waiter.wait_out = event->bits;
             }
             if (waiter.wait_mode & kWaitClear) {
                 event->bits = 0;
@@ -1394,7 +1443,7 @@ int waitEventFlag(uint32_t id, uint32_t bits, uint32_t mode, uint32_t *result, b
     Thread &thread = threads[current];
     thread.wait_bits = bits;
     thread.wait_mode = mode;
-    thread.wait_result = result;
+    thread.wait_out = result;
     enqueue(event->waiters, current);
     event->waiter_count++;
     return blockCurrent(OnEvent, id);
@@ -1558,6 +1607,196 @@ int referSemaStatus(uint32_t id, SemaInfo *info) {
     return kOk;
 }
 
+// --- thmsgbx (IOP-3l) ---------------------------------------------------------------
+
+struct MailboxParameters {
+    uint32_t attr;
+    uint32_t option;
+};
+
+struct MailboxInfo {
+    uint32_t attr;
+    uint32_t option;
+    uint32_t waiters;
+    uint32_t messages;
+    Message *top;
+};
+
+int createMbx(const MailboxParameters *parameters) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    if ((parameters->attr & ~kMbxAttrMask) != 0) {
+        return kIllegalAttr;
+    }
+    Critical critical;
+    for (uint32_t k = 0; k < kMailboxes; k++) {
+        Mailbox &mailbox = mailboxes[k];
+        if (mailbox.in_use) {
+            continue;
+        }
+        mailbox.in_use = 1;
+        mailbox.generation++;
+        mailbox.attr = parameters->attr;
+        mailbox.option = parameters->option;
+        mailbox.waiters = {kNone, kNone};
+        mailbox.waiter_count = 0;
+        mailbox.tail = nullptr;
+        mailbox.message_count = 0;
+        return static_cast<int>(makeId(k, mailbox.generation));
+    }
+    return kNoMemory;
+}
+
+// IOP-3l: whatever is queued is the senders' own memory, so a deleted box
+// abandons it; only the waiting threads have to be answered.
+int deleteMbx(uint32_t id) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    Critical critical;
+    Mailbox *mailbox = mailboxOf(id);
+    if (mailbox == nullptr) {
+        return kUnknownMbxid;
+    }
+    while (mailbox->waiters.head != kNone) {
+        wake(mailbox->waiters.head, kWaitDelete, true);
+    }
+    mailbox->in_use = 0;
+    return kOk;
+}
+
+// The queue is circular and `tail` names its last message, so the first is
+// `tail->next` and an append is two stores (IOP-3l).
+void queueMessage(Mailbox &mailbox, Message *message) {
+    if (mailbox.tail == nullptr) {
+        message->next = message;
+        mailbox.tail = message;
+        return;
+    }
+    if ((mailbox.attr & kMbxMessagePriority) == 0) {
+        message->next = mailbox.tail->next;
+        mailbox.tail->next = message;
+        mailbox.tail = message;
+        return;
+    }
+    // Ahead of the first message of strictly lower urgency -- a greater
+    // byte -- so ties go behind. Walking from the tail keeps `previous->next`
+    // as the candidate; the position is counted because a full lap comes
+    // back to the tail, which is an append rather than an insertion at the
+    // head, and the two differ only in whether the tail moves.
+    Message *previous = mailbox.tail;
+    uint32_t position = 0;
+    while (position < mailbox.message_count
+           && previous->next->priority <= message->priority) {
+        previous = previous->next;
+        position++;
+    }
+    message->next = previous->next;
+    previous->next = message;
+    if (position == mailbox.message_count) {
+        mailbox.tail = message;
+    }
+}
+
+[[nodiscard]] Message *dequeueMessage(Mailbox &mailbox) {
+    Message *first = mailbox.tail->next;
+    if (first == mailbox.tail) {
+        mailbox.tail = nullptr;
+    } else {
+        mailbox.tail->next = first->next;
+    }
+    mailbox.message_count--;
+    return first;
+}
+
+int sendMbx(uint32_t id, Message *message, bool from_interrupt) {
+    Critical critical;
+    Mailbox *mailbox = mailboxOf(id);
+    if (mailbox == nullptr) {
+        return kUnknownMbxid;
+    }
+    if (mailbox->waiters.head != kNone) {
+        Thread &waiter = threads[mailbox->waiters.head];
+        if (waiter.wait_out != nullptr) {
+            *waiter.wait_out = reinterpret_cast<uintptr_t>(message);
+        }
+        wake(mailbox->waiters.head, kOk, from_interrupt);
+        return kOk;
+    }
+    queueMessage(*mailbox, message);
+    mailbox->message_count++;
+    return kOk;
+}
+
+int sendMbxNormal(uint32_t id, Message *message) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    return sendMbx(id, message, false);
+}
+
+// IOP-3l: the `i` form's gate is the other way round -- it refuses a call
+// from thread context, where its sibling refuses one from an interrupt.
+int sendMbxInterrupt(uint32_t id, Message *message) {
+    if (!_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    return sendMbx(id, message, true);
+}
+
+int receiveMbx(Message **received, uint32_t id) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    Critical critical;
+    Mailbox *mailbox = mailboxOf(id);
+    if (mailbox == nullptr) {
+        return kUnknownMbxid;
+    }
+    if (mailbox->message_count > 0) {
+        *received = dequeueMessage(*mailbox);
+        return kOk;
+    }
+    threads[current].wait_out = reinterpret_cast<uint32_t *>(received);
+    if (mailbox->attr & kMbxThreadPriority) {
+        enqueueByPriority(mailbox->waiters, current);
+    } else {
+        enqueue(mailbox->waiters, current);
+    }
+    mailbox->waiter_count++;
+    return blockCurrent(OnMbx, id);
+}
+
+int pollMbx(Message **received, uint32_t id) {
+    Critical critical;
+    Mailbox *mailbox = mailboxOf(id);
+    if (mailbox == nullptr) {
+        return kUnknownMbxid;
+    }
+    if (mailbox->message_count == 0) {
+        return kMbxNoMsg;
+    }
+    *received = dequeueMessage(*mailbox);
+    return kOk;
+}
+
+int referMbxStatus(uint32_t id, MailboxInfo *info) {
+    Critical critical;
+    Mailbox *mailbox = mailboxOf(id);
+    if (mailbox == nullptr) {
+        return kUnknownMbxid;
+    }
+    info->attr = mailbox->attr;
+    info->option = mailbox->option;
+    info->waiters = mailbox->waiter_count;
+    info->messages = mailbox->message_count;
+    // The reference reads this through the tail unguarded and faults on an
+    // empty box; answering null is the same information without the fault.
+    info->top = mailbox->tail != nullptr ? mailbox->tail->next : nullptr;
+    return kOk;
+}
+
 void *getThreadmanData() {
     return nullptr;
 }
@@ -1663,6 +1902,30 @@ void *getThreadmanData() {
         slot(reservedHook),             // 10
         slot(referSemaStatus),          // 11
         slot(referSemaStatus),          // 12 iReferSemaStatus
+        nullptr,
+    },
+};
+
+[[gnu::used]] ExportTable<13> thmsgbx_exports = {
+    ps2::module::kExportMagic,
+    0,
+    0x0101,
+    0,
+    {'t', 'h', 'm', 's', 'g', 'b', 'x', 0},
+    {
+        slot(reservedHook),             // 0
+        slot(reservedHook),             // 1
+        slot(reservedHook),             // 2
+        slot(reservedHook),             // 3
+        slot(createMbx),                // 4
+        slot(deleteMbx),                // 5
+        slot(sendMbxNormal),            // 6
+        slot(sendMbxInterrupt),         // 7
+        slot(receiveMbx),               // 8
+        slot(pollMbx),                  // 9
+        slot(reservedHook),             // 10
+        slot(referMbxStatus),           // 11
+        slot(referMbxStatus),           // 12 iReferMbxStatus
         nullptr,
     },
 };

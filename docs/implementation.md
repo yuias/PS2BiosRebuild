@@ -490,7 +490,12 @@ generation.** The reference allocates records from a heap and forms an id
 from the record's address (IOP-3c); ours has 48 of each kind and numbers
 them, refusing a stale id the same way. Seven `thbase` calls are the
 reference's own stubs; `DelayThread` and the alarms answer -1 until a timer
-manager exists (IOP-3j), which the gate lists.
+manager exists (IOP-3j), which the gate lists. The message boxes (IOP-3l)
+follow the same pool rule, 32 of them, and thread their queues through the
+senders' own messages exactly as the reference does -- that part is
+interface, not implementation. One deliberate difference:
+`ReferMbxStatus` on an empty box answers a null `topPacket`, where the
+reference reads it through a null tail and faults.
 
 **`CDVDMAN` serves one datapattern, and `FILEIO` has no arbitrary-alignment
 push.** IOP-8 and IOP-9. Our `CDVDMAN` implements the plain 2048-byte sector
