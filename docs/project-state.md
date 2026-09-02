@@ -457,10 +457,16 @@ simulator, in this order:
   IOP**, `cid 0x80000003` with `"rom0:UDNL cdrom0:\MODULES\IOPRP310.IMG;1"`.
   `REBOOT` answers that: it does not perform the merge `docs/analysis/45`
   describes, but it does hand the bus back the way a completed reboot does,
-  and the title goes on. Where it stops now is `SifBindRpc(0x80000003)` —
-  `FILEIO`'s **second** RPC service, whose dispatch `docs/analysis/43` §1
-  already read and whose caller was that document's own open question. It is
-  the next thing to build. `EELOAD` at the address PCSX2's fast boot hooks is
+  and the title goes on. It then binds `FILEIO`'s second RPC service and the
+  module loader, and — since 2026-09-02 — **asks the loader for all twelve of
+  the modules it ships**, in the reference's own order: `SIO2MAN`, `MSIFRPC`,
+  `PADMAN`, `CDVDSTM`, `MCMAN`, `MCSERV`, `LIBSD`, `SDRDRV`, `MODMIDI`,
+  `MODHSYN`, `EZMIDI`, `CRI_ADXI`. Getting there took the `LOADFILE` version
+  query a title gates every load on (IOP-5f), `thmsgbx` (IOP-3l), the `sifcmd`
+  SREG file and its `SendCmd` pair (BOOT-12f/12g), `sysmem`'s `Kprintf` slot,
+  a `VBLANK` module (IOP-10) and a `SECRMAN` interface (IOP-11). Where it
+  stops now is *after* the last of those loads, in the title's own start-up,
+  and that is not yet located. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
