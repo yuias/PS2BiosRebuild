@@ -597,6 +597,20 @@ rather than written; the reference checks neither its own ordinal 7 nor the
 index an incoming `SET_SREG` names, which from the EE is a write to any
 address that follows the array.
 
+**`VBLANK`'s lists are indices, and nothing is known to raise its lines
+yet.** IOP-10. The module is the reference's shape -- two `INTRMAN`
+registrations on `I_STAT` bits 0 and `0xB`, one pool of sixteen records
+shared by both callback lists, its own two callbacks registered through its
+own ordinal 8 at priority `0x80` -- but the lists are singly-anchored arrays
+of indices rather than the reference's self-sentinelled circular lists
+through the records' own first words. The observable behaviour is the same:
+ordering, the (list, handler) identity, the return codes, and unregistering
+a callback that answers 0. What is **not** yet demonstrated is the
+interrupt itself: nothing in this project has confirmed that its targets
+raise those two lines, so the library binds and registers but its callbacks
+may never run. A client that only needs the bind -- which is why this was
+built -- is served either way.
+
 **`SYSMEM`'s `Kprintf` forwards nowhere yet.** IRX-6c. Ordinal 14 answers `0`
 until ordinal 15 installs a hook, which is the state the reference ships in
 -- nothing in its archive installs one either. Ordinal 15 is a plain swap;

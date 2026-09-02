@@ -136,6 +136,8 @@ ps2AddModule(sysclib MODULE System_C_lib VERSION 1.00
     SOURCES src/iop/sysclib.cpp)
 ps2AddModule(dmacman MODULE DMA_Controller_Manager VERSION 1.00
     SOURCES src/iop/dmacman.cpp)
+ps2AddModule(vblank MODULE Vblank_service VERSION 1.00
+    SOURCES src/iop/vblank.cpp)
 ps2AddModule(ioman MODULE IO_File_Manager VERSION 1.00
     SOURCES src/iop/ioman.cpp)
 ps2AddModule(modload MODULE Module_File_Loader VERSION 1.00
@@ -239,7 +241,7 @@ add_custom_command(
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf sysclib.elf
-            dmacman.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
+            dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
             cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf sio2man.elf osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
 
