@@ -480,7 +480,21 @@ simulator, in this order:
   heap. The last module then could not create a thread and hung in its own
   fatal-error trap, so the loader never answered and the EE waited for ever.
   With the two ends served, and the heap widened to the memory above the boot
-  image, the same run leaves about 1.2 MiB free. `EELOAD` at the address PCSX2's fast boot hooks is
+  image, the same run leaves about 1.2 MiB free.
+
+  The wall after it was the same shape one library along. A title's own
+  drivers bind against the `timrman` its `IOPRP` image carries, which has 28
+  ordinals where `rom0`'s has 17, and the disc's MIDI driver imports four of
+  the ones past the end — so all four bound to `jr $ra`, its timer set-up
+  failed on a register left in `$v0`, and it fell back to polling a timer that
+  was never programmed. `TIMRMAN` now owns an interrupt handler per timer and
+  serves them (IOP-7f). With that, the boot's SIF-bridge phase runs to the end
+  and matches the reference command for command, as far as a bind the
+  reference makes next and ours does not yet reach.
+
+  **The instrument that made both of these findable** is the reference BIOS
+  run on the same emulator with the same disc, and its command stream diffed
+  against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
