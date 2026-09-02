@@ -193,6 +193,38 @@ The allocation-mode argument having exactly three legal values, and the
 behaviour of each, is the level of detail the specification will need; it is
 left to the spec pass rather than settled here.
 
+### `Kprintf` is a hook, not a printer (slots 14 and 15)
+
+Read because nearly every module in both the ROM and a title's own `IOPRP`
+image imports `sysmem` ordinal 14, so a rebuild whose table stops short of it
+leaves every one of them calling a `jr $ra`.
+
+```sh
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0xb90 0xc80
+xxd -s 0xc40 -l 0x50 <outdir>/SYSMEM.text        # the two words, both zero
+```
+
+Slot 14 (`0xb90`) homes its register arguments, loads a function pointer from
+`.data + 0x30`, and **returns 0 if it is null**; otherwise it tail-calls
+`hook(context, format, varargs)` with the context from the next word and
+`varargs` pointing at the homed slot after `format`. It writes nothing itself
+and touches no device. Slot 15 (`0xbdc`) is the setter that installs the
+pair.
+
+Both words are **zero in the stored image**, nothing else in `SYSMEM`
+references them, and **no module in `rom0` or in the disc's `IOPRP310.IMG`
+imports slot 15**. So on retail hardware `Kprintf` is a silent `return 0`
+unless something outside these two archives installs a hook. A rebuild
+reproduces the interface by exporting both slots and defaulting the hook to
+null; the signature an implementer needs is
+`int (*)(void *context, const char *format, va_list args)`.
+
+One quirk of the setter, recorded because it is surprising rather than
+because anything uses it: when an old hook exists and the new one is
+non-null, it first calls `Kprintf` with a **null format**, and hands that
+call's result to the new hook as `new(context, result)` before switching.
+No caller was found that exercises it.
+
 ## What this pins for the rebuild
 
 - Library tables: 20-byte header, magic `0x41C00000` / `0x41E00000`, 8-byte

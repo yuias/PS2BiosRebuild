@@ -150,6 +150,18 @@ entry renumbers every later one and silently breaks every importer.
 share one `jr $ra` return stub. `SYSMEM` slots 2, 11, 12 and 13 all point at the
 same two instructions.
 
+**IRX-6c — a short table is not a safe subset.** IRX-9's binder rewrites an
+out-of-range ordinal to `jr $ra`, so stopping a table early does not fail a
+bind — it makes every call to a missing ordinal return silently. `sysmem`
+ordinal **14** is the case that matters most: it is `Kprintf`, nearly every
+module in the reference archive imports it, and the reference's own body is
+a forwarder that returns `0` when no hook is installed (slot **15**
+installs the `{function, context}` pair, and nothing in the reference
+installs one). So the honest reproduction is a sixteen-slot table whose 14
+forwards to a null-by-default hook of signature
+`int (*)(void *context, const char *format, va_list args)` and whose 15 sets
+it — not a shorter table that happens to behave the same today.
+
 **IRX-6b:** A slot may deliberately alias another. `intrman` slots 19 and 20
 repeat the addresses of 17 and 18 — two published names for one function pair.
 

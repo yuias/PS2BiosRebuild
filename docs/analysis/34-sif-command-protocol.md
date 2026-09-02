@@ -158,21 +158,27 @@ assembly code at `SIFCMD`'s internal `_SifSendCmd` (`0x3e4`, shared by
 
 ```
 struct SifCmdHeader_t {
-    u32 psize : 8;   // packet size in 16-byte units, 1..7 (max packet = 112 B)
+    u32 psize : 8;   // packet size in BYTES, 16..112 -- see the correction below
     u32 dsize : 24;  // payload ("extra") size in bytes
     void *dest;       // destination address for the extra payload (may be NULL)
     int   cid;        // command id; cid < 0 (bit31 set) => "system" range
     u32   opt;         // caller-defined
 };
 ```
-`_SifSendCmd` packs the header + up to 6 more quadwords of caller data into a
-stack buffer (`sll $3,$17,4` — 16-byte slots, loop bound matches "packet size
-max 7×16" from the header comment) before handing it to the DMA layer, i.e.
-the wire packet literally *is* this struct followed by up to 96 bytes of
-inline body, with a separate out-of-band "extra" DMA (`src_extra`/`dest_extra`
-/`size_extra`) for anything bigger — this is the mechanism doc 24 already
-observed framed on the wire (a `0x14`-byte `psize` for the boot's `INIT_CMD`-
-shaped packet).
+
+**Correction: `psize` is a byte count, not a count of 16-byte units.**
+`_SifSendCmd` (`0x3e4`) opens with `addiu $2,$7,-0x10` / `sltiu $2,$2,0x61`,
+so the accepted range is `16 <= psize <= 112`, and it stores the value with
+`sb` into the header's byte 0 and passes the same value as the DMA transfer's
+size. The boot's `0x14`-byte `INIT_CMD` packet doc 24 observed is `psize =
+0x14` on the wire, which only makes sense as bytes.
+
+`_SifSendCmd` does **not copy the packet**. The stack area it builds is the
+DMA descriptor list; the packet is transferred in place out of the caller's
+own buffer, which therefore has to stay valid until the transfer completes.
+The out-of-band "extra" block (`src_extra`/`dest_extra`/`size_extra`) is a
+second descriptor placed *ahead* of the packet in the same run, so the EE's
+channel interrupt fires once, after both.
 
 **Dispatch on receipt** (`sceSifAddCmdHandler`, `0x35c`): `cid` is tested
 `bgez` — nonnegative `cid` indexes the **user** handler table (installed via
@@ -206,6 +212,89 @@ as implemented; nothing new was found to contradict it. **Acknowledgement**:
 the CMD layer has no separate ack — a system-command handler simply replies
 with a new packet (SET_SREG for INIT_CMD, RPC_END for BIND/CALL/RDATA); there
 is no "I got your packet" handshake beneath that.
+
+### `sceSifSendCmd` and `isceSifSendCmd` (ordinals 12 and 13), in full
+
+Read because `MSIFRPC.IRX` imports both and a rebuild that leaves them
+reserved gives a title's SIF bridge a working-looking no-op.
+
+```sh
+python3 tools/irxinfo.py <outdir>/SIFCMD --dump-load <outdir>/SIFCMD.text
+python3 tools/romdis.py <outdir>/SIFCMD.text --cpu iop --vma 0 --range 0x3e4 0x4e0
+```
+
+Both are two-instruction shims onto `_SifSendCmd(cid, mode, pkt, psize,
+src_extra, dest_extra, size_extra)` — `0x4e0` passes `mode = 0`, `0x524`
+passes `mode = 1` — and in this version **mode is used for exactly one
+thing**: `andi $5,1` at `0x484` selects whether the `sceSifSetDma` call is
+bracketed by `CpuSuspendIntr`/`CpuResumeIntr`. Nothing else differs: same
+range check, same header writes, same descriptor list, same destination, same
+return value. Ordinal 13 is ordinal 12 for a caller that is already inside an
+interrupt handler.
+
+`_SifSendCmd`, in order:
+
+1. `psize` outside `[16, 112]` → **return 0**, nothing written.
+2. `size_extra > 0` (signed): descriptor 0 is `{src_extra, dest_extra,
+   size_extra, attr 0}`, the header's `dsize` field becomes `size_extra` and
+   its `dest` becomes `dest_extra`. Otherwise `dest` is zeroed and there is
+   one descriptor.
+3. The header's byte 0 takes `psize` and `+8` takes `cid`. **`opt` at `+0xc`
+   and everything from `+0x10` on are left exactly as the caller wrote them**
+   — the library never touches the body.
+4. The last descriptor is `{pkt, <the EE's packet buffer>, psize, attr 4}`.
+   The EE address comes from the module's own state word, which only the
+   `CHANGE_SADDR` handler and the `opt == 0` `INIT_CMD` handler ever write;
+   before either arrives it is zero and the reference transfers to EE address
+   0 with no guard.
+5. `sceSifSetDma(list, n)`, bracketed by `CpuSuspendIntr`/`CpuResumeIntr`
+   unless `mode & 1`.
+
+**The return value is the DMA layer's, and it is a real signal.**
+`sceSifSetDma` (`SIFMAN` `0x598`) answers **0 when its 32-entry pending queue
+cannot take `n` more descriptors**, and otherwise a nonzero id
+(`seq << 16 | index << 8 | n`). So 12 and 13 return 0 both for a rejected
+`psize` and for a full queue, and `MSIFRPC` leans on it: its SET_SREG
+handshake and its `cid 0x18` reply both **loop until the answer is nonzero**,
+delaying in between. A rebuild that always answers 0 hangs those loops; one
+that always answers nonzero drops packets silently.
+
+### The SREG file, and the handshake that actually uses it
+
+Ordinal 6 (`0x28`) is `sceSifGetSreg(index)` [header] and ordinal 7 (`0x40`)
+`sceSifSetSreg(index, value)`: a plain load and store into a **32-word array
+in `SIFCMD`'s own `.bss`** (`0x19c0` in the rom0 module), zeroed by the module
+entry, with **no bounds check on either**. The array's address is kept at
+`+0x1c` of the module's state record, which is how the third writer finds it:
+
+- the **`SET_SREG` system handler** (`0x0`), installed as the handler for
+  `cid 0x80000001`, does `sreg[packet + 0x10] = packet + 0x14` — so any such
+  packet the EE sends writes straight into the file, at an index the sender
+  chooses and nothing validates.
+
+That is the whole mechanism, and §1 step 6's "partially inferred" note can be
+closed: the two sides really do talk through it, symmetrically.
+
+- The IOP's own `sceSifInitRpc` (`0x6c0`) sends `SET_SREG(0, 1)` *outbound*
+  the moment its four RPC handlers are installed, then waits on bit `0x800`
+  of the system status flag — the bit the `INIT_CMD` handler raises for
+  `opt != 0`. It never writes its own register 0.
+- The SDK's EE client never sends `SET_SREG` at all: `sceSifInitCmd` sends
+  `INIT_CMD` (`opt 0`) the first time and `CHANGE_SADDR` on a re-announce,
+  and `sceSifInitRpc` sends `INIT_CMD` (`opt 1`) and spins on its **own**
+  register 0. **The IOP's register 0 is therefore never written by the SDK.**
+- `MSIFRPC` and the title's own EE half of it are the first thing that uses
+  the file in earnest, and they use register **1**: each side sends
+  `SET_SREG(1, 1)` to the other — looping while `sceSifSendCmd` answers 0 —
+  and then spins on `GetSreg(1)` of its own file until it reads nonzero.
+  `MSIFRPC`'s spin delays between reads.
+
+Two consequences for a rebuild. Its command dispatcher needs a
+`cid 0x80000001` case writing that file, or the title's half of the handshake
+never lands and `MSIFRPC` spins for ever. And ordinal 6 must read the same
+file — a reserved slot that returns whatever happens to be in `$v0` will
+sometimes look nonzero and let the loop out early, which is worse than
+hanging because it is intermittent.
 
 ## 3. The RPC layer
 

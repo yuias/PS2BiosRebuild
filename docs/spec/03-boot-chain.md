@@ -397,6 +397,40 @@ an 8-byte answer, the module id or an error at `+0`, the module's own return
 at `+4`. A name the loader has no file for answers **-203**, observed on the
 reference (`docs/analysis/34` §6).
 
+**BOOT-12f — the SREG file, and `SET_SREG`.** Each side keeps a **32-word
+register file** of its own, and `cid 0x80000001` writes one word of the
+*receiver's* file: index at body `+0`, value at body `+4`, with no bounds
+check in the reference. The `sifcmd` library publishes a read (ordinal 6) and
+a local write (ordinal 7) over it. A receiver that does not implement the
+command silently drops every write, and a read that is not backed by the file
+answers whatever happens to be in the return register — which is worse than
+answering zero, because it lets a caller's spin loop out at random. Both are
+required of a rebuild.
+
+Nothing in the boot's own handshake writes the IOP's file: `sceSifInitCmd`
+sends `INIT_CMD`, `sceSifInitRpc` sends `INIT_CMD` with `opt` set and spins
+on the **EE's** register 0, and the IOP's `sceSifInitRpc` answers by sending
+`SET_SREG(0, 1)` outward. The file first carries traffic when a title's own
+SIF bridge arrives: it and its IOP half each send `SET_SREG(1, 1)` to the
+other and then spin on their own register 1 (`docs/analysis/34` §2).
+
+**BOOT-12g — sending a command.** `sceSifSendCmd(cid, packet, psize,
+src_extra, dest_extra, size_extra)` (`sifcmd` ordinal 12) and
+`isceSifSendCmd` (ordinal 13) differ **only** in whether the transfer is
+started inside an interrupt-disabled bracket; 13 exists for a caller already
+in a handler. Both: reject a `psize` outside BOOT-12a's `16..112` by
+returning `0`; fill in the header's `psize` and `cid` and leave `opt` and the
+body as the caller wrote them; describe an out-of-band block ahead of the
+packet when `size_extra > 0`, setting `dsize` and `dest` from it; and
+transfer the packet **in place from the caller's buffer** — it is not copied,
+so it must stay valid until the transfer completes.
+
+**The return value is load-bearing.** It is the DMA layer's: `0` when the
+transfer could not be queued, non-zero otherwise. Real clients loop until it
+is non-zero rather than treating a send as unconditional, so a rebuild that
+always answers `0` hangs them and one that always answers non-zero drops
+packets with no diagnostic.
+
 ## Verification
 
 Everything in BOOT-1, BOOT-3, BOOT-5 and BOOT-6 is a statement about specific
