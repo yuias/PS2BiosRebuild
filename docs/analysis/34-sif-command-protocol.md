@@ -296,6 +296,60 @@ file — a reserved slot that returns whatever happens to be in `$v0` will
 sometimes look nonzero and let the loop out early, which is worse than
 hanging because it is intermittent.
 
+### The ordinals past this project's tables, read
+
+`CRI_ADXI`, `MCSERV`, `PADMAN` and `EZMIDI` — the modules a title loads —
+import six entries that fall past a 23-slot table and so bind to `jr $ra`.
+
+```sh
+python3 tools/romdis.py <outdir>/SIFMAN.text --cpu iop --vma 0 --range 0x148 0x268
+python3 tools/romdis.py <outdir>/SIFMAN.text --cpu iop --vma 0 --range 0x2d8 0x2ec
+python3 tools/romdis.py <outdir>/SIFCMD.text --cpu iop --vma 0 --range 0x1210 0x133c
+```
+
+**`sifman` 5 and 29 are a pair, and this document's §0 map has them right
+where `src/iop/eesync.cpp` did not.** Ordinal 5 (`0x148`) is `sceSifInit`,
+not `SetDChain` — `SetDChain` is ordinal **6** (`0x2e8`). Ordinal 29
+(`0x2d8`) is `sceSifCheckInit`: a bare load of the one `.bss` word ordinal 5
+sets as the last thing it does, which is also the word ordinal 5 tests on
+entry to make itself idempotent. Every client in the set above is written the
+same way — `if (!sceSifCheckInit()) sceSifInit();` — so a rebuild that leaves
+29 unbound has a client "initialise" a bus already carrying traffic, and if
+its ordinal 5 is something else entirely, that call does something else
+entirely.
+
+**`sifman` 22 and 24 are likewise a pair**, and the same correction applies:
+22 writes **MSFLG** (`0xBD000020`) and 24 writes **SMFLG** (`0xBD000030`).
+Since a write from the IOP *clears* MSFLG and *sets* SMFLG (BOOT-10c), they
+are opposite actions, not variants.
+
+**`sifman` 32** (`sceSifSetDmaIntr` [header]) exists only in the newer
+`SIFMAN` a title's `IOPRP` carries; rom0's slot 32 is the shared `jr $ra`.
+It is ordinal 7 with two extra arguments, `(function, arg)`, appended to a
+per-batch table of completion callbacks; the sending channel's completion
+handler runs every callback of the batch that just finished, once, from
+interrupt context, before starting the next batch. A null function makes it
+ordinal 7 exactly, and the range check, the queue-full `0` and the non-zero
+id are 7's unchanged. `sifcmd` **28** and **29** are the same relationship to
+12 and 13, routed through 32 instead of 7.
+
+**`sifcmd` 24 and 25** (`sceSifRemoveRpc`, `sceSifRemoveRpcQueue` [header],
+`0x1210`/`0x12a8`) are the inverses of 17 and 19: under an interrupt bracket,
+unlink the record from its list and answer it — the reference answers the
+*predecessor* where it had one — or answer null when it was not on the list.
+Nothing else is touched: a removed server's own link is left dangling and the
+queue's pending requests are not looked at. Both observed callers use them on
+a shutdown path and ignore the result.
+
+**Why 32 and 28 matter more than they look.** `PADMAN` has a mode in which
+it sends its pad batch through 32 (or through `sifcmd` 28), stores the id,
+and — if the id is non-zero — **waits on a semaphore its completion callback
+signals**. Bound to `jr $ra`, ordinal 32 answers whatever is in `$v0`: zero
+takes the "not queued" branch and loses the data silently, and non-zero
+parks the thread for ever on a callback that will never run. That second
+shape — a no-op that presents as success — is the one worth designing
+against.
+
 ## 3. The RPC layer
 
 **Server registration (IOP)**: `sceSifRegisterRpc` (`0x1130`) fills a

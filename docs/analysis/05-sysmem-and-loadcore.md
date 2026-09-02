@@ -172,6 +172,36 @@ becomes the delay slot of the new `j`. It is harmless — `$v0` is the return-va
 register, which the callee overwrites — and it means a bound stub still records
 the ordinal it was bound to.
 
+### Ordinals 5 and 27, read because a title's modules import them
+
+```sh
+python3 tools/romdis.py <outdir>/LOADCORE.text --cpu iop --vma 0 --range 0x1a14 0x1b18
+```
+
+**Ordinal 5 is `FlushDcache`** — the data-cache twin of ordinal 4, and a
+**void**: it never writes `$v0`. It jumps to its own uncached alias, saves and
+clears the interrupt and DMA enables, isolates the cache, stores 64 words to
+invalidate every line, and puts everything back. Three modules a title loads
+call it and none reads the result, so a rebuild's `-1` is harmless today and
+still the wrong shape.
+
+**Ordinal 27 exists only in the newer loader** a title's `IOPRP` carries —
+the reference ROM's table ends at 24, so on rom0 it is an out-of-range
+import. It takes `(table, flags)`: null table answers `-214`; a table that is
+neither on the registry nor still carrying the export magic answers `-213`;
+otherwise it stores `flags & 6` into the table's flags halfword and answers
+`0`. Nothing else in the loader reads those bits — the consumer is the newer
+`MODLOAD`'s reboot teardown pass, which walks the registry and calls export
+**slot 2** of every table that has one, with the two bits selecting which
+pass takes which table. That is new against this document's "slots 0 and 1
+are reserved hooks": in the newer loader **slot 2 is a live teardown hook**.
+
+The reason ordinal 27 matters to a rebuild that has no teardown pass is its
+caller. One module a title loads registers its library, calls ordinal 27
+three instructions later, and **returns non-resident if the answer is
+non-zero** — so an unbound `jr $ra` there works only for as long as `$v0`
+happens to be zero.
+
 ## SYSMEM: the kernel's memory
 
 `SYSMEM`'s entry (offset `0x60`) takes the RAM size the boot chain passes down

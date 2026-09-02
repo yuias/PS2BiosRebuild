@@ -431,6 +431,30 @@ is non-zero rather than treating a send as unconditional, so a rebuild that
 always answers `0` hangs them and one that always answers non-zero drops
 packets with no diagnostic.
 
+**BOOT-12h — `sifman`'s init pair, and two ordinals that are not what they
+look like.** `sceSifInit` is ordinal **5** and `sceSifSetDChain` ordinal
+**6**; `sceSifCheckInit` is ordinal **29** and reads the same latch word
+ordinal 5 sets, which is also what makes ordinal 5 idempotent. Every module a
+title loads is written as `if (!sceSifCheckInit()) sceSifInit();`, so a
+rebuild must answer 29 truthfully — an unbound 29 makes a client re-run
+whatever its ordinal 5 happens to be, on a bus already carrying traffic.
+Likewise ordinal **22 writes MSFLG** and ordinal **24 writes SMFLG**: since a
+write from the IOP clears the first and sets the second (BOOT-10c), they are
+opposite actions and a rebuild that puts one at the other's number inverts
+it.
+
+**BOOT-12i — the completion-callback variants, and the removals.** `sifman`
+**32** is ordinal 7 with `(function, arg)` appended: the function is called
+once, from the sending channel's interrupt, after the whole run has gone, and
+a null function makes it ordinal 7 exactly. `sifcmd` **28** and **29** stand
+in the same relation to 12 and 13. These matter beyond the feature they
+serve, because a caller **waits on a semaphore the callback signals**: an
+implementation that answers "queued" and never calls back parks that thread
+for ever, which is worse than answering `0`. `sifcmd` **24** and **25**
+(`sceSifRemoveRpc`, `sceSifRemoveRpcQueue`) are the inverses of 17 and 19 —
+unlink under an interrupt bracket and answer the record, or null when it was
+not on the list.
+
 ## Verification
 
 Everything in BOOT-1, BOOT-3, BOOT-5 and BOOT-6 is a statement about specific

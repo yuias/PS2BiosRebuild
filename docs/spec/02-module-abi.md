@@ -165,6 +165,16 @@ it — not a shorter table that happens to behave the same today.
 **IRX-6b:** A slot may deliberately alias another. `intrman` slots 19 and 20
 repeat the addresses of 17 and 18 — two published names for one function pair.
 
+**IRX-10c — flagging a registered table** (`loadcore` ordinal 27, present
+only in the newer loader a title's `IOPRP` carries). Stores two bits — values
+2 and 4 — into an export table's flags halfword, after checking that the
+table is either on the registry or still carrying the export magic. Answers
+`0`, `-213` for a table that is neither, and `-214` for a null pointer. The
+bits are read by the teardown pass a reboot runs; a rebuild without that pass
+still has to answer, because **a module's entry can return non-resident when
+this call fails** — one observed module does exactly that, three instructions
+after registering its library.
+
 ## IRX-7: Slots 0 and 1 are reserved
 
 Slot 0 is a library-level hook, **not** reliably the module entry point.

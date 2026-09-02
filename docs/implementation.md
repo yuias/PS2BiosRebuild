@@ -597,6 +597,21 @@ rather than written; the reference checks neither its own ordinal 7 nor the
 index an incoming `SET_SREG` names, which from the EE is a write to any
 address that follows the array.
 
+**`EESYNC`'s `sifman` ordinals were off by one, and now are not.** BOOT-12h.
+Ordinal 5 held `SetDChain`, which belongs at 6, and ordinal 22 held the SMFLG
+write, which belongs at 24. Both are corrected, `REBOOT` now imports 6 and 24,
+and 22 is the MSFLG write it should have been. Ordinal 5 is `sceSifInit`,
+which our module's entry has already done by the time anything can call it,
+so it only raises the latch ordinal 29 reads. The tables grew to the
+reference's extents -- `sifman` 36 slots, `sifcmd` 32 -- because an ordinal
+past the end binds to `jr $ra` and disappears.
+
+**`sifman` 32 and `sifcmd` 28/29 keep one callback, not a table.** BOOT-12i.
+The reference queues up to 32 transfers and keeps a completion callback per
+transfer; ours runs one at a time, so one slot is exactly that table. A
+caller waits on a semaphore the callback signals, which is why these are
+implemented rather than left to answer plausibly.
+
 **`SECRMAN` is the interface and not the mechanism.** IOP-11 and
 `docs/clean-room-policy.md`. Its `AuthCard` answers `1` once a card driver
 has registered its command handler and `0` before that, without exchanging
