@@ -437,12 +437,25 @@ before its entry makes the reference's own call.
 loader and `LOADCORE`, for the same reason: something has to own it before
 `LOADCORE` is loaded.
 
-**`SYSMEM`'s allocator only bumps.** It hands out memory and can give back only
-the most recent allocation, refusing anything else rather than leaking
-silently. It takes the reference's `(mode, size, address)` and reads only the
-size: a bump allocator has one place to put anything. The heap extent is a
-fixed range until the boot parameters of BOOT-4 step 5 are plumbed through;
-a real free list arrives with `HEAPLIB`.
+**`SYSMEM`'s allocator is two bump cursors, not a free list.** IRX-15b's low
+and high modes are honoured -- each end of the heap has a cursor and the two
+grow towards each other -- but each end can give back only the block it handed
+out last, and refuses anything else rather than leaking silently. IRX-15b's
+mode 2 has no caller here and is refused. That is enough for the boot: what
+`MODLOAD` releases is always the newest block at its end, so the raw file it
+reads each module out of is actually reclaimed. A free list, and with it the
+out-of-order release, arrives with `HEAPLIB`.
+
+**And its heap starts above the whole boot image, not above `SYSMEM`.**
+IRX-15e's low bound is the end of `SYSMEM`'s own image, which works on the
+reference because every module after it is *allocated* out of the heap.
+`IOPBOOT` here places the boot list's modules itself, from the list's base
+upwards, so a heap starting under them would be handed out over modules not
+yet loaded. Ours starts above the image instead, and `tools/imgcheck.py`
+fails the build if the image ever reaches it. The high bound stops below the
+boot list at `0x001F8100` rather than at the RAM size of BOOT-4 step 5, which
+is still not plumbed through. Making `IOPBOOT` allocate its modules like the
+reference does would retire both deviations at once.
 
 **A file crosses the bus a window at a time.** The reference serves `rom0:`
 through `ROMDRV` over `SIFCMD`'s RPC; neither exists here yet, so `EESYNC`

@@ -15,20 +15,35 @@
 
 namespace {
 
-// Provisional extent. The reference takes the machine's memory size from the
-// boot parameters the reset path latched (spec/03 BOOT-4 step 5); until that
-// is plumbed through, a retail 2 MiB machine's spare middle is the heap, kept
-// clear of the stack the boot block put at the top.
-constexpr uint32_t kHeapStart = 0x00100000;
+// IRX-15e: the heap is what is left of the machine above the loaded kernel.
+// The reference's low bound is the end of SYSMEM's own image, because every
+// module after it is allocated out of this heap rather than placed; ours are
+// placed by `IOPBOOT` from the boot list's base upwards, so the bound has to
+// clear the whole boot image instead. `tools/imgcheck.py` gates the image
+// against it. The high bound stops below the boot list at `0x001F8100` and
+// the stack the boot block put above that; the reference's is the RAM size
+// the reset path latched (spec/03 BOOT-4 step 5), still not plumbed through.
+constexpr uint32_t kHeapStart = 0x00020000;
 constexpr uint32_t kHeapEnd = 0x001F0000;
-constexpr uint32_t kAlignment = 16;
+
+// IRX-15a: the reference allocates in units of 0x100, which is also the
+// boundary IRX-12b rounds a released module base down to.
+constexpr uint32_t kAlignment = 0x100;
+
+// IRX-15b: the three modes.
+enum Mode : uint32_t { Lowest = 0, Highest = 1, AtAddress = 2 };
 
 constexpr uint32_t kExportMagic = 0x41C00000;
 
-// The bump allocator's state: the next free address, and the most recent
-// allocation -- the only one `release` can give back.
-uint32_t heap_cursor;
-uint32_t heap_last;
+// IRX-15c: two cursors growing towards each other, so mode 0 and mode 1 never
+// interleave. `low_cursor` is zero until the entry runs, which is what every
+// ordinal tests for "initialised" (IRX-15e).
+uint32_t low_cursor;
+uint32_t high_cursor;
+// The most recent block at each end -- the only ones `release` can give back.
+uint32_t low_last;
+uint32_t high_last;
+uint32_t high_last_end;
 
 // IRX-7: slots 0 and 1 are reserved hooks that nothing imports, kept occupied
 // rather than removed (IRX-6a), so they need somewhere to point.
@@ -68,42 +83,56 @@ int kprintfSet(KprintfHook hook, void *context) {
     return 0;
 }
 
-// Ordinal 4: allocate(mode, size, address) -> address, or 0. The reference's
-// modes place a block lowest, highest or at `address` [header]; a bump
-// allocator has one place to put anything, so the two are read and ignored
-// (docs/implementation.md).
+// Ordinal 4: allocate(mode, size, address) -> address, or 0.
 //
-// A bump allocator, which is all the boot needs: every allocation the module
-// list makes lives as long as the machine does. Anything with a real lifetime
-// arrives with the heap of `HEAPLIB`.
-[[nodiscard]] int allocate([[maybe_unused]] uint32_t mode, uint32_t size,
+// Not a free list: each end of the heap is a bump cursor, and the two grow
+// towards each other. That is enough to honour IRX-15b's low and high modes,
+// which is what makes `MODLOAD`'s release of a raw file actually give the
+// memory back -- the file comes off the top, the image it builds off the
+// bottom, so the file is still the topmost block when it is released. Mode 2
+// (`AtAddress`) has no caller here and is refused rather than misplaced.
+// Anything needing a real lifetime arrives with the heap of `HEAPLIB`.
+[[nodiscard]] int allocate(uint32_t mode, uint32_t size,
                            [[maybe_unused]] uint32_t address) {
-    if (size == 0) {
+    if (size == 0 || low_cursor == 0) {
         return 0;
     }
     const uint32_t rounded = (size + kAlignment - 1) & ~(kAlignment - 1);
-    const uint32_t next = heap_cursor + rounded;
-    if (next > kHeapEnd) {
-        return 0;                      // past the end of the heap
+    if (rounded > high_cursor - low_cursor) {
+        return 0;                      // IRX-15d: no fallback to the other end
     }
-    const uint32_t block = heap_cursor;
-    heap_last = heap_cursor;
-    heap_cursor = next;
-    return static_cast<int>(block);
+    if (mode == Lowest) {
+        const uint32_t block = low_cursor;
+        low_last = block;
+        low_cursor += rounded;
+        return static_cast<int>(block);
+    }
+    if (mode == Highest) {
+        high_last_end = high_cursor;
+        high_cursor -= rounded;
+        high_last = high_cursor;
+        return static_cast<int>(high_cursor);
+    }
+    return 0;
 }
 
 // Ordinal 5: release(address) -> 0, or -1.
 //
-// A bump allocator can give back only what it handed out last. Saying so is
-// better than accepting every address and leaking: a caller that frees out of
-// order finds out at once rather than exhausting the heap later.
+// A pair of bump cursors can give back only what each end handed out last.
+// Saying so is better than accepting every address and leaking: a caller that
+// frees out of order finds out at once rather than exhausting the heap later.
 [[nodiscard]] int deallocate(uint32_t address) {
-    if (heap_last == 0 || address != heap_last) {
-        return -1;
+    if (low_last != 0 && address == low_last) {
+        low_cursor = low_last;
+        low_last = 0;
+        return 0;
     }
-    heap_cursor = heap_last;
-    heap_last = 0;
-    return 0;
+    if (high_last != 0 && address == high_last) {
+        high_cursor = high_last_end;
+        high_last = 0;
+        return 0;
+    }
+    return -1;
 }
 
 // IRX-4: the export table header, followed by IRX-5's pointer array. It is a
@@ -158,8 +187,10 @@ extern "C" {
 // installed. `return & 3` decides residency -- clear keeps the module -- and
 // a memory manager stays.
 int _module_start(int, char **) {
-    heap_cursor = kHeapStart;
-    heap_last = 0;
+    low_cursor = kHeapStart;
+    high_cursor = kHeapEnd;
+    low_last = 0;
+    high_last = 0;
     return 0;                          // resident
 }
 

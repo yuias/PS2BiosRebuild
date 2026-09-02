@@ -63,7 +63,7 @@ def expectedLibraries(image: pathlib.Path, modules: list[str]) -> list[str]:
 # IRX-9's binding worked -- and that SYSMEM's own entry ran, since an
 # uninitialised heap cursor could not answer with its start.
 CROSS_CALL_RESULT = 0x1F8020
-HEAP_START = 0x00100000
+HEAP_START = 0x00020000
 
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
@@ -206,6 +206,18 @@ def checkIop(image: pathlib.Path) -> list[str]:
     if not imports:
         problems.append("IRX-9: no import table was found at all, so binding "
                         "is untested")
+
+    # IRX-15e: SYSMEM's heap starts above the whole boot image, because
+    # IOPBOOT places the boot list's modules itself rather than allocating
+    # them. The boot list's +0x00C is where the next module would have gone,
+    # so it is the image's end -- and the moment it reaches the heap the two
+    # overlap silently, which is the kind of failure that shows up much later
+    # as a corrupt module.
+    image_end = bus.read(BOOT_LIST + 0xC, 4)
+    if image_end > HEAP_START:
+        problems.append(f"IRX-15e: the boot image ends at {image_end:#x}, "
+                        f"at or past SYSMEM's heap start {HEAP_START:#x} -- "
+                        f"the heap has to clear the image")
 
     # IRX-12 and IRX-9 together: LOADCORE's entry ran, called across the
     # binding into SYSMEM, and got the heap back.
