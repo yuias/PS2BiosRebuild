@@ -54,6 +54,14 @@ constexpr uint32_t kCompareMode = 0x58;
 constexpr uint32_t kFlagCompare = 0x800;
 constexpr uint32_t kFlagOverflow = 0x1000;
 constexpr uint32_t kModeCount = 8;               // IOP-7f: `mode` is 0..7
+// IOP-7g: the MODE bits the source and prescale contribute. Only the odd
+// `mode` values and 0 are legal; 2, 4 and 6 are refused.
+constexpr uint32_t kModeIllegal = 0x54;          // bits 2, 4 and 6 of a mask
+constexpr uint32_t kSourceAlternate = 0x100;     // PIXEL or HLINE rather than SYSCLOCK
+constexpr uint32_t kPrescale8Narrow = 0x200;     // RTC0-2
+constexpr uint32_t kPrescale8Wide = 0x2000;      // RTC3-5
+constexpr uint32_t kPrescale16 = 0x4000;
+constexpr uint32_t kPrescale256 = 0x6000;
 
 // The source bits [header]: which clock a timer may count.
 constexpr uint32_t kSysclock = 1;
@@ -92,7 +100,7 @@ uint8_t in_use[kTimers];                         // a count, not a flag (IOP-7b)
 // holding all of this plus what `kTable` already has; ours splits it, since
 // `kTable` is const and this half is not.
 struct TimerState {
-    uint32_t setup_mode;        // what SetupHardTimer settled, and that it ran
+    uint32_t setup_mode;        // the MODE bits SetupHardTimer settled
     bool set_up;
     bool running;
     bool handler_installed;     // the ISR is on this timer's IRQ
@@ -303,16 +311,35 @@ int setupHardTimer(uint32_t timer_id, uint32_t source, uint32_t mode,
         }
         state.handler_installed = true;
     }
-    if (mode >= kModeCount) {
+    if (mode >= kModeCount || ((kModeIllegal >> mode) & 1) != 0) {
         return kIllegalMode;
     }
     if ((source & kTable[index].sources) == 0) {
         return kBadSource;
     }
-    if (prescale > kTable[index].prescale) {
-        return kBadPrescale;
+    uint32_t bits = mode;
+    if (source == kPixel || source == kHline) {
+        bits |= kSourceAlternate;
+    } else if (source == kSysclock) {
+        if (prescale > kTable[index].prescale) {
+            return kBadPrescale;
+        }
+        // The reference reads the prescale as one of four values, and its
+        // "no prescale" test is `prescale == source` rather than
+        // `prescale == 1` -- the same thing on this path, kept as it reads.
+        if (prescale == 8) {
+            bits |= kTable[index].size == 32 ? kPrescale8Wide : kPrescale8Narrow;
+        } else if (prescale == 16) {
+            bits |= kPrescale16;
+        } else if (prescale == 256) {
+            bits |= kPrescale256;
+        } else if (prescale != source) {
+            return kBadPrescale;
+        }
+    } else {
+        return kBadSource;
     }
-    state.setup_mode = mode;
+    state.setup_mode = bits;
     state.set_up = true;
     return 0;
 }
@@ -336,8 +363,8 @@ int startHardTimer(uint32_t timer_id) {
     *reinterpret_cast<volatile uint16_t *>(reg + 4) = 0;
     writeCounterLike(reg, 0);
     writeCounterLike(reg + 8, state.compare);
-    *reinterpret_cast<volatile uint16_t *>(reg + 4) =
-        static_cast<uint16_t>(state.compare_mode | state.overflow_mode);
+    *reinterpret_cast<volatile uint16_t *>(reg + 4) = static_cast<uint16_t>(
+        state.setup_mode | state.compare_mode | state.overflow_mode);
     _import_intrman_enable(kTable[index].irq);
     state.running = true;
     return 0;

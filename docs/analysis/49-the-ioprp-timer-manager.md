@@ -126,14 +126,28 @@ registers it — `intrman` `RegisterIntrHandler(irq, 1, <the ISR>, descriptor)`
 — after releasing whatever was there, and sets `+0x0a`. A failed registration
 is returned as it comes back.
 
-`mode` indexes a jump table of eight entries and anything from 8 up is
-`-0x195` (`KE_ILLEGAL_MODE`). `source` must be one of 1, 2 or 4 and must be
-a bit the timer's `+0x04` mask has, else `-0x98`; `prescale` must not exceed
-`+0x06` and must suit the source, else `-0x99`. What survives is written to
-`+0x10` and `+0x16`.
+What it settles is a **MODE word**, built in one register and stored at
+`+0x10`. It starts as `0x80000000` — a marker in a half the 16-bit MODE
+register never sees, which is also how `StartHardTimer` tells a set-up timer
+from a fresh one — and gains bits from all three arguments:
 
-For `EZMIDI`'s own call — `(id, source 1, mode 0, prescale 1)` — the path is
-the simple one: SYSCLOCK, no prescale, mode 0.
+- **`mode`** indexes a jump table of eight entries (`0xed0`). Entries 0, 1, 3,
+  5 and 7 fall through to `or` the value itself into the low bits; **2, 4 and
+  6 answer `-0x195`** (`KE_ILLEGAL_MODE`), and so does anything from 8 up.
+- **`source`** must be 1, 2 or 4 and must be a bit the timer's `+0x04` mask
+  has, else `-0x98`. Sources 2 and 4 — PIXEL and HLINE — add **`0x100`** and
+  consult the prescale no further.
+- **`prescale`**, on the SYSCLOCK path only, must not exceed `+0x06` (else
+  `-0x99`) and must then be one of four values: 8 adds **`0x200`** on a
+  16-bit timer and **`0x2000`** on a 32-bit one, 16 adds **`0x4000`**, 256
+  adds **`0x6000`**, and "no prescale" adds nothing. The last is tested as
+  `prescale == source` rather than `prescale == 1` — the same thing wherever
+  it is reached, since only source 1 gets here, but worth recording as it
+  reads. Anything else is `-0x99`.
+
+For `EZMIDI`'s own call — `(id, source 1, mode 0, prescale 1)` — every one of
+those contributes nothing, so a rebuild that ignored the whole word would
+still be right for this disc and wrong for the next driver.
 
 ## 5. Ordinal 23 — `StartHardTimer(id)`
 
@@ -144,7 +158,8 @@ refuses one `SetupHardTimer` has not been through — `+0x10` zero — with
 Then, in this order: MODE is written **0** first, so the hardware is quiet
 while the rest is programmed; the compare from `+0x18` goes to the register
 block's `+8`, as a halfword for timers 0–2 and a word for 3–5 (IOP-7d); and
-MODE is written from `+0x14` and `+0x16` together, which is what actually
+MODE is written from `+0x10`, `+0x14` and `+0x16` together — §4's source and
+prescale bits with the two handlers' interrupt bits — which is what actually
 starts it. `+0x0c` becomes non-zero.
 
 ## 6. Ordinal 24 — `StopHardTimer(id)`

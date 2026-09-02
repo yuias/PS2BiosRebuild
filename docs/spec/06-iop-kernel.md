@@ -920,9 +920,13 @@ MODE `0x58`, reset-on-compare with the interrupt and repeat — or disarms it
 when `handler` is null. `SetupHardTimer` validates the source against the
 timer's own mask and the prescale against its maximum, and is where the
 library registers **its own** interrupt handler on that timer's IRQ, once per
-timer. `StartHardTimer` writes MODE `0` first so the hardware is quiet, then
+timer. What it settles is MODE bits: `mode` itself in the low bits, with 2, 4
+and 6 refused as `-405`; `0x100` for a PIXEL or HLINE source; and, on
+SYSCLOCK, `0x200`/`0x2000` for a prescale of 8 on a 16-/32-bit timer,
+`0x4000` for 16 and `0x6000` for 256, nothing for 1, and `-153` for anything
+else. `StartHardTimer` writes MODE `0` first so the hardware is quiet, then
 the compare — a halfword for RTC0–2 and a word for RTC3–5, per IOP-7d — then
-the MODE that starts it. `StopHardTimer` is its inverse.
+those bits together with the handlers', which is the MODE that starts it. `StopHardTimer` is its inverse.
 
 The interrupt handler is the library's, not the caller's: it reads the MODE
 register once (which is also the acknowledgement, IOP-7d) and calls the
