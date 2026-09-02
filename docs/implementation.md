@@ -585,6 +585,26 @@ their libraries `3100` and `2800` — so the constant is right for one of them
 and wrong for the other, and reading it out of the named image is part of the
 merge rather than of `LOADFILE`.
 
+**`EESYNC` sends one command run at a time, and bounds-checks the SREG
+file.** BOOT-12f and BOOT-12g. `sceSifSendCmd`/`isceSifSendCmd` fill the
+header and transfer the caller's packet in place, as the reference does, but
+where the reference queues up to 32 transfers ours answers `0` -- "not
+queued" -- while a run is still in flight or before the EE has named its
+packet buffer. That is inside the interface: the return value exists exactly
+so a caller can retry, and the clients seen so far loop on it. The SREG file
+is 32 words as the reference's is, but an out-of-range index is dropped
+rather than written; the reference checks neither its own ordinal 7 nor the
+index an incoming `SET_SREG` names, which from the EE is a write to any
+address that follows the array.
+
+**`SYSMEM`'s `Kprintf` forwards nowhere yet.** IRX-6c. Ordinal 14 answers `0`
+until ordinal 15 installs a hook, which is the state the reference ships in
+-- nothing in its archive installs one either. Ordinal 15 is a plain swap;
+the reference additionally calls the *old* hook with a null format and hands
+the result to the new one, a query no caller in the image exercises. Slots
+8-10 return -1 and 11-13 are the reserved stub, so the table reaches 14 with
+its ordinals in the right places.
+
 **`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
 and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with
 `{ "EELOAD", path, argv... }`, and `EELOAD` asks the IOP's `LOADFILE` for the

@@ -40,6 +40,34 @@ uint32_t heap_last;
     return -1;
 }
 
+// Ordinals 14 and 15 (IRX-6c). `Kprintf` is not a printer: it forwards to a
+// hook ordinal 15 installs, and answers 0 while there is none -- which is
+// the state the reference ships in, since nothing in its archive installs
+// one. Nearly every module imports 14, so the table has to reach it: an
+// ordinal past the terminator binds to `jr $ra` and the call disappears.
+using KprintfHook = int (*)(void *context, const char *format,
+                            __builtin_va_list args);
+
+KprintfHook kprintf_hook;
+void *kprintf_context;
+
+int kprintf(const char *format, ...) {
+    if (kprintf_hook == nullptr) {
+        return 0;
+    }
+    __builtin_va_list args;
+    __builtin_va_start(args, format);
+    const int answer = kprintf_hook(kprintf_context, format, args);
+    __builtin_va_end(args);
+    return answer;
+}
+
+int kprintfSet(KprintfHook hook, void *context) {
+    kprintf_hook = hook;
+    kprintf_context = context;
+    return 0;
+}
+
 // Ordinal 4: allocate(mode, size, address) -> address, or 0. The reference's
 // modes place a block lowest, highest or at `address` [header]; a bump
 // allocator has one place to put anything, so the two are read and ignored
@@ -88,7 +116,7 @@ struct ExportTable {
     uint16_t version;
     uint16_t flags;
     char tag[8];
-    int (*entries[9])(uint32_t);       // eight ordinals plus the IRX-5b terminator
+    int (*entries[17])(uint32_t);      // sixteen ordinals plus IRX-5b's terminator
 };
 static_assert(offsetof(ExportTable, entries) == 0x14);
 
@@ -110,6 +138,14 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         deallocate,                     // 5  release
         unimplemented,                  // 6
         unimplemented,                  // 7
+        unimplemented,                  // 8
+        unimplemented,                  // 9
+        unimplemented,                  // 10
+        reservedHook,                   // 11 reserved (IRX-6a)
+        reservedHook,                   // 12 reserved
+        reservedHook,                   // 13 reserved
+        reinterpret_cast<int (*)(uint32_t)>(kprintf),      // 14 Kprintf
+        reinterpret_cast<int (*)(uint32_t)>(kprintfSet),   // 15 its hook
         nullptr,                        // IRX-5b: the terminator
     },
 };

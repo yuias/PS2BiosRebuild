@@ -208,6 +208,12 @@ alignas(16) uint32_t payload[kPayloadWords];
 uint32_t ee_area;                          // what the EE published at the handshake
 uint32_t ee_packet_buffer;                 // BOOT-12c: where the EE's client listens
 
+// BOOT-12f: our half of the SREG file. The EE writes it with SET_SREG and
+// `sifcmd` ordinals 6 and 7 read and write it locally. A title's own SIF
+// bridge handshakes through register 1, both directions.
+constexpr uint32_t kSregs = 32;
+uint32_t sregs[kSregs];
+
 extern "C" {
 int _import_thbase_sleep();
 int _import_thbase_iwakeup(uint32_t id);
@@ -565,6 +571,73 @@ int sifDmaStat(uint32_t) {
     return send_running ? 0 : -1;
 }
 
+// sifcmd ordinals 6 and 7 (BOOT-12f). The reference bounds-checks neither;
+// ours does, because an out-of-range index there writes over whatever
+// follows the array.
+uint32_t sifGetSreg(uint32_t index) {
+    return index < kSregs ? sregs[index] : 0;
+}
+
+uint32_t sifSetSreg(uint32_t index, uint32_t value) {
+    if (index < kSregs) {
+        sregs[index] = value;
+    }
+    return value;
+}
+
+// BOOT-12g: `sceSifSendCmd` and, for a caller already inside a handler,
+// `isceSifSendCmd`. The packet goes out of the caller's own buffer -- the
+// library fills in only `psize`, `cid` and, when there is one, the
+// out-of-band block's size and destination.
+constexpr uint32_t kSendPacketMin = 16;
+constexpr uint32_t kSendPacketMax = 112;
+
+int sendCmd(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
+            uint32_t dest_extra, uint32_t size_extra) {
+    if (psize < kSendPacketMin || psize > kSendPacketMax) {
+        return 0;
+    }
+    // The reference chains up to 32 transfers; ours runs one at a time, so a
+    // caller is told "not queued" instead and loops, which is what the
+    // return value is for (docs/implementation.md).
+    if (ee_packet_buffer == 0 || send_running) {
+        return 0;
+    }
+    auto *header = static_cast<CommandHeader *>(packet);
+    uint32_t blocks = 0;
+    if (static_cast<int32_t>(size_extra) > 0) {
+        header->size = psize | (size_extra << 8);
+        header->dest = dest_extra;
+        describe(send_blocks[blocks], src_extra, (size_extra + 3) / 4, dest_extra,
+                 false, false);
+        blocks++;
+    } else {
+        header->size = psize;
+        header->dest = 0;
+    }
+    header->cid = cid;
+    describe(send_blocks[blocks], packet, (psize + 3) / 4, ee_packet_buffer, true);
+    send_running = 1;
+    send();
+    return 1;
+}
+
+int sendCmdNormal(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
+                  uint32_t dest_extra, uint32_t size_extra) {
+    uint32_t state;
+    _import_intrman_suspend(&state);
+    const int answer = sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
+    _import_intrman_resume(state);
+    return answer;
+}
+
+// Ordinal 13 is ordinal 12 without the bracket: its caller is already in a
+// handler, with interrupts closed by the exception.
+int sendCmdInterrupt(uint32_t cid, void *packet, uint32_t psize, const void *src_extra,
+                     uint32_t dest_extra, uint32_t size_extra) {
+    return sendCmd(cid, packet, psize, src_extra, dest_extra, size_extra);
+}
+
 void armReceive();
 
 // sifman ordinal 5, `sceSifSetDChain`: re-arm the receiving channel. The only
@@ -672,14 +745,14 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
         ps2::module::slot(ps2::module::reservedHook),   // 3
         ps2::module::slot(ps2::module::reservedHook),   // 4
         ps2::module::slot(ps2::module::reservedHook),   // 5
-        ps2::module::slot(ps2::module::reservedHook),   // 6
-        ps2::module::slot(ps2::module::reservedHook),   // 7
+        ps2::module::slot(sifGetSreg),                  // 6  sceSifGetSreg
+        ps2::module::slot(sifSetSreg),                  // 7  sceSifSetSreg
         ps2::module::slot(ps2::module::reservedHook),   // 8
         ps2::module::slot(ps2::module::reservedHook),   // 9
         ps2::module::slot(addCmdHandler),               // 10 sceSifAddCmdHandler
         ps2::module::slot(ps2::module::reservedHook),   // 11
-        ps2::module::slot(ps2::module::reservedHook),   // 12
-        ps2::module::slot(ps2::module::reservedHook),   // 13
+        ps2::module::slot(sendCmdNormal),               // 12 sceSifSendCmd
+        ps2::module::slot(sendCmdInterrupt),            // 13 isceSifSendCmd
         ps2::module::slot(initRpc),                     // 14 sceSifInitRpc
         ps2::module::slot(ps2::module::reservedHook),   // 15
         ps2::module::slot(ps2::module::reservedHook),   // 16
@@ -727,6 +800,10 @@ int servePacket(void *) {
         break;
     case kCidChangeAddress:
         ee_packet_buffer = body[0];
+        break;
+    case kCidSetSreg:
+        // BOOT-12f: the EE writing one word of our register file.
+        (void)sifSetSreg(body[0], body[1]);
         break;
     case kCidRpcBind:
         serveBind(*reinterpret_cast<const RpcBind *>(receive));
