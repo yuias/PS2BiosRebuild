@@ -1227,6 +1227,42 @@ The start dispatch also raises bit `0x200` in `THREADMAN`'s system status flag,
 once, on the first vertical blank after boot. Nothing in the reference archive
 waits on it; a rebuild raises it for fidelity.
 
+## IOP-11: The card-authentication interface (SECRMAN)
+
+Derived from `docs/analysis/48`. `docs/clean-room-policy.md` puts the
+authentication *mechanism* out of scope and only its interface in, so this
+section specifies an interface and deliberately specifies no exchange.
+
+**IOP-11a — what has to exist.** A library tagged `secrman`, version 1.03,
+whose ordinals reach at least 6 — the reference's fourteen entries keep every
+later ordinal where a client expects it. A memory-card driver imports 4, 5 and
+6 and nothing else; an importer of a tag no one exports is refused at link
+time, which is why the library must exist even where the mechanism does not.
+
+**IOP-11b — the two handler slots.** Ordinal 4
+`SecrSetMcCommandHandler(handler)` and ordinal 5
+`SecrSetMcDevIDHandler(handler)` each store a pointer and answer nothing in
+particular. **NULL is a real argument** — a driver passes it on unload — and
+neither validates. The command handler is the transport: it is what the
+library would call to reach the card, as `handler(port, slot, descriptor)`,
+which is why this library names no `sio2man` import of its own.
+
+**IOP-11c — ordinal 6, `SecrAuthCard(port, slot, cnum)`.** **Its answer is
+`0` or `1`, and nothing else.** `0` when the command handler slot is null, and
+on every failure of the exchange; `1` when the exchange succeeded. A client
+branches on zero versus nonzero and reports a failure upward as
+`sceMcResFailAuth` (`-90`) [header] — it does not hang, and it does not retry.
+So both answers are safe, and a rebuild that does not perform the exchange
+must still choose deliberately: **answer `1` where a card driver should
+proceed, and `0` where the handler was never registered**, so a driver that
+skipped registration is not told a success it never set up.
+
+**IOP-11d — the entry.** Register the library; a failure there ends the entry
+non-resident with nothing else done. Clear both handler slots. The reference
+also hands `modload` ordinal 12 the three callbacks of its encrypted-module
+path and **ignores what that call answers**; a rebuild without that path may
+omit the call.
+
 **IOP-3 through IOP-6** are exercised by the M1 program (`docs/project-state.md`
 §6) on the two targets: `LOADFILE`'s thread is woken from an interrupt and
 switched to (IOP-3h), the program's `SifLoadModule("rom0:SIO2MAN")` goes
