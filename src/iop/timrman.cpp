@@ -14,6 +14,17 @@
 
 #include <stdint.h>
 
+// IOP-7f/7g: the ordinals past 16 own an interrupt handler, so this module
+// binds `intrman` where it used to bind nothing.
+extern "C" {
+int _import_intrman_register(uint32_t irq, uint32_t mode, int (*handler)(void *), void *arg);
+int _import_intrman_enable(uint32_t irq);
+int _import_intrman_disable(uint32_t irq, uint32_t *was_pending);
+int _import_intrman_suspend(uint32_t *state);
+int _import_intrman_resume(uint32_t state);
+int _import_intrman_query_context();
+}
+
 namespace {
 
 using ps2::module::ExportTable;
@@ -24,7 +35,25 @@ constexpr uint32_t kTimers = 6;
 constexpr uintptr_t kWideFrom = 0xBF801480;      // RTC3..5 count in 32 bits
 constexpr uintptr_t kHoldBase = 0xBF8014B0;      // IOP-7e: the hold registers
 constexpr uintptr_t kHoldModeBase = 0xBF8014C0;
+
+// IOP-7f: what the four ordinals past 16 answer. -150 is FreeHardTimer's own.
 constexpr int kNotOwned = -150;                  // FreeHardTimer of a timer not held
+constexpr int kBadTimerId = -151;
+constexpr int kBadSource = -152;
+constexpr int kBadPrescale = -153;
+constexpr int kRunning = -154;                   // the call needs a stopped timer
+constexpr int kNotSetUp = -155;                  // StartHardTimer before SetupHardTimer
+constexpr int kNotRunning = -156;                // StopHardTimer of a stopped timer
+constexpr int kIllegalContext = -100;
+constexpr int kIllegalMode = -405;
+
+// IOP-7g: the MODE the compare interrupt needs -- reset on compare, raise the
+// interrupt, and keep raising it.
+constexpr uint32_t kCompareMode = 0x58;
+// IOP-7d: the flags the MODE register reports, and clears as it is read.
+constexpr uint32_t kFlagCompare = 0x800;
+constexpr uint32_t kFlagOverflow = 0x1000;
+constexpr uint32_t kModeCount = 8;               // IOP-7f: `mode` is 0..7
 
 // The source bits [header]: which clock a timer may count.
 constexpr uint32_t kSysclock = 1;
@@ -50,7 +79,33 @@ constexpr Descriptor kTable[kTimers] = {
     {0xBF801110, kSysclock | kHline | kHold, 16, 1, 5},         // RTC1
 };
 
+struct Critical {
+    uint32_t state;
+    Critical() { _import_intrman_suspend(&state); }
+    ~Critical() { _import_intrman_resume(state); }
+};
+
 uint8_t in_use[kTimers];                         // a count, not a flag (IOP-7b)
+
+// IOP-7f/7g: what a timer carries once a driver programs it through the
+// ordinals past 16. The reference's own state is a 44-byte record per timer
+// holding all of this plus what `kTable` already has; ours splits it, since
+// `kTable` is const and this half is not.
+struct TimerState {
+    uint32_t setup_mode;        // what SetupHardTimer settled, and that it ran
+    bool set_up;
+    bool running;
+    bool handler_installed;     // the ISR is on this timer's IRQ
+    uint32_t compare;
+    uint32_t compare_mode;      // kCompareMode while a compare handler is in
+    int (*compare_handler)(void *);
+    void *compare_arg;
+    uint32_t overflow_mode;
+    int (*overflow_handler)(void *);
+    void *overflow_arg;
+};
+
+TimerState states[kTimers];
 
 [[nodiscard]] uintptr_t registerOf(uint32_t timer_id) {
     return static_cast<uintptr_t>(timer_id << 2);
@@ -168,7 +223,145 @@ int getHardTimerIntrCode(uint32_t timer_id) {
     return -1;
 }
 
-[[gnu::used]] ExportTable<17> timrman_exports = {
+// --- IOP-7f: the ordinals a title's driver imports past 16 -------------------
+//
+// IOP-7h: the id stays the one ordinal 4 hands out. The reference's v1.03
+// packs a table index into its top nibble and these four read it back; ours
+// keeps the one encoding the rest of the library already uses and finds the
+// index by the register, which no caller can tell apart.
+
+[[nodiscard]] uint32_t indexOf(uint32_t timer_id) {
+    const uintptr_t reg = registerOf(timer_id);
+    for (uint32_t k = 0; k < kTimers; k++) {
+        if (kTable[k].base == reg) {
+            return k;
+        }
+    }
+    return kTimers;
+}
+
+// The library's own handler, on every timer a driver sets up. Reading MODE is
+// what acknowledges the interrupt (IOP-7d), so it is read once and both halves
+// are decided from that one value.
+int timerInterrupt(void *arg) {
+    auto &state = *static_cast<TimerState *>(arg);
+    const uint32_t index = static_cast<uint32_t>(&state - states);
+    const uint32_t mode =
+        *reinterpret_cast<volatile uint16_t *>(kTable[index].base + 4);
+    if ((mode & kFlagOverflow) != 0 && state.overflow_mode != 0
+        && state.overflow_handler != nullptr) {
+        (void)state.overflow_handler(state.overflow_arg);
+    }
+    if ((mode & kFlagCompare) != 0 && state.compare_mode != 0
+        && state.compare_handler != nullptr) {
+        (void)state.compare_handler(state.compare_arg);
+    }
+    return 1;
+}
+
+// Ordinal 20: record the compare handler and the value it fires at. A null
+// handler takes the compare interrupt back out.
+int setTimerHandler(uint32_t timer_id, uint32_t compare, int (*handler)(void *),
+                    void *arg) {
+    const uint32_t index = indexOf(timer_id);
+    if (index == kTimers) {
+        return kBadTimerId;
+    }
+    Critical critical;
+    TimerState &state = states[index];
+    if (state.running) {
+        return kRunning;
+    }
+    state.compare = compare;
+    state.compare_handler = handler;
+    state.compare_arg = arg;
+    state.compare_mode = handler != nullptr ? kCompareMode : 0;
+    return 0;
+}
+
+// Ordinal 22: settle the source, mode and prescale, and put the library's own
+// handler on this timer's line -- once per timer, not once per call.
+int setupHardTimer(uint32_t timer_id, uint32_t source, uint32_t mode,
+                   uint32_t prescale) {
+    if (_import_intrman_query_context()) {
+        return kIllegalContext;
+    }
+    const uint32_t index = indexOf(timer_id);
+    if (index == kTimers) {
+        return kBadTimerId;
+    }
+    Critical critical;
+    TimerState &state = states[index];
+    if (state.running) {
+        return kRunning;
+    }
+    if (!state.handler_installed) {
+        const int registered = _import_intrman_register(
+            kTable[index].irq, 1, timerInterrupt, &state);
+        if (registered < 0) {
+            return registered;
+        }
+        state.handler_installed = true;
+    }
+    if (mode >= kModeCount) {
+        return kIllegalMode;
+    }
+    if ((source & kTable[index].sources) == 0) {
+        return kBadSource;
+    }
+    if (prescale > kTable[index].prescale) {
+        return kBadPrescale;
+    }
+    state.setup_mode = mode;
+    state.set_up = true;
+    return 0;
+}
+
+// Ordinal 23: MODE zero first, so the hardware is quiet while the compare is
+// written; then the MODE that starts it (IOP-7g).
+int startHardTimer(uint32_t timer_id) {
+    const uint32_t index = indexOf(timer_id);
+    if (index == kTimers) {
+        return kBadTimerId;
+    }
+    Critical critical;
+    TimerState &state = states[index];
+    if (state.running) {
+        return kRunning;
+    }
+    if (!state.set_up) {
+        return kNotSetUp;
+    }
+    const uintptr_t reg = kTable[index].base;
+    *reinterpret_cast<volatile uint16_t *>(reg + 4) = 0;
+    writeCounterLike(reg, 0);
+    writeCounterLike(reg + 8, state.compare);
+    *reinterpret_cast<volatile uint16_t *>(reg + 4) =
+        static_cast<uint16_t>(state.compare_mode | state.overflow_mode);
+    _import_intrman_enable(kTable[index].irq);
+    state.running = true;
+    return 0;
+}
+
+// Ordinal 24: the inverse. The line goes quiet with the timer.
+int stopHardTimer(uint32_t timer_id) {
+    const uint32_t index = indexOf(timer_id);
+    if (index == kTimers) {
+        return kBadTimerId;
+    }
+    Critical critical;
+    TimerState &state = states[index];
+    if (!state.running) {
+        return kNotRunning;
+    }
+    *reinterpret_cast<volatile uint16_t *>(kTable[index].base + 4) = 0;
+    uint32_t was_pending = 0;
+    _import_intrman_disable(kTable[index].irq, &was_pending);
+    state.running = false;
+    return 0;
+}
+
+[[gnu::used]] ExportTable<25> timrman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -192,17 +385,51 @@ int getHardTimerIntrCode(uint32_t timer_id) {
         slot(getHoldMode),              // 14
         slot(getHoldReg),               // 15
         slot(getHardTimerIntrCode),     // 16
+        // IOP-7f: the table reaches 24 because a title's own driver imports
+        // 20, 22, 23 and 24 from the `timrman` its IOPRP carries, and an
+        // ordinal past the end binds to `jr $ra` with no diagnostic. 17, 18
+        // and 21 are unread (docs/analysis/49) and stay reserved hooks.
+        slot(reservedHook),             // 17 GetTimerMode [header], unread
+        slot(reservedHook),             // 18 unread
+        slot(reservedHook),             // 19 reserved in the reference too
+        slot(setTimerHandler),          // 20
+        slot(reservedHook),             // 21 the overflow twin of 20, unread
+        slot(setupHardTimer),           // 22
+        slot(startHardTimer),           // 23
+        slot(stopHardTimer),            // 24
         nullptr,
     },
 };
 
 }  // namespace
 
+PS2_IMPORTS_BEGIN("intrman\0", 0x0102)
+PS2_IMPORT(_import_intrman_register, 4)
+PS2_IMPORT(_import_intrman_enable, 6)
+PS2_IMPORT(_import_intrman_disable, 7)
+PS2_IMPORT(_import_intrman_suspend, 17)
+PS2_IMPORT(_import_intrman_resume, 18)
+PS2_IMPORT(_import_intrman_query_context, 23)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 int _module_start(int, char **) {
     for (auto &count : in_use) {
         count = 0;
+    }
+    for (auto &state : states) {
+        state.setup_mode = 0;
+        state.set_up = false;
+        state.running = false;
+        state.handler_installed = false;
+        state.compare = 0;
+        state.compare_mode = 0;
+        state.compare_handler = nullptr;
+        state.compare_arg = nullptr;
+        state.overflow_mode = 0;
+        state.overflow_handler = nullptr;
+        state.overflow_arg = nullptr;
     }
     return 0;                           // resident
 }

@@ -629,6 +629,16 @@ shared one global completion-callback slot rather than one per run. The ring
 holds each run's DMA tag list, so the storage the channel is reading never
 moves, and each run carries its own callback.
 
+**`TIMRMAN`'s table reaches 24, where the reference's stops at 16.** IOP-7f
+and `docs/analysis/49`. The four extra ordinals belong to the `timrman`
+v1.03 a title's `IOPRP` image carries, not to rom0's v1.01, and on hardware
+`EZMIDI` gets them from the `UDNL` merge. Ours does not merge (see `REBOOT`
+below), so a driver that imports them binds against this module or against
+nothing. Ordinals 17, 18 and 21 stay reserved hooks: nothing on the disc
+imports them, and `docs/analysis/49` leaves them unread rather than guessed.
+The timer id keeps the encoding the rest of the library uses (IOP-7h) instead
+of v1.03's, since no caller can tell.
+
 **`SECRMAN` is the interface and not the mechanism.** IOP-11 and
 `docs/clean-room-policy.md`. Its `AuthCard` answers `1` once a card driver
 has registered its command handler and `0` before that, without exchanging
