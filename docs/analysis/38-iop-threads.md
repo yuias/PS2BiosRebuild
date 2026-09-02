@@ -51,7 +51,7 @@ but **not implemented** by this firmware, found only by reading the body.
 | Ord | Addr | Name [header] | Notes |
 |---|---|---|---|
 | 0 | `0x10` | module entry | §5 |
-| 1–3 | `0x61dc` | reserved | shared `syscall 0xfc` trap stub (a bare `syscall`/`jr $ra` at `0x61dc`, common to every reserved slot in all seven tables) |
+| 1–3 | `0x61dc` | reserved | shared stub, common to every reserved slot in all seven tables. **Correction:** it is a bare `jr $ra` / `nop`, not a `syscall` trap — `tools/romdis.py <outdir>/THREADMAN.text --cpu iop --vma 0 --range 0x61d8 0x61ec` shows two instructions and no `syscall`. A rebuild's reserved slot may simply return. |
 | 3 | — | `GetThreadmanData` | **not at `0x61dc`** — see below |
 | 4 | `0xc5c` | `CreateThread` | §2 |
 | 5 | `0xe10` | `DeleteThread` | §2 |
@@ -153,10 +153,10 @@ as working calls; this v1.01 THREADMAN answers every one of them with
 
 ### 1.4 The other four libraries, briefly
 
-- **`thmsgbx`** (`0x60ec`, 13 entries, `0x37c0`–`0x3fa4`): `CreateMbx`
-  (`0x37c0`) follows the exact CreateThread/CreateSema/CreateEventFlag shape
-  — pool tag `0x7f04`, record size `0x28`, the same tagged-pointer ID scheme,
-  its own generation counter at `0x6c42`. Send/receive semantics not traced.
+- **`thmsgbx`** (`0x60ec`, 13 entries, `0x37c0`–`0x3fa4`): read in full in
+  §3.3 — `CreateMbx` (`0x37c0`) follows the exact CreateThread/CreateSema/
+  CreateEventFlag shape, pool tag `0x7f04`, record size `0x28`, the same
+  tagged-pointer ID scheme, its own generation counter at `0x6c42`.
 - **`thfpool`** (`0x613c`, 13 entries, `0x4830`–`0x4f94`): `CreateFpl`
   (`0x4830`) validates `attr & ~0x202` and a block-count/block-size sanity
   check before rounding size and suspending interrupts; pool tag not
@@ -166,7 +166,7 @@ as working calls; this v1.01 THREADMAN answers every one of them with
   field with `KE_ILLEGAL_MEMSIZE` (`-427`).
 - **`thrdman`** (`0x6230`, v1.02, 4 entries): **all four ordinals share the
   literal same address**, `0x6258` — confirmed a bare `jr $ra` / `nop`, not
-  even the reserved-slot `syscall 0xfc` trap. Declared, unimplemented.
+  even the reserved slot's `jr $ra`. Declared, unimplemented.
 
 Every `Create*` above allocates from the *same* internal fixed-block pool —
 `jal 0x5ef0(tag, size)` — and every object type gets its own tag: `0x7f01`
@@ -534,6 +534,101 @@ MODE`(-405, event flags only), `KE_UNKNOWN_SEMID`(-408)/`KE_UNKNOWN_EVFID`
 `KE_EVF_ILPAT`(-423), `KE_WAIT_DELETE`(-425, forced into a deleted object's
 waiters' return slots by both `DeleteEventFlag` and `DeleteSema`).
 
+### 3.3 Message boxes (`thmsgbx`)
+
+Read because a retail title's `MSIFRPC.IRX` imports ordinals 4, 5, 7 and 8 —
+without them nothing binds and nothing says so.
+
+```sh
+python3 tools/irxinfo.py <outdir>/THREADMAN --dump-load <outdir>/THREADMAN.text
+python3 tools/romdis.py <outdir>/THREADMAN.text --cpu iop --vma 0 \
+    --range 0x37c0 0x4020                       # the whole library
+python3 tools/romdis.py <outdir>/THREADMAN.text --cpu iop --vma 0 \
+    --range 0x6260 0x6440                       # import stubs, ordinal per stub
+```
+
+| Ord | Addr | Name [header] | Notes |
+|---|---|---|---|
+| 0–3 | `0x61dc` | reserved | the bare `jr $ra` of §1.1 |
+| 4 | `0x37c0` | `CreateMbx` | |
+| 5 | `0x38a8` | `DeleteMbx` | |
+| 6 | `0x3a84` | `SendMbx` | thread context |
+| 7 | `0x3b70` | `iSendMbx` | interrupt context |
+| 8 | `0x3c40` | `ReceiveMbx` | **`(void **recvmsg, int id)`** — out-pointer first |
+| 9 | `0x3de4` | `PollMbx` | `ReceiveMbx`'s dequeue path; empty answers `KE_MBX_NOMSG` (`-424`) |
+| 10 | `0x61dc` | reserved | the header skips this ordinal too |
+| 11 | `0x3f0c` | `ReferMbxStatus` | |
+| 12 | `0x3fa4` | `iReferMbxStatus` | |
+
+Unlike `thbase`, **every named ordinal here has a real body** — there is
+nothing to leave as a declared-but-unimplemented stub.
+
+**The record** (`0x28` bytes, tag `0x7f04` checked at every id-taking entry):
+the creation-list link at `+0x0`/`+0x4`, tag and generation at `+0x8`/`+0xa`
+(counter `0x6c42`), `attr` at `+0xc`, the waiting-thread count at `+0x10`,
+the waiting-thread list head at `+0x14`/`+0x18` (a self-sentinelled doubly
+linked list threaded through the threads' own `+0x0`/`+0x4`), `option` at
+`+0x1c`, the queued-message count at `+0x20`, and at `+0x24` a pointer to the
+**last** queued message, `NULL` when the queue is empty. The two counts are
+mutually exclusive: a box either has waiting threads or queued messages,
+never both, because each send and each receive checks the other's count
+first.
+
+**`attr` accepts `0x1 | 0x4`** (`and $2,$2,-6` at `0x37ec`, then
+`KE_ILLEGAL_ATTR` `-401`), and the two bits order two different things:
+
+- bit 0, `MBA_THPRI` [header] — **waiting threads**. Set: insert before the
+  first waiter of strictly lower priority (signed, the thread record's
+  `+0xe`); ties go behind. Clear: append.
+- bit 2, `MBA_MSPRI` [header] — **queued messages**. Set: compare the
+  *unsigned byte at message + 4*, insert before the first message with a
+  strictly greater byte, ties behind. Clear: append.
+
+**The kernel never copies a message.** The queue is a circular singly linked
+list threaded through the messages' own first words, anchored by the tail
+pointer at `+0x24`; the send path writes `msg->next` and nothing else, and
+`ReceiveMbx` hands the sender's original pointer back through `*recvmsg`. So
+the message header a client must provide is `{ void *next; uint8_t
+priority; }` (`iop_message_t` [header]) and the payload after it is the
+client's own business. A deleted box simply abandons whatever is queued —
+the memory was never the kernel's.
+
+**When a receiver is already waiting, the sender does not queue at all.** It
+takes the first waiter off the list, makes it ready, and stores the message
+pointer through the out-pointer that thread parked when it blocked. The
+reference parks it in the thread's saved frame at `+0x8` — the same slot the
+syscall-return path pops into `$v0` — which is why the four ways out of
+`ReceiveMbx` are exactly:
+
+| Woken by | returns | `*recvmsg` |
+|---|---|---|
+| `SendMbx`/`iSendMbx` | `0` | the message |
+| `DeleteMbx` | `-425` `KE_WAIT_DELETE` | untouched |
+| `ReleaseWaitThread` | `-418` `KE_RELEASE_WAIT` | untouched |
+
+A rebuild that keeps a blocked call's answer and its out-parameter in
+separate fields of its own thread record reproduces this without the frame
+trick; what matters is that **the out-pointer is written only on the send
+path**, never when the wait is broken.
+
+**The `i` form's gate is inverted.** `iSendMbx` returns
+`KE_ILLEGAL_CONTEXT` (`-100`) when `QueryIntrContext()` says *thread*
+context (`0x3b8c`), where `SendMbx` returns it for *interrupt* context. It
+also runs without the interrupt-suspend bracket its sibling opens. The same
+inversion holds for `iReferMbxStatus`.
+
+`ReceiveMbx` has one more wrinkle: when its `CpuSuspendIntr` answers `-102`
+(`KE_CPUDI` [header] — interrupts were already off) *and* a diagnostic bit is
+set in the global at `0x67e8`, it `Kprintf`s a warning naming itself and
+`KE_CAN_NOT_WAIT`, and then **carries on and blocks anyway**. The bit is set
+at module entry, so the diagnostic is live on retail hardware; the behaviour
+it warns about is not prevented.
+
+`ReferMbxStatus`'s copy helper (`0x3ec8`) fills a 20-byte
+`iop_mbx_status_t` [header] with `attr`, `option`, the waiting-thread count,
+the message count, and `topPacket` — the last of which it loads from
+`(+0x24)->next` **unguarded**, so an empty box dereferences `NULL`.
+
 ## 4. The dispatcher
 
 ### 4.1 Two globals decide everything
@@ -832,8 +927,15 @@ run:
   `SetAlarm`/`iSetAlarm`/`SysClock2USec`'s own bodies** — confirmed present,
   confirmed which ordinal each is, not independently disassembled past what
   their callers (`DelayThread`, `TerminateThread`) already established.
-- **`thmsgbx`'s send/receive semantics, `thfpool`/`thvpool`'s allocation
-  bodies past `Create*`** — out of scope for this pass (§1.4).
+- **`thfpool`/`thvpool`'s allocation bodies past `Create*`** — out of scope
+  for this pass (§1.4). `thmsgbx`'s send/receive semantics *were* out of
+  scope here too; §3.3 closes them.
+- **What `ReferMbxStatus` reports as `topPacket` for an empty box** — the
+  load is unguarded, so it reads whatever word sits at IOP address 0 at
+  runtime. Observed as a fact about the code; not probed on a running
+  machine.
+- **The other bits of the diagnostic global at `0x67e8`** — nine sites read
+  it, one boot store writes it; only the bit `ReceiveMbx` tests is traced.
 - **The exact hardware-Status-bit meaning of the top three `attr` bits**
   (`0x1c000000`'s complement's top nibble) `CreateThread` accepts but
   `thbase.h` never names, consumed by `0xf40` when priming a new thread's

@@ -302,7 +302,7 @@ Derived from `docs/analysis/38`.
 but are two-instruction stubs that unconditionally return `KE_ERROR`
 (`-1`) [header]: `ExitDeleteThread`, `DisableDispatchThread`,
 `EnableDispatchThread`, `SuspendThread`, `iSuspendThread`, `ResumeThread`,
-`iResumeThread`. `thmsgbx`, `thfpool`, `thvpool` and `thrdman` (a fourth,
+`iResumeThread`. `thmsgbx` is IOP-3l. `thfpool`, `thvpool` and `thrdman` (a fourth,
 fully-unimplemented library whose four ordinals all share one bare `jr $ra`)
 also exist; their bodies are out of scope here (analysis §1.4) and a rebuild
 targeting `SIF*`/`LOADFILE`/`SIO2MAN` does not need them (IOP-3h imports
@@ -441,6 +441,45 @@ decrements, and readies it with its blocked call's return slot zeroed.
 `WaitSema`: `current > 0` decrements and returns; `current <= 0` blocks
 (`waitType = TSW_SEMA`, `3`). `PollSema`: `current <= 0` returns
 `KE_SEMA_ZERO` (`-419`) directly. `KE_UNKNOWN_SEMID` is `-408`.
+
+**IOP-3l — message boxes (`thmsgbx`).** Derived from `docs/analysis/38`
+§3.3. A fourth library out of the same file, needed the moment a title loads
+its own SIF-RPC bridge. Thirteen ordinals: 4 `CreateMbx(iop_mbx_t*)`,
+5 `DeleteMbx(id)`, 6 `SendMbx(id, msg)`, 7 `iSendMbx(id, msg)`,
+8 **`ReceiveMbx(void **recvmsg, id)`** — the out-pointer is the *first*
+argument, unlike every other id-taking entry in this file — 9
+`PollMbx(void **recvmsg, id)`, 11 `ReferMbxStatus(id, info)`,
+12 `iReferMbxStatus(id, info)`; 0–3 and 10 reserved. Every named ordinal has
+a real body; there is nothing to stub.
+
+`iop_mbx_t { attr, option }` [header], record `0x28` bytes, pool tag
+`0x7F04`. `attr` must have `~0x5 == 0`, else `KE_ILLEGAL_ATTR`; bit 0
+(`MBA_THPRI` [header]) orders **waiting threads** by current priority
+instead of FIFO, bit 2 (`MBA_MSPRI` [header]) orders **queued messages** by
+an unsigned byte the client puts at message `+4`. Ties go behind in both.
+
+**The kernel must not copy a message.** A message is the client's own
+memory, and the queue is a list threaded through the messages' own first
+words, so the header a client provides is `{ void *next; uint8_t priority; }`
+(`iop_message_t` [header]). `ReceiveMbx` hands back the sender's original
+pointer. A rebuild that copies bytes into a buffer of its own breaks every
+client that reads its payload back through the pointer it sent.
+
+A box has either waiting threads or queued messages, never both. Send with a
+waiter present takes the first waiter, readies it, and writes the message
+through the out-pointer that thread parked when it blocked; send with none
+queues the message. `ReceiveMbx` with a message present dequeues and returns
+`0`; with none it blocks. The three ways a blocked `ReceiveMbx` ends are
+`0` with `*recvmsg` written (a send), `KE_WAIT_DELETE` (`-425`) and
+`KE_RELEASE_WAIT` (`-418`) — and in the last two **`*recvmsg` is left
+alone**. `PollMbx` answers `KE_MBX_NOMSG` (`-424`) instead of blocking.
+`KE_UNKNOWN_MBXID` is `-410`.
+
+`iSendMbx` and `iReferMbxStatus` invert the context gate their siblings use:
+they return `KE_ILLEGAL_CONTEXT` (`-100`) when called from *thread* context.
+A rebuild whose `i`-forms merely skip the interrupt-suspend bracket, without
+the inverted check, is permissible only if nothing depends on the rejection;
+the reference rejects.
 
 **IOP-3h — the dispatcher protocol.** Two globals decide everything: a
 "current" thread pointer and a "pending-next" thread pointer.
