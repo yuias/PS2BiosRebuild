@@ -1172,6 +1172,61 @@ lazily-allocated bounce buffer and the same two mechanisms, moving data the
 other way through `ioman`'s `write` ordinal; its own request layout beyond
 the first inline chunk was not fully resolved (`IOP-9d`).
 
+## IOP-10: Vertical blank (VBLANK)
+
+Derived from `docs/analysis/47`.
+
+**IOP-10a — what the module is.** `VBLANK` owns the IOP's two vertical-blank
+interrupt lines — `I_STAT`/`I_MASK` bit **0** for the start of vertical blank
+and bit **11** for its end — and multiplexes each into a priority-ordered list
+of callbacks, plus one event flag. It exports one library, `vblank` v1.01, of
+ten ordinals: 0 the entry, 1 and 2 reserved, 3 the `.bss` base, 4–7 the four
+waits, 8 `RegisterVblankHandler`, 9 `ReleaseVblankHandler` [header]. It
+creates no thread. On the boot list it sits after `THREADMAN`, whose event
+flags and system status flag it uses.
+
+**IOP-10b — the two lists.** `RegisterVblankHandler(startend, priority,
+handler, arg)` puts a callback on the start list when `startend` is 0 and on
+the end list for **any** other value. Insertion is by ascending priority with
+ties behind, so a lower number runs first. The duplicate test is on **the
+handler pointer alone**, per list — `arg` and `priority` play no part — and a
+match answers `KE_FOUND_HANDLER` (`-104`). Both lists draw from one pool of 16
+records, of which the module spends two on itself, and exhaustion answers
+`KE_NO_MEMORY` (`-400`). Both ordinals refuse interrupt context with
+`KE_ILLEGAL_CONTEXT` (`-100`) before touching anything.
+`ReleaseVblankHandler(startend, handler)` answers `KE_NOTFOUND_HANDLER`
+(`-105`) for a handler that is not on that list, and **exactly 0** otherwise —
+a real client retries this call for ever on any other answer.
+
+**IOP-10c — the dispatch.** Each line's handler walks its list, taking a
+record's successor **before** calling it, and calls `handler(arg)`. A callback
+answering **0 is unregistered on the spot** and its record returned to the
+pool; nonzero keeps it. The line handlers themselves always answer nonzero, so
+`INTRMAN` re-enables the line after every dispatch (IOP-2) and both stay armed
+for good.
+
+**Callbacks run in interrupt context**, on the interrupt stack, so
+`QueryIntrContext()` is nonzero inside them. That is not incidental: real
+callbacks wake their threads with the `i` forms of the event-flag calls, which
+answer `-100` from thread context. A rebuild that delivered these from a
+thread would break its clients with no error surfaced anywhere.
+
+**IOP-10d — the event flag and the four waits.** One `EA_MULTI` flag, initial
+bits 0, four bits, all of them set and cleared by the module's own two
+callbacks — which it registers through its own ordinal 8 at priority `0x80`,
+behind any client. Bit `0x1` is a start **pulse**, `0x4` an end pulse, `0x2`
+the level "inside vertical blank" and `0x8` the level "outside" it. Each
+callback sets its pulse and its level, then clears its own pulse and the other
+callback's level. So `WaitVblankStart`/`WaitVblankEnd` (ordinals 4 and 5)
+always block until the next edge, while `WaitVblank`/`WaitNonVblank` (6 and 7)
+return at once when the level already holds. All four are
+`WaitEventFlag(id, bits, WEF_OR, NULL)`, so **a null result pointer must be
+accepted**.
+
+The start dispatch also raises bit `0x200` in `THREADMAN`'s system status flag,
+once, on the first vertical blank after boot. Nothing in the reference archive
+waits on it; a rebuild raises it for fidelity.
+
 **IOP-3 through IOP-6** are exercised by the M1 program (`docs/project-state.md`
 §6) on the two targets: `LOADFILE`'s thread is woken from an interrupt and
 switched to (IOP-3h), the program's `SifLoadModule("rom0:SIO2MAN")` goes
