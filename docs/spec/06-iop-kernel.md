@@ -703,6 +703,24 @@ IOP-5h) are in scope; `fno` 2–5 (a memory peek/poke pair and
 `LoadStartKelfModule`) exist for the OSD's own boot path and are not needed
 yet.
 
+**One `fno` past the range check is not a no-op.** `fno 0xff` is a version
+query, and a rebuild has to answer it: four ASCII digits naming the release
+of the IOP kernel serving the call, into a four-byte reply, for a request
+that carries no arguments at all. A title asks it once, immediately after it
+binds `sid 0x80000006`, and compares the answer against the release its own
+libraries were built against **before** it sends a single `fno 0`; on a
+mismatch its `sceSifLoadModule` fails locally and no module is ever loaded
+(`docs/analysis/39` §4). The failure is silent — the RPC completes, the
+title simply stops asking — which is why the version query belongs in the
+required surface and `fno` 2–5 do not. Every other out-of-range `fno` still
+produces no reply.
+
+The version query is absent from the `LOADFILE` in `rom0`, which is one
+revision older; on retail hardware the title has replaced that module with
+its own before it ever asks. A rebuild whose reboot does not perform the
+`UDNL` merge (`docs/analysis/45`) keeps serving its own `LOADFILE` across the
+reset, so it must carry the newer module's obligations.
+
 **IOP-5g — `fno 0`, and where `-201`/`-203` come from.** `BOOT-12e`'s
 request layout (`arg_len@+0`, `path@+8`, `args@+0x104`) is read, then
 `IsIllegalBootDevice(path)` (`MODLOAD` ordinal 15) runs **first**: rejected

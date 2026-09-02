@@ -466,6 +466,56 @@ and tail-calls a table entry with only `buf`:
 from the EE — worth flagging on its own; nothing in this pass found any
 privilege check gating them.
 
+### The newer `LOADFILE` a title actually talks to, and `fno 0xff`
+
+Every retail title reboots the IOP from its own `IOPRP` image before it loads
+a module, so the `LOADFILE` its `sceSifLoadModule` reaches is that image's,
+not `rom0`'s. `SLPS-25918`'s `MODULES/IOPRP310.IMG` carries one:
+
+```sh
+# ISO9660: root -> MODULES -> IOPRP310.IMG;1, then the archive inside it
+python3 tools/romdir.py <outdir>/IOPRP310.IMG --extract <outdir>/ioprp
+python3 tools/irxinfo.py <outdir>/ioprp/LOADFILE --dump-load <outdir>/lf.text
+python3 tools/romdis.py --cpu iop --vma 0 <outdir>/lf.text
+```
+
+It is the same module one revision on — `.iopmod` name `LoadModuleByEE`,
+version `2.02` against `rom0`'s — and its dispatcher differs in two ways.
+The table is eleven entries at `0x1ca8`, not six, so the range check reads
+`sltiu $2,$4,0xb`. And the out-of-range arm is no longer unconditional: at
+`0x5b0` it tests `fno == 0xff` and, when it matches, copies the word at
+`0x1c9c` into a four-byte answer buffer at `0x1f80` and returns that buffer.
+Every other out-of-range `fno` still returns `$2 = 0` — no reply at all —
+so §4's statement above holds for everything but this one number.
+
+The word at `0x1c9c` is four ASCII digits, `3100`. It is the tail of the
+`PsII<name><release>` tag every module in that image carries
+(`PsIIloadfile3100`), and the tag's last four characters are the **release
+number of the IOP kernel the module belongs to**. `fno 0xff` is therefore a
+version query: it answers with the release of the kernel serving the call.
+
+**What a title does with it.** `SLPS-25918`'s `sceSifLoadFileInit`
+(`0x00180eb0` in `SLPS_259.18;1`) binds `sid 0x80000006` and immediately
+sends `fno 0xff` with a zero-byte request and a four-byte receive buffer,
+then keeps the answer. `sceSifLoadModule` (`0x00181078`) calls that, then a
+gate at `0x00180fb0`, and only then builds an `fno 0` request. The gate
+compares the four bytes against the release in the title's own
+`PsIIlibkernl3100` tag (the literal `3100` at `0x00281ffc`), against a
+release the title stores at `0x002820bc`, and those two against each other;
+if none match, `sceSifLoadModule` returns `0xfffefffc` without sending
+anything. A `LOADFILE` that does not implement `fno 0xff` therefore blocks
+every module load, silently — the RPC itself completes normally.
+
+The release is **per title**, not per console: `SLPS-25918` ships
+`IOPRP310.IMG` and tags its libraries `3100`, `SLPS-25418` ships
+`IOPRP280.IMG` and tags them `2800`. So the honest answer is the release of
+whichever image the title's reset request named, which only a real `UDNL`
+merge (`docs/analysis/45`) can know.
+
+```sh
+grep -a -o 'PsII[A-Za-z_ ]\{8\}[0-9]\{4\}' <outdir>/SLPS_259.18 | sort -u
+```
+
 ### `fno 0`, in full — and where `-203` actually comes from
 
 ```
@@ -585,6 +635,9 @@ offset `0xB10`. A rebuild's minimal set for that path, module by module:
   only at `SifLoadModule` does not need `fno` 1-5 (EE-ELF loading, the memory
   peek/poke backdoor, and KELF loading) — those exist for `EELOAD`/the OSD's
   own boot path, not for the IOP module loader `SifLoadModule` drives.
+  It **does** need `fno 0xff`, the version query the newer `LOADFILE` added
+  (§4): a title asks it before its first `fno 0` and refuses to send one if
+  the four bytes do not name a release its own libraries were built against.
 - **The two observed failure answers** are now both pinned to a specific
   site: `rom0:NOSUCH` → **`-203`**, from `MODLOAD`'s own fixed substitution
   for any `IOMAN open` failure (§3, `0xe38`) — the real `IOMAN`/`ROMDRV`
@@ -613,6 +666,10 @@ offset `0xB10`. A rebuild's minimal set for that path, module by module:
   [header] match). They read as a small file-I/O errno family distinct from
   the kernel `KE_*` range, but this pass found no header or string in either
   binary naming them.
+- **Which release a rebuild should answer `fno 0xff` with** is a title's
+  question, not a console's: the number belongs to the `IOPRP` image the
+  title asked the reboot to load, and reading it out of that image is part of
+  the `UDNL` merge (`docs/analysis/45`) rather than of `LOADFILE`.
 - **`LOADFILE`'s `fno 2`/`3` memory peek/poke and `fno 5`** were identified by
   behavior and offset only; `fno 5`'s target (`0x143c`) and the two extra
   reply words `fno 1`/`fno 5` produce beyond the `{id_or_error, modres}` pair
