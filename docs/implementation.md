@@ -571,6 +571,15 @@ for any command id the built-in dispatch does not answer), `sifman` ordinal 5
 the reference's `REBOOT` passes it, and is one of `docs/analysis/45`'s open
 questions).
 
+Because nothing is merged, our own `LOADFILE` keeps serving the title after
+the reset, and it has to answer the version query the module a title expects
+would have answered (IOP-5f). The release it names is a fixed `3100`. That
+number belongs to the image the title asked for, not to the console — the
+two discs this project runs against ship `IOPRP310` and `IOPRP280` and tag
+their libraries `3100` and `2800` — so the constant is right for one of them
+and wrong for the other, and reading it out of the named image is part of the
+merge rather than of `LOADFILE`.
+
 **`EELOAD` polls, and the kernel clears less than the reference does.** EE-9a
 and EE-9f: slot `0x06` stages the archive's `EELOAD` at `0x82000` with
 `{ "EELOAD", path, argv... }`, and `EELOAD` asks the IOP's `LOADFILE` for the

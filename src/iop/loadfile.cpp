@@ -5,7 +5,8 @@
 // of priority 88 on a 4 KiB stack, and that thread registers one server,
 // `sid 0x80000006`, and loops on its queue for ever. Function 0 reads the
 // path out of the request, asks MODLOAD to load and start it, and answers
-// the id or error and the module's own return.
+// the id or error and the module's own return. Function 0xff answers the
+// version query a title asks before it loads anything.
 
 #include "module.hpp"
 #include "sifrpc.hpp"
@@ -24,6 +25,15 @@ constexpr uint32_t kThreadStack = 0x1000;
 constexpr uint32_t kThreadAttr = 0x02000000;    // TH_C [header]
 constexpr int kIllegalObject = -201;
 constexpr uint32_t kFunctionLoad = 0;
+
+// IOP-5f: the version query, and the four digits it answers with. A title
+// asks for them before its first load and refuses to send one unless they
+// name a release its own libraries were built against; the number is the
+// title's, not the console's, so this is the release we stand in for until
+// the reboot really merges the image a title asks for
+// (docs/implementation.md).
+constexpr uint32_t kFunctionVersion = 0xFF;
+constexpr char kRelease[4] = {'3', '1', '0', '0'};
 
 struct ThreadParameters {
     uint32_t attr;
@@ -219,6 +229,12 @@ void *serve(uint32_t fno, void *buffer, uint32_t) {
         const int32_t result = loadElf(path, &entry, &gp);
         answer[0] = result < 0 ? result : static_cast<int32_t>(entry);
         answer[1] = static_cast<int32_t>(gp);
+        return answer;
+    }
+    if (fno == kFunctionVersion) {
+        for (uint32_t k = 0; k < sizeof(kRelease); k++) {
+            reinterpret_cast<char *>(answer)[k] = kRelease[k];
+        }
         return answer;
     }
     if (fno != kFunctionLoad) {
