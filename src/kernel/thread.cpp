@@ -124,33 +124,6 @@ void writeWord(uintptr_t address, uint32_t value) {
     *reinterpret_cast<volatile uint32_t *>(address) = value;
 }
 
-// The tables come up on first use rather than in a static initialiser the
-// image does not run: every thread but the boot thread free, every semaphore
-// free, the boot thread running at priority 128 -- SYS-10b -- and reported
-// ready, which is what the reference reports for it (SYS-10j).
-void prepareTables() {
-    if (tables_ready) {
-        return;
-    }
-    tables_ready = true;
-    for (uint32_t k = 0; k < kQueues; k++) {
-        ready_queue[k] = {kNone, kNone};
-    }
-    for (uint32_t k = kThreads - 1; k >= 1; k--) {
-        thread_table[k].state = Free;
-        thread_table[k].next = free_thread;
-        free_thread = static_cast<uint16_t>(k);
-    }
-    thread_table[0].state = Ready;
-    thread_table[0].initial_priority = kBootPriority;
-    thread_table[0].current_priority = kBootPriority;
-    for (uint32_t k = kSemaphores; k-- > 0;) {
-        semaphore_table[k].count = -1;
-        semaphore_table[k].next_free = free_semaphore;
-        free_semaphore = static_cast<uint16_t>(k);
-    }
-}
-
 // --- queues -----------------------------------------------------------------
 
 void enqueue(Queue &queue, uint16_t id) {
@@ -189,19 +162,50 @@ void unlink(Queue &queue, uint16_t id) {
     return id;
 }
 
-// Which queue a thread is ready in: its priority's, except the boot thread
-// once it has become the idle one (SYS-10k).
+// Which queue a thread is ready in: its priority's, except the boot thread,
+// which sits below them all (SYS-10k) from the first table set-up on -- it
+// never moves, so a queue it was linked into is the queue it is unlinked
+// from.
 [[nodiscard]] uint32_t queueOf(uint32_t id) {
-    if (id == 0 && thread_table[0].context != 0) {
+    if (id == 0) {
         return kIdleQueue;
     }
     return static_cast<uint16_t>(thread_table[id].current_priority);
 }
 
-// SYS-10b: a thread made ready goes to the tail of its priority's queue.
-void makeReady(uint16_t id) {
-    ThreadRecord &thread = thread_table[id];
-    thread.state = Ready;
+// The tables come up on first use rather than in a static initialiser the
+// image does not run: every thread but the boot thread free, every semaphore
+// free, the boot thread running at priority 128 -- SYS-10b -- and reported
+// ready, which is what the reference reports for it (SYS-10j).
+void prepareTables() {
+    if (tables_ready) {
+        return;
+    }
+    tables_ready = true;
+    for (uint32_t k = 0; k < kQueues; k++) {
+        ready_queue[k] = {kNone, kNone};
+    }
+    for (uint32_t k = kThreads - 1; k >= 1; k--) {
+        thread_table[k].state = Free;
+        thread_table[k].next = free_thread;
+        free_thread = static_cast<uint16_t>(k);
+    }
+    thread_table[0].state = Ready;
+    thread_table[0].initial_priority = kBootPriority;
+    thread_table[0].current_priority = kBootPriority;
+    enqueue(ready_queue[kIdleQueue], 0);
+    lowest_ready = kIdleQueue;
+    for (uint32_t k = kSemaphores; k-- > 0;) {
+        semaphore_table[k].count = -1;
+        semaphore_table[k].next_free = free_semaphore;
+        free_semaphore = static_cast<uint16_t>(k);
+    }
+}
+
+// SYS-10b: a runnable thread sits in its priority's queue -- the running one
+// included, at the head, which is what makes a rescheduling slot reselect its
+// caller (SYS-10c). Linking appends to the tail.
+void linkReady(uint16_t id) {
     const uint32_t queue = queueOf(id);
     enqueue(ready_queue[queue], id);
     if (queue < lowest_ready) {
@@ -210,6 +214,11 @@ void makeReady(uint16_t id) {
     if (queue < queueOf(current_thread)) {
         reschedule_requested = true;
     }
+}
+
+void makeReady(uint16_t id) {
+    thread_table[id].state = Ready;
+    linkReady(id);
 }
 
 void takeOffReadyQueue(uint16_t id) {
@@ -272,14 +281,15 @@ void saveCaller() {
     parkCurrent(_syscall_context, readEpc());
 }
 
-// SYS-10b: the head of the lowest-numbered non-empty queue. Nothing ready is
-// a stop -- the reference's is a message and a reboot to the OSD -- and is
-// not reached while the boot thread waits in queue 128 (SYS-10k).
+// SYS-10b: the head of the lowest-numbered non-empty queue -- read, not
+// taken, since a running thread stays where it is. Nothing ready is a stop --
+// the reference's is a message and a reboot to the OSD -- and is not reached
+// while the boot thread waits below the priorities (SYS-10k).
 [[nodiscard]] uint16_t pickNext() {
     for (uint32_t queue = lowest_ready; queue < kQueues; queue++) {
         if (ready_queue[queue].head != kNone) {
             lowest_ready = queue;
-            return popFront(ready_queue[queue]);
+            return ready_queue[queue].head;
         }
     }
     print("# no thread is ready to run: the kernel stops here.\n");
@@ -305,13 +315,13 @@ void setResumeValue(uint16_t id, uint32_t value) {
     reinterpret_cast<uint32_t *>(thread_table[id].context)[kSlotV0 / 4] = value;
 }
 
-// The caller yields with `answer` as its own result: it goes back to the tail
-// of its ready queue and the pick runs, which reselects it when it is still
-// the best (SYS-10c).
+// The caller yields with `answer` as its own result: it is marked ready --
+// it never left its queue -- and the pick runs, which reselects it while it
+// is still that queue's head (SYS-10c).
 [[nodiscard]] uint32_t yield(uint32_t answer) {
     saveCaller();
     setResumeValue(static_cast<uint16_t>(current_thread), answer);
-    makeReady(static_cast<uint16_t>(current_thread));
+    current().state = Ready;
     return resume(pickNext());
 }
 
@@ -322,6 +332,7 @@ void setResumeValue(uint16_t id, uint32_t value) {
     saveCaller();
     ThreadRecord &thread = current();
     setResumeValue(static_cast<uint16_t>(current_thread), answer);
+    takeOffReadyQueue(static_cast<uint16_t>(current_thread));
     thread.state = Wait;
     thread.wait_type = type;
     thread.wait_id = wait_id;
@@ -385,7 +396,7 @@ void freeThread(uint16_t id) {
 // Take a thread out of whatever it is in, whatever its state (SYS-10e).
 void detach(uint16_t id) {
     ThreadRecord &thread = thread_table[id];
-    if (thread.state == Ready) {
+    if (thread.state == Run || thread.state == Ready) {
         takeOffReadyQueue(id);
     } else if (thread.state == Wait || thread.state == WaitSuspend) {
         leaveWaitList(id);
@@ -414,7 +425,7 @@ bool interruptReschedule(uint32_t *frame) {
     }
     reschedule_requested = false;
     parkCurrent(frame, frame[0]);
-    makeReady(static_cast<uint16_t>(current_thread));
+    current().state = Ready;
     const uint16_t next = pickNext();
     ThreadRecord &thread = thread_table[next];
     current_thread = next;
@@ -448,7 +459,7 @@ uint32_t startProgramThread(uint32_t gp, uint32_t entry) {
     idle_frame[kSlotRa / 4] = reinterpret_cast<uintptr_t>(idleLoop);
     boot.context = reinterpret_cast<uintptr_t>(idle_frame);
     boot.resume_pc = reinterpret_cast<uintptr_t>(idleLoop);
-    makeReady(0);
+    boot.state = Ready;
 
     const uint16_t id = free_thread;
     ThreadRecord &thread = thread_table[id];
@@ -474,6 +485,7 @@ uint32_t startProgramThread(uint32_t gp, uint32_t entry) {
     thread.start_arg = 0;
     thread.next = kNone;
     thread.prev = kNone;
+    linkReady(id);
     current_thread = id;
     return id;
 }
@@ -630,6 +642,7 @@ uint32_t sysExitThread() asm("_sys_exit_thread");
 uint32_t sysExitThread() {
     prepareTables();
     ThreadRecord &thread = current();
+    takeOffReadyQueue(static_cast<uint16_t>(current_thread));
     resetToDormant(thread);
     return resume(pickNext());
 }
@@ -638,6 +651,7 @@ uint32_t sysExitThread() {
 uint32_t sysExitDeleteThread() asm("_sys_exit_delete_thread");
 uint32_t sysExitDeleteThread() {
     prepareTables();
+    takeOffReadyQueue(static_cast<uint16_t>(current_thread));
     freeThread(static_cast<uint16_t>(current_thread));
     return resume(pickNext());
 }
@@ -686,10 +700,10 @@ int32_t changeThreadPriority(uint32_t id, uint32_t priority) {
         return -1;
     }
     const int32_t previous = thread.current_priority;
-    if (thread.state == Ready) {
+    if (thread.state == Run || thread.state == Ready) {
         takeOffReadyQueue(static_cast<uint16_t>(id));
         thread.current_priority = static_cast<int16_t>(priority);
-        makeReady(static_cast<uint16_t>(id));
+        linkReady(static_cast<uint16_t>(id));
     } else {
         thread.current_priority = static_cast<int16_t>(priority);
     }
@@ -889,6 +903,7 @@ int32_t sysSuspendThread(uint32_t id) {
     ThreadRecord &thread = thread_table[id];
     switch (thread.state) {
     case Run:
+        takeOffReadyQueue(static_cast<uint16_t>(id));
         thread.state = Suspend;     // the reference has no path that switches here
         return static_cast<int32_t>(id);
     case Ready:
