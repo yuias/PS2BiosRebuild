@@ -470,6 +470,19 @@ simulator, in this order:
   `sceCdSearchFile`, and the memory-card server, and then starts a traffic of
   its own on command ids the `MSIFRPC` it loaded registers handlers for.
 
+  **Since 2026-09-03 the title's own threads run.** What held them was the
+  shape of the EE's ready queues (`spec/05` SYS-10b): the reference leaves a
+  running thread linked in its priority's queue, at the head, so a
+  rescheduling syscall reselects its caller; this project took the running
+  thread out and put it back at the tail, so every such syscall handed the
+  processor to an equal-priority peer. The title's sound driver creates a
+  worker at the caller's own priority, starts it and *then* lowers it — with
+  the queue moving under it, the start never returned, and the worker, whose
+  body is a wait to be told to stop, span for ever. The queues now hold the
+  running thread. The same run reaches eleven EE threads at seven priorities,
+  the drivers' workers among them, and its SIF traffic goes from 159 commands
+  to several thousand.
+
   What stood in the way was the IOP's memory manager, and it is worth
   recording why, because the shape recurs: `sysmem`'s allocation *mode* is a
   contract, not a hint (`spec/02` IRX-15). `MODLOAD` reads each module's raw
@@ -491,6 +504,17 @@ simulator, in this order:
   serves them (IOP-7f). With that, the boot's SIF-bridge phase runs to the end
   and matches the reference command for command, as far as a bind the
   reference makes next and ours does not yet reach.
+
+  **The wall now is the IOP reboot this project does not perform.** The
+  title's `sceCdSearchFile` request is 0x12c bytes with the path at `+0x24`
+  and the return address at `+0x124`; `rom0`'s `CDVDFSV` reads `+0x20` and
+  `+0x120` and nothing else. The `CDVDFSV` v2.26 in the disc's own
+  `IOPRP310.IMG` switches on the request's *size* — `0x12c` and `0x128` take
+  the `+0x24` shape, anything else the `+0x20` one — and that is the module
+  the title expects to be talking to, because its `UDNL` reboot replaces
+  `rom0`'s with it. So this is not a `CDVDFSV` gap to close in the image: it
+  is the merge `docs/analysis/45` describes, and the question that section
+  left open — whether the merge is needed at all — is now answered yes.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
