@@ -105,7 +105,9 @@ non-rescheduling path; here it's restored like any GPR.
 two wrapper shapes, confirmed by reading the code, not just doc17's
 generic skeleton:
 
-- **Shape A, "always yield"** (confirmed: TerminateThread 0x25,
+- **Shape A, "always yield"** (confirmed: StartThread 0x22 — `0x80003040`
+  is instruction-for-instruction TerminateThread's `0x80003140` —
+  TerminateThread 0x25,
   ChangeThreadPriority 0x29, RotateThreadReadyQueue 0x2B; near-certain for
   ReleaseWaitThread/WakeupThread/ResumeThread, same return convention):
   `jal 0x3680`(save)→`jal <op>`→`bltz $2,<no-switch>`(op returned -1)→
@@ -170,7 +172,9 @@ returns `id`. `300→-1`(range); `1→-1`(not DORMANT); `0→-1`(is current).
 **StartThread — 0x22, `0x80003040`, op `0x80003f68`**: `($a0=id,$a1=arg)
 ->$v0`. `id∈[1,255]`, `id≠current`, `state==0x10` else **-1**. Writes
 `arg` into the frame's `$a0` slot (`+0x40`) *and* `T[id]+0x30`, so the new
-thread's entry function sees `arg` as its `$a0`. `enqueueReady`. Returns
+thread's entry function sees `arg` as its `$a0`. `enqueueReady`, i.e. the
+**tail** of the new thread's priority queue, behind the caller when the two
+share a priority. Shape A. Returns
 `id`. `(1,0)→-1` (never created).
 **ExitThread — 0x23** (Shape B, no direct pair): `(-)->$v0?`. Dequeues
 self, `0x80003bb8` resets to DORMANT, runs the pick loop inline.
