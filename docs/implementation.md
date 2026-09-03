@@ -663,6 +663,17 @@ raise those two lines, so the library binds and registers but its callbacks
 may never run. A client that only needs the bind -- which is why this was
 built -- is served either way.
 
+**The RPC server record is the SDK's 68 bytes, and two of its slots are
+reused.** BOOT-12d. A title's module allocates the record, so its length is
+not ours to pick -- `PADMAN` puts its argument buffer immediately after the
+one it registers, and an eighteenth word lands in that buffer, where the
+module reads it as its own command. Ours had nineteen, and `PADMAN` answered
+every call with `invalid function code (080)`: the `0x80` was our
+`receive_size` and the word after it our `mode`. The record now matches, in
+the SDK's field order, with the pending call's send size and function number
+in the `size` and `size2` slots -- which the reference's own `RegisterRpc`
+leaves unset, so nothing is displaced. A `static_assert` keeps it 68 bytes.
+
 **`STDIO` prints where the reference is silent -- a deliberate deviation.**
 The reference formats through `SYSCLIB` and writes over `IOMAN`
 (`docs/analysis/08`), and since nothing in `rom0` registers a `tty:` device,

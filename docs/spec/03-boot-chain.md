@@ -381,7 +381,14 @@ result buffer and size), `0x8000000C` reads server data; each is answered
 with `cid 0x80000008` (RPC_END) whose body names the request it answers. A
 server is a registered id with a dispatch function; the SDK's module loader
 binds server `0x80000006`. The bodies are as `docs/analysis/34` §3 recovers
-them. A `BIND` is answered with the server's record address and its argument
+them. **The server and queue records belong to the caller, not to the
+library**: a title's module allocates them and lays its own data out around
+them, so their length is ABI. The server record is **17 words (68 bytes)** --
+measured, not taken from a header: `SLPS-25918`'s `PADMAN` places its
+argument buffer exactly 68 bytes after the record it registers, and a
+library that writes an eighteenth word puts it in that buffer, where the
+module then reads it as its own command. The queue record is three words.
+A `BIND` is answered with the server's record address and its argument
 buffer (`sd`, `buf`, `cbuf` in the `END`), or with none of them for an id no
 server has, which the client reads as "try again". A `CALL`'s arguments have
 already landed in that buffer when the packet arrives — the client sends
