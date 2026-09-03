@@ -74,9 +74,14 @@ HANDSHAKE_LINE = "the SIF handshake is complete"
 # our own ROMVER, read out of the archive on the IOP's side of the bus.
 FETCHED_LINE = "0100XP20260810"
 # EE-9c: and then the boot runs the program the archive holds for it, with the
-# one argument that selects the browser.
+# one argument that selects the browser. The archive's program slot is not
+# always our own `OSDSYS` -- a build that substitutes another program keeps
+# the slot's name -- so the banner is looked for in the stored bytes first,
+# and an image that does not carry it is judged on ENTERED_LINE alone.
 PROGRAM_LINE = "OSDSYS: loaded from the archive and running"
 PROGRAM_ARGUMENT = "BootBrowser"
+PROGRAM_SLOT = "OSDSYS"
+ENTERED_LINE = "EELOAD: entry "
 
 NOT_YET = (
     "the rest of the boot list: {built} of its twenty-nine modules are built",
@@ -665,13 +670,40 @@ def checkTogether(image: pathlib.Path) -> list[str]:
         if not any(packet[0] == direction for packet in console.dma.packets):
             problems.append(f"{requirement}: nothing crossed {direction} with "
                             f"a header the receiving channel could read")
-    if PROGRAM_LINE not in text:
-        problems.append("EE-9: the boot never reached the program in the "
-                        "archive")
-    elif PROGRAM_ARGUMENT not in text:
-        problems.append(f"EE-9c: the program did not receive "
-                        f"{PROGRAM_ARGUMENT!r} as its argument")
+    problems += checkProgramRan(image, text, console.ee.cpu.syscalls)
     return problems
+
+
+def checkProgramRan(image: pathlib.Path, text: str,
+                    syscalls: list[tuple[int, int]]) -> list[str]:
+    """EE-9: the boot entered the program the archive holds (spec/04 EE-9c).
+
+    Our own `OSDSYS` announces itself and its argument, and that is the strong
+    check. A build that puts a different program in the slot cannot be held to
+    a line it does not print -- a program built with a toolchain writes
+    through its own runtime, not through this kernel's console -- so what is
+    asked of it is that the EE was executing *inside* it: a syscall issued
+    from at or above the entry address `EELOAD` reported.
+    """
+    data = image.read_bytes()
+    entries = romdir.parseEntries(data, romdir.findTable(data))
+    entry = next(e for e in entries if e.name == PROGRAM_SLOT)
+    stored = data[entry.offset:entry.offset + entry.size]
+    if PROGRAM_LINE.encode("ascii") in stored:
+        if PROGRAM_LINE not in text:
+            return ["EE-9: the boot never reached the program in the archive"]
+        if PROGRAM_ARGUMENT not in text:
+            return [f"EE-9c: the program did not receive "
+                    f"{PROGRAM_ARGUMENT!r} as its argument"]
+        return []
+    _, _, after = text.partition(ENTERED_LINE)
+    if not after:
+        return ["EE-9: the boot never entered the program in the archive"]
+    entry = int(after.split(",", 1)[0], 16)
+    if not any(pc >= entry for _, pc in syscalls):
+        return [f"EE-9: the boot entered the substituted program at "
+                f"{entry:#010x} but nothing ran there"]
+    return []
 
 
 def main() -> int:
