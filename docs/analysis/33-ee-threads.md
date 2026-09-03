@@ -44,7 +44,12 @@ checked against `CreateThread`, `0x80003bb8`, and `ReleaseWaitThread`.
 
 **Ready queue**: `queueHeads[p]=0x8001A230+p*8`, 129 entries (priorities
 0..128), a circular doubly-linked sentinel list per priority (empty when
-`head.next==&head`); a thread's link node is `T[id]-8/-4`. 129 not 127:
+`head.next==&head`); a thread's link node is `T[id]-8/-4`. **The running
+thread is one of them.** Nothing takes a thread off its list to run it: a
+list holds every thread at that priority that is neither waiting, suspended
+nor dormant, and the running one is the head of the lowest-numbered
+non-empty list. Only a blocking, suspending, ending or priority-changing
+operation unlinks, and each does so itself. 129 not 127:
 user code only *sets* `0..127` (`ChangeThreadPriority` rejects `128`), but
 the boot thread sits at `128` (`ChangeThreadPriority(0,5)`→old priority
 `128`). **`0x800155B0`**: cached lowest ready priority (`min()`'d on
@@ -55,7 +60,10 @@ the ready queue *and* the free-slot list below): `0x80005AF8` pop-front,
 `0x80005B38` pop-front+append-tail=rotate, `0x80005B88` unlink-arbitrary,
 `0x80005BA8` append-tail, `0x80005A18` dequeue-by-id (iff
 `state∈{RUN,READY}`), `0x80005A58` enqueue-ready (`state=2`, `min()`s
-priority into `0x800155B0`, appends to the queue).
+priority into `0x800155B0`, appends to the queue's tail — so a thread
+`StartThread` makes ready goes *behind* the caller that started it, and a
+thread that lowers its own priority through `ChangeThreadPriority`, which
+dequeues and re-enqueues whatever its state, goes behind its new peers).
 
 **Free thread-slot list**: `0x8001A228`. `CreateThread` pops a node (same
 primitive). `0x4C` has no power-of-two factor, so the index is recovered
@@ -110,18 +118,27 @@ generic skeleton:
 - **Shape B, "always exit"** (ExitThread 0x23, ExitDeleteThread 0x24): no
   `bltz` at all — these operations never return to their own caller.
 
-`0x80003940`(READY-tail, `$a0`=resumePC,`$a1`=frame) and `0x80003A78`
-(WAIT-tail, `+$a2`=waitType) mark the outgoing thread READY(2)/WAIT(4),
+`0x80003940`(park-ready, `$a0`=resumePC,`$a1`=frame) and `0x80003A78`
+(park-waiting, `+$a2`=waitType) mark the outgoing thread READY(2)/WAIT(4),
 store waitType (0x3A78 only), then: read cursor `c=*0x800155B0`; if
 `c>=129`, nothing ready — `0x800073e0`(message at `0x80015B10`) then
 `0x80000d80`(fatal, not decoded further); else scan `queueHeads[c..128]`
-for the first non-empty list, persist `c`; pop that thread, recover its
-index (magic-multiply), set `0x800155AC`, `T[picked].state=1`(RUN); **if
+for the first non-empty list, persist `c`; **read** that list's head,
+recover its index (magic-multiply), set `0x800155AC`,
+`T[picked].state=1`(RUN); **if
 `T[picked]+0x14`(waitType) is nonzero**, clear it and force
 `*(T[picked].context+0x20)=-1` (its own saved `$v0` slot) — how a forced
 release makes the woken thread's blocking call return `-1`; return
-`$v0=T[picked]+0x04`, `$v1=T[picked]+0x08`'s value. `SleepThread` calls
-`0x3a78` directly (not via a wrapper `bltz`) with `waitType=1`.
+`$v0=T[picked]+0x04`, `$v1=T[picked]+0x08`'s value. **Neither routine
+touches a list**: the outgoing thread is left exactly where it is, and the
+incoming one is read, not popped — `lw $2,0x0($3) / bne $2,$3` is the
+empty test on the sentinel's `+0` (tail) link and its delay slot's
+`lw $2,0x4($3)`, an ordinary branch's so always taken, is the `+4` (head)
+the code goes on to use. That is why a Shape A slot reselects its own
+caller: the caller is still that list's head. It also means a thread that
+parks itself WAITING must have been unlinked by the operation that decided
+to wait — `0x80005B88` — before the park runs. `SleepThread` calls `0x3a78`
+directly (not via a wrapper `bltz`) with `waitType=1`.
 `ExitThread`/`ExitDeleteThread` inline their own copy of the pick loop
 (an exiting thread has no resume state to save).
 

@@ -356,19 +356,27 @@ is not validated beyond the free list having an entry.
 **SYS-10b — priorities and the ready queues.** Priorities `0..127` are
 settable, lower is better; there is one FIFO ready queue per priority and one
 more at `128`, where the boot thread sits (`0x2A(0, 5)` answers its previous
-priority, **128**). The scheduler picks the head of the lowest-numbered
-non-empty queue, keeps a cached lowest-ready priority, and marks the picked
-thread running. A thread made ready is appended to its queue.
+priority, **128**). A queue holds every thread of that priority that is
+neither waiting, suspended nor dormant, **the running one included**: running
+does not take a thread out of its queue, and the running thread is the head of
+the lowest-numbered non-empty one. The scheduler reads that head — it does not
+remove it — keeps a cached lowest-ready priority, and marks it running. A
+thread made ready is appended to the tail of its queue, so it goes behind
+whatever is there already, the running thread first of all. A thread that
+stops being runnable is unlinked by the operation that stops it: waiting,
+suspending, ending, and a priority change, which unlinks and re-appends at the
+new priority whether the thread was running or ready.
 
 **SYS-10c — the switch (EE-7g made concrete).** A rescheduling slot saves the
 caller's registers into the caller's frame — EE-7e's shape, 16 bytes a
 register, `$gp`/`$sp`/`$fp`/`$ra` at `+0x1C0`/`+0x1D0`/`+0x1E0`/`+0x1F0`,
 `$v0` at `+0x20`, `$a0` at `+0x40` — records the post-syscall EPC as its
-resume PC, marks it ready (or waiting), picks the next thread, restores that
-thread's frame and `eret`s to its resume PC. The wrappers of `0x25`, `0x29`,
-`0x2B`, `0x2D`, `0x33`, `0x39`, `0x41`, `0x42` switch on **every** success —
-they check only the operation's `-1` — and rely on the pick to reselect the
-caller when it is still best; `0x23`, `0x24` never come back to their caller;
+resume PC, marks it ready (or waiting) **without moving it in its queue**,
+picks the next thread, restores that thread's frame and `eret`s to its resume
+PC. The wrappers of `0x22`, `0x25`, `0x29`, `0x2B`, `0x2D`, `0x33`, `0x39`,
+`0x41`, `0x42` switch on **every** success — they check only the operation's
+`-1` — and rely on the pick to reselect the caller, which it does whenever the
+caller is still its queue's head and no better queue has filled; `0x23`, `0x24` never come back to their caller;
 `0x32` and `0x44` decide inside their operation. A thread woken by a forced
 release (a delete or a `0x2D`) resumes with **`$v0 = -1`** in its blocking
 call. When nothing is ready the kernel stops with a message; that path is
@@ -381,7 +389,10 @@ halfword); state dormant; primes a frame at `top - 0x2A0` with `$gp`,
 `$sp = $fp = top - 0x20`, and `$ra` = a kernel address a returning thread
 function lands on (SYS-10i). No priority check. `0x22(id, arg) -> id | -1`:
 `id` in `1..255`, not the caller, dormant, else `-1`; writes `arg` into the
-frame's `$a0` slot and the record, makes the thread ready, and switches.
+frame's `$a0` slot and the record, appends the thread to the tail of its
+priority's queue, and switches. A thread started at the caller's own priority
+therefore lands **behind** the caller, and the caller runs on — which is what
+lets a program start a thread and then adjust it.
 
 **SYS-10e — ending.** `0x23` (exit) and `0x24` (exit and delete) do not
 return: the caller's record is reset to dormant (`0x23`: resume PC back to
@@ -395,9 +406,12 @@ queue, a wait list — and reset to dormant.
 **SYS-10f — priority and rotation.** `0x29`/`0x2A (id, priority) -> previous
 priority | -1`: id 0 is the caller (the fourth register the SDK passes is not
 consulted); `id` below 256, priority `0..127`, thread neither free nor
-dormant, else `-1`; a ready thread is moved to its new queue. `0x2B`/`0x2C
+dormant, else `-1`; a running or ready thread is unlinked and appended to its
+new queue, so lowering one's own priority gives the processor up. `0x2B`/`0x2C
 (priority) -> priority | -1`: below 128 else `-1`; rotates that queue, head to
-tail; an empty queue is a no-op that still yields.
+tail; an empty queue is a no-op that still yields. Given its own priority the
+caller is that head, so this rotation is what hands the processor to an
+equal-priority peer — the only slot that does.
 
 **SYS-10g — sleeping and waking.** `0x32() ->`: with a positive wakeup count,
 decrement it and return the current id without sleeping; otherwise the caller
