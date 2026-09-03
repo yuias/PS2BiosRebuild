@@ -307,7 +307,8 @@ a108  bnez  $2, 0x140             # found: use it
 a110  jal   0x578                 # not found: fall back to "IOPBTCONF"
 ```
 
-So a mode-2 reboot boots **`IOPBTCONF2`'s namesake, `IOPBTCON2`** — the
+So a mode-2 reboot turns `"IOPBTCONF"` into `"IOPBTCON2"` and boots **the
+24-name list of that name** — the
 24-name list `docs/analysis/10` and `spec/03` BOOT-9e recorded as "named by
 nothing". It is present in the reference archive at `0x1ecb0`, and its
 contents say what it is for: it keeps `CDVDMAN`, `SIO2MAN`, `MCMAN` and
@@ -366,14 +367,20 @@ stage.** Its module entry reads boot record key 4 and registers one:
   4c  jal   0x1750                 # loadcore's bootup-callback registration
 ```
 
-The callback at `+0x760` reads the command line out of boot record key 5,
-panics with `"Reboot fail! need file name argument"` (`+0x1904`) if there is
-none, and otherwise dispatches on `mode >> 8`: `0` calls the load-and-start
-path at `+0xd24` with `argv[0]` and hands it the rest as arguments, `1` takes
-a second path at `+0xe00`. `argv[0]` for a title's reboot is `"rom0:UDNL"`.
-**This is where the argument string's tokenisation is consumed**, and it
-closes the open question about where it happens: the string travels as a
-boot record, not as a `UDNL` argument built by `REBOOT`.
+The callback at `+0x760` reads boot record key 5, panics with
+`"Reboot fail! need file name argument"` (`+0x1904`) if there is none, and
+otherwise dispatches on `mode >> 8`: `0` calls the load-and-start path at
+`+0xd24` with `argv[0]` and hands it the rest as arguments, `1` takes a
+second path at `+0xe00`. `argv[0]` for a title's reboot is `"rom0:UDNL"`.
+
+**The tokenising is `LOADCORE`'s, not `MODLOAD`'s**, which closes the open
+question about where it happens. `LOADCORE+0x25c`..`+0x290` allocates an
+array on its own stack, calls a splitter at `+0x11e0` with the block's
+command-line pointer, and registers key 5 as a record with **one extra
+word** — `lui $2, 0x105` is `(extra 1) << 24 | (key 5) << 16` — that word
+being the array. `MODLOAD`'s callback reads `argv` straight out of it. The
+string therefore travels as a boot record, tokenised once, and never as a
+`UDNL` argument built by `REBOOT`.
 
 ### `UDNL`: the merge core
 

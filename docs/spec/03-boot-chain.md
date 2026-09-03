@@ -191,9 +191,10 @@ caller that wants the 16-bit value reads it from the returned pointer.
 **BOOT-8b — key 4 is the boot mode.** `loadcore` builds it from the mode it
 was entered with, and `IGREETING` selects its banner from it: `0` a cold boot,
 `1` a soft reboot, `2` the intermediate stage of an update reboot, `3` the
-kernel a merge hands to (`docs/analysis/45`). **Key 5 is the command line**,
-tokenised, and is what a mode-2 boot's `MODLOAD` reads to find the module to
-load.
+kernel a merge hands to (`docs/analysis/45`). **Key 5 is the command line**: `loadcore`
+splits it once and registers the record with **one extra word**, the argument
+array, which is what a mode-2 boot's `MODLOAD` reads to find the module to
+load and what to hand it.
 
 **BOOT-8c — the block `loadcore` is entered with.** The boot loader builds an
 eight-word block at the absolute address **`0x20000`** and passes its address
