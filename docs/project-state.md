@@ -508,13 +508,19 @@ simulator, in this order:
   **The wall now is the IOP reboot this project does not perform.** The
   title's `sceCdSearchFile` request is 0x12c bytes with the path at `+0x24`
   and the return address at `+0x124`; `rom0`'s `CDVDFSV` reads `+0x20` and
-  `+0x120` and nothing else. The `CDVDFSV` v2.26 in the disc's own
+  `+0x120` and nothing else, so the search is asked for an empty path, fails,
+  and the title settles into a loop that gets nowhere — its thread table and
+  RPC counts are byte-identical at 12e9 and 30e9 cycles while its sound
+  driver pushes buffers of silence. The `CDVDFSV` v2.26 in the disc's own
   `IOPRP310.IMG` switches on the request's *size* — `0x12c` and `0x128` take
   the `+0x24` shape, anything else the `+0x20` one — and that is the module
   the title expects to be talking to, because its `UDNL` reboot replaces
-  `rom0`'s with it. So this is not a `CDVDFSV` gap to close in the image: it
-  is the merge `docs/analysis/45` describes, and the question that section
-  left open — whether the merge is needed at all — is now answered yes.
+  `rom0`'s with it. Matching that rule temporarily, to see what lies behind
+  it, gets the title past the search and on to a bind of `sid 0x80000595`,
+  `CDVDFSV`'s read table, and the twelve `CDVDMAN` ordinals behind it. So
+  this is not a `CDVDFSV` gap to close in the image: it is the merge
+  `docs/analysis/45` describes, and the question that section left open —
+  whether the merge is needed at all — is now answered yes.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
