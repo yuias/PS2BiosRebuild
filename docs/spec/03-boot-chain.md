@@ -205,8 +205,13 @@ derived from the other.
 EE-facing services — and a phase-three module may not be moved before `SIFMAN`.
 
 **BOOT-9e:** Alternative configurations are supplied as nested archives
-(`ARC-8`) carrying their own `IOPBTCONF`, not as a flag. `IOPBTCON2` exists in
-the reference archive but is named by nothing in the image.
+(`ARC-8`) carrying their own `IOPBTCONF`, not as a flag. The archive also holds
+`IOPBTCON2`, and the boot loader names it by **building** the name: it copies
+`"IOPBTCONF"` and overwrites the ninth byte with `'0' + mode`, using the result
+when the archive has it and the unmodified name when it does not. Mode `0` (a
+cold boot) therefore takes `IOPBTCONF`, and mode `2` — the intermediate stage
+of a reboot that carries an argument (`docs/analysis/45` §2) — takes
+`IOPBTCON2`, whose list can read a disc and cannot talk to the EE.
 
 ## BOOT-10: The two CPUs meet
 

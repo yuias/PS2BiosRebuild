@@ -100,8 +100,9 @@ PY
 # IOPBTCON2 ['0x27b0']
 ```
 
-`IOPBTCON2` occurs **once**, in the ROMDIR table itself: nothing in the ROM
-names it. `IOPBTCONF`, by contrast, occurs in `IOPBOOT` (which resolves it, per
+`IOPBTCON2` occurs **once**, in the ROMDIR table itself: no *literal* copy of
+the name exists anywhere else. That is true and it is also a trap — see the
+correction at the end of this section.  `IOPBTCONF`, by contrast, occurs in `IOPBOOT` (which resolves it, per
 `03`), in `UDNL`, and — the interesting ones — inside `EELOADCNF` and `OSDCNF`.
 
 Those two are not configuration text. They are **complete, nested ROMDIR
@@ -155,9 +156,19 @@ the module set wholesale. `MODLOAD`'s own strings show that side of it —
 ` ReBootStart: Terminate resident Libraries` — a reboot names the image to boot
 from and tears down the resident libraries first.
 
-`IOPBTCON2` is then simply another list sitting in the ROM for something to name,
-with nothing in this image naming it. That is a fact about this ROM rather than
-a mechanism to reproduce, and the question is better closed than carried.
+**Correction (`docs/analysis/45`): `IOPBOOT` does name it — by building the
+name, not by holding it.** `IOPBOOT+0xd0`..`+0x110` copies its own
+`"IOPBTCONF"` onto the stack and overwrites the ninth byte with `'0' + mode`
+(`addiu $2, $17, 0x30` / `sb $2, 0x98($sp)`), looking the result up and
+falling back to the unmodified name when it is absent. A reboot carrying an
+argument enters `IOPBOOT` with mode `2`, so it boots `IOPBTCON2`. A search
+for the literal string could never have found this; the lesson is that a name
+absent from the bytes is evidence about the bytes, not about the mechanism.
+
+`IOPBTCON2`'s contents fit the use: it keeps `CDVDMAN`, `SIO2MAN`, `MCMAN`
+and `ADDDRV`, and drops everything that talks to the EE (`SIFCMD`, `SIFINIT`,
+`EESYNC`, `REBOOT`, `LOADFILE`, `CDVDFSV`, `FILEIO`, `EECONF`) — an
+intermediate kernel that can read a disc and nothing else.
 
 ## What this pins for the rebuild
 

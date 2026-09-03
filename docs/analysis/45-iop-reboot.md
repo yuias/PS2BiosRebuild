@@ -227,14 +227,19 @@ time) was not traced in this pass.
 `(tag, arg, mode)` by shape; its own parameters land in `$21`/`$20`), does,
 in order:
 
-1. **Conditional print, gated by `mode`'s top bit.** If `mode & 0x80000000`,
-   prints `" ReBootStart: Terminate resident Libraries"`
-   (`docs/analysis/03`/`10` already found this string; this pins exactly what
-   controls it).
-2. **Walk and tear down every resident module**, but only in that same
-   `mode`-gated branch: `loadcore.<ord>` returns the head of the resident
-   module list, and each entry with a non-null pointer at `+8` is called as
-   `fn(0)` — a generic per-module teardown hook distinct from, and coarser
+1. **Conditional print, gated by `mode`'s top bit.** `$16 = mode &
+   0x80000000` (`+0x1308`), and `beqz $16, 0x132c` (`+0x1314`) skips the
+   print of `" ReBootStart: Terminate resident Libraries"` (string at
+   `+0x1980`; `docs/analysis/03`/`10` already found it). **Only the printing
+   is gated.** An earlier reading of this section had the walk below gated
+   too; it is not — the branch lands on `+0x132c`, the walk's own first
+   instruction, and the second print inside the loop (the module's tag,
+   `"  %.8s %x \n"` at `+0x19ac`) has its own `beqz $19` at `+0x1378`.
+2. **Walk and tear down every resident module, unconditionally.**
+   `loadcore.<ord>` returns the head of the resident
+   module list, and each entry whose record has non-null words at `+0x14`,
+   `+0x18` and `+0x1c` is called as `fn(0)` (`jalr $2` with `move $4, $zero`
+   at `+0x1398`) — a generic per-module teardown hook distinct from, and coarser
    than, the ordinary non-residency teardown `spec/02` IRX-12b describes
    (which runs *inside* a module's own entry return, not from an external
    walk). **A rebuild's reboot path must expose this walk-and-call hook on
@@ -258,13 +263,82 @@ in order:
    module-loading use, `ROMDRV`, the EE reset vector, `EELOAD`, and `UDNL`
    itself, per docs/analysis/11 §"four times over", `41` §2, and §"UDNL"
    below — the count keeps growing every time another file is read).
-5. **An indirect call**, `jalr $16`, with four integer arguments, right after
-   the scan. By calling convention this is almost certainly the transfer
-   into `UDNL`'s own entry — `UDNL`'s signature is exactly the four-argument
-   `entry(argc, argv, 0, module_record)` shape — but the actual argument
-   values (a shifted size/address in `$4`, and values in `$5`/`$6` that did
-   not resolve cleanly to `argc`/`argv`) were not pinned in this pass.
-   **Flagged as unresolved rather than asserted.**
+5. **The scan is looking for `"IOPBOOT"`** — the string is at `+0x19b8`, the
+   lookup at `+0x1478` — and the `jalr $16` after it re-enters the ROM's own
+   boot loader. This was previously flagged as "almost certainly `UDNL`";
+   **it is not.** Read at `+0x1488`..`+0x14e0`:
+
+   ```
+   1488  lb    $3, 0x0($21)          # the argument string's first byte
+   1490  bnez  $3, 0x14b4            # non-empty: the update path
+   1498  jal   0x16d4                # QueryMemSize
+   14a0  addiu $2, $2, 0x100
+   14a4  srl   $4, $2, 0x14          # $a0 = RAM in MB
+   14a8  addiu $5, $zero, 0x1        # $a1 = mode 1
+   14b0  move  $6, $zero             # $a2 = no command line
+   14b4  addiu $4, $zero, 0x480      # the update path
+   14b8  jal   0x12c0                # copy the argument to absolute 0x480
+   14d0  andi  $5, $20, 0xff00       # $a1 = (mode & 0xff00) | 2
+   14d4  ori   $5, $5, 0x2
+   14d8  addiu $6, $zero, 0x480      # $a2 = the command line
+   14dc  jalr  $16                   # IOPBOOT(ramMB, mode, cmdline, 0)
+   14e0  move  $7, $zero
+   ```
+
+   So **a reboot is two stages**: `MODLOAD` hands control to `IOPBOOT`, and
+   `IOPBOOT` — not `MODLOAD` — is what eventually reaches `UDNL`. An empty
+   argument gives mode `1`, a plain soft reboot; an argument gives mode `2`
+   and leaves the string at the fixed address `0x480`.
+
+### The second stage: `IOPBOOT` mode 2, `IOPBTCON2`, and who loads `UDNL`
+
+**`IOPBOOT` picks its boot list by mode.** At `IOPBOOT+0xd0`..`+0x110` it
+copies the string `"IOPBTCONF"` (at `IOPBOOT+0x1154`) onto its stack and then
+overwrites the ninth byte with `'0' + mode`:
+
+```
+a0d8  lui   $20, 0xbfc5
+a0dc  addiu $20, $20, -0x4eac     # -> IOPBOOT+0x1154, "IOPBTCONF"
+a0e0  jal   0x578                 # copy it to $sp+0x90
+a0e8  addiu $2, $17, 0x30         # $17 = mode, + '0'
+a0ec  sb    $2, 0x98($sp)         # the 'F' becomes the digit
+a100  jal   0xd58                 # look the name up in the archive
+a108  bnez  $2, 0x140             # found: use it
+a110  jal   0x578                 # not found: fall back to "IOPBTCONF"
+```
+
+So a mode-2 reboot boots **`IOPBTCONF2`'s namesake, `IOPBTCON2`** — the
+24-name list `docs/analysis/10` and `spec/03` BOOT-9e recorded as "named by
+nothing". It is present in the reference archive at `0x1ecb0`, and its
+contents say what it is for: it keeps `CDVDMAN`, `SIO2MAN`, `MCMAN` and
+`ADDDRV`, and drops `REBOOT`, `SIFCMD`, `SIFINIT`, `LOADFILE`, `CDVDFSV`,
+`FILEIO`, `EESYNC` and `EECONF`. **That is a kernel with enough of a drive
+to read `cdrom0:` and nothing to talk to the EE with** — exactly what an
+intermediate stage needs, and it also explains `ADDDRV`'s
+`"ROM directory not found"` appearing in a reboot trace with no reference to
+`ADDDRV` anywhere in `REBOOT`/`MODLOAD`/`UDNL`: it is simply the seventeenth
+name of this list.
+
+**`MODLOAD` is what loads `UDNL`, from a bootup callback, in the second
+stage.** Its module entry reads boot record key 4 and registers one:
+
+```
+  20  jal   0x1738                 # loadcore, boot record key 4
+  24  addiu $4, $zero, 0x4
+  30  lbu   $3, 0x0($2)            # the mode byte
+  38  bne   $3, 0x2, 0x5c          # only in a mode-2 boot
+  44  addiu $4, $4, 0x760          # the callback
+  4c  jal   0x1750                 # loadcore's bootup-callback registration
+```
+
+The callback at `+0x760` reads the command line out of boot record key 5,
+panics with `"Reboot fail! need file name argument"` (`+0x1904`) if there is
+none, and otherwise dispatches on `mode >> 8`: `0` calls the load-and-start
+path at `+0xd24` with `argv[0]` and hands it the rest as arguments, `1` takes
+a second path at `+0xe00`. `argv[0]` for a title's reboot is `"rom0:UDNL"`.
+**This is where the argument string's tokenisation is consumed**, and it
+closes the open question about where it happens: the string travels as a
+boot record, not as a `UDNL` argument built by `REBOOT`.
 
 ### `UDNL`: the merge core
 
@@ -374,31 +448,36 @@ IGREETING+0x10: jal loadcore.12 ($4 = 4)     # boot record, key 4
 IGREETING+0x30: lhu $3, 0x0($16)              # the record's selector word
 ```
 
-Branching on that word: `0` prints `"Hard reset boot"`, `1` prints `"Soft
-reboot"`, `2` prints `"Update reboot complete"`, `3` prints `"Update
-rebooting.."` — each read directly at its own file offset in the extracted
-`IGREETING` (`0xa50`/`0xa60`/`0xa6c`/`0xa84`). Every one of those four is
+Branching on that word: `0` prints `"Hard reset boot"` (`0xa50`), `1`
+`"Soft reboot"` (`0xa60`), `2` **`"Update rebooting.."`** (`0xa84`), `3`
+**`"Update reboot complete"`** (`0xa6c`). An earlier reading of this file had
+`2` and `3` the other way round; the branches are unambiguous
+(`IGREETING+0x58: beq $3, 2 -> 0xa0` which loads `0xa84`, `+0x60: beq $3, 3
+-> 0x90` which loads `0xa6c`), and the corrected order is also the one the
+observed console shows: the intermediate mode-2 boot announces
+`"Update rebooting.."` and the merged kernel that `UDNL` hands to announces
+`"Update reboot complete"`. Every one of those four is
 printed **in addition to**, right
 before, a generic line built from `"\nPlayStation 2 ======== "` plus a
 `%04x-%04x`/`%x`/`%lx, %ldMB` CPU-identification format string, unconditional
 regardless of the selector's value (or its absence — a null boot record
 falls through to the generic line alone). This is exactly the observed
 `"PlayStation 2 ======== \nUpdate rebooting.."` pairing from the task's own
-boot trace, now pinned to a specific record value (`3`) rather than read off
+boot trace, now pinned to a specific record value (`2`) rather than read off
 a console transcript.
 
 **`IGREETING` reloads on every reboot, since it is not one of the 16 names a
 disc's `IOPRP*.IMG` supplies** (§2's merge rule), so it prints this banner
-fresh each time rom0's copy is picked up again — once at the very first cold
-boot (where the record must read `0`, "Hard reset boot," matching a
-power-on), and again on every software reboot. **Who writes the selector
-value into the boot record before each reload — presumably `REBOOT` or
-`UDNL`, setting it to `3` before triggering `MODLOAD`'s teardown — was not
-traced to a specific write in this pass**, since it depends on resolving
-whether `REBOOT+0x160`'s `$16` is BOOT-8's shared table cell or `REBOOT`'s
-own private data (the caution above). Nor was anywhere a write of `2`
-(`"Update reboot complete"`) found, so what would make it observable — a
-*third* run of `IGREETING`, or a different code path entirely — is open.
+fresh each time rom0's copy is picked up again. **Nobody writes the selector
+as such: it is the boot mode.** `LOADCORE` turns the mode `IOPBOOT` was
+entered with into boot record key 4, so the value follows the two-stage
+chain of §2 directly — `0` at the cold boot, `1` for an argument-less soft
+reboot, `2` for the intermediate stage `MODLOAD` starts with
+`(mode & 0xff00) | 2`, and `3` for the kernel `UDNL` finally hands to, which
+is why all four values are reachable and why a title's reboot shows two
+banners rather than one. That closes the question of who writes `2` and
+`3`; it also removes the dependence on whether `REBOOT+0x160`'s `$16` is
+BOOT-8's cell (the caution above still stands on its own terms).
 
 ## 3. What differs for `EELOAD`'s own reboot
 
@@ -464,6 +543,18 @@ disc's own ELF load — which this pass did not disassemble.
   it.
 - `modload`'s reboot entry is IOP kernel **syscall 12**, not an ordinary
   export call.
+- **A reboot is two stages, not one.** `MODLOAD+0x12e0` ends by re-entering
+  `IOPBOOT` with `(ramMB, mode, cmdline, 0)`; `IOPBOOT` selects the boot list
+  `"IOPBTCON" + ('0' + mode)` and falls back to `IOPBTCONF`, so a reboot with
+  an argument comes up on `IOPBTCON2` — a kernel with `CDVDMAN`, `SIO2MAN`,
+  `MCMAN` and `ADDDRV` and with nothing that talks to the EE. `MODLOAD`'s own
+  entry registers a bootup callback when boot record key 4 reads `2`, and
+  that callback is what loads `argv[0]` — `rom0:UDNL`. A rebuild therefore
+  needs `IOPBOOT` to take arguments and pick a list, `LOADCORE` to carry boot
+  records and run bootup callbacks, and an `IOPBTCON2` in the archive, before
+  any of `UDNL` matters.
+- `ADDDRV`'s `"ROM directory not found"` in a reboot trace is not a mystery:
+  it is the seventeenth name of `IOPBTCON2`.
 - The teardown-and-reload core (`MODLOAD+0x12e0`) re-applies BOOT-4 step 1's
   bus-config table **without** re-entering the reset vector — "no POST
   codes" is a direct consequence of this, not a separate fact to reproduce.
@@ -479,16 +570,23 @@ disc's own ELF load — which this pass did not disassemble.
 - `EELOAD`'s and a title's own reboot are the **same mechanism** with a
   different argument string; nothing EE-kernel-specific is implicated.
 - `IGREETING`'s boot-record key 4 selects the exact console banner
-  (`0`=Hard reset boot, `1`=Soft reboot, `2`=Update reboot complete,
-  `3`=Update rebooting..), always followed by a generic CPU-identification
+  (`0`=Hard reset boot, `1`=Soft reboot, `2`=Update rebooting..,
+  `3`=Update reboot complete), always followed by a generic CPU-identification
   line — a rebuild's boot-record table needs this same key with these same
-  four values to reproduce the observed message sequence.
+  four values to reproduce the observed message sequence. The key is simply
+  the mode `IOPBOOT` was entered with: `LOADCORE+0x120` reads the boot-info
+  block's mode halfword, ORs in `key << 16`, and registers it. `UDNL` sets
+  `3` in the header it hands the merged kernel (`UDNL+0x374`), which is why a
+  title's reboot prints two banners.
 
 ## Open questions
 
-- **Where the RESET_CMD argument string is tokenised** into `UDNL`'s
-  `argc`/`argv` — inside `MODLOAD`'s syscall-12 handler, or somewhere in
-  `MODLOAD+0x12e0` before the final `jalr`. Not isolated in this pass.
+- ~~**Where the RESET_CMD argument string is tokenised**~~ — **answered.**
+  It is not tokenised on the way to `UDNL` at all: `MODLOAD+0x12e0` copies it
+  verbatim to absolute `0x480` and hands it to `IOPBOOT` as a command line,
+  `LOADCORE` turns it into boot record key 5, and `MODLOAD`'s mode-2 bootup
+  callback splits it there (`+0x7a8`), taking `argv[0]` as the module to
+  load and the rest as its arguments.
 - **Whether `REBOOT+0x160`'s `$16 = 0x3f0` is BOOT-8's shared absolute table
   cell or an offset into `REBOOT`'s own relocated `.data`/`.bss`.** Flagged
   as "most likely the latter" above but not confirmed either way; needs the
@@ -513,15 +611,13 @@ disc's own ELF load — which this pass did not disassemble.
   in it. What raises the bit on the reference — the merged kernel's own
   `SIFMAN`/`SIFCMD` bring-up, or `REBOOT`'s conditional `sifman.5`/`sifman.22`
   pair — is still not read from the ROM.
-- **`MODLOAD+0x12e0`'s final `jalr $16`** — very likely the hand-over into
-  `UDNL`'s `entry(argc, argv, 0, module_record)`, but its four argument
-  values were not cleanly decoded.
-- **`"ROM directory not found"` (`ADDDRV`'s only string) appearing in a plain
-  `sceSifIopReset` reboot's console trace**, despite `ADDDRV` being
-  unreferenced by name anywhere in `UDNL`/`REBOOT`/`MODLOAD`'s bytes, and
-  previously known only as an `OSDCNF`-list entry (`docs/analysis/10`).
-  Unresolved — possibly reached by archive position rather than name, inside
-  the untraced part of `MODLOAD+0x12e0`.
+- ~~**`MODLOAD+0x12e0`'s final `jalr $16`**~~ — **answered, and it was not
+  `UDNL`.** It is `IOPBOOT`, entered as `(ramMB, mode, cmdline, 0)`; the
+  string it looks up is `"IOPBOOT"` at `+0x19b8`. See §2 step 5.
+- ~~**`"ROM directory not found"` (`ADDDRV`'s only string) appearing in a
+  plain `sceSifIopReset` reboot's console trace**~~ — **answered.** `ADDDRV`
+  is the seventeenth name in `IOPBTCON2`, the list the intermediate stage
+  boots. Nothing references it by name because nothing has to.
 - **`UDNL`'s per-module copy loop and the final staged-kernel hand-over**
   (entry address, jump/`eret`, and whatever becomes of BOOT-8's table for
   the new kernel core) — the merge rule and the staging allocation are
