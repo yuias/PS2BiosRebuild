@@ -177,7 +177,42 @@ keyed by a small integer. `loadcore` ordinal 12 looks up a key and returns the
 record, whose flag word gates behaviour in the caller.
 
 Keys 1, 3 and 4 are used by `EECONF`, `SIFINIT`, `SIFCMD` and `IGREETING`. The
-address is ABI: a rebuild cannot relocate it.
+address is ABI: a rebuild cannot relocate it. `0x3F4` is written the same
+pointer.
+
+**BOOT-8a — a record's shape.** A record is a header word followed by however
+many extra words it declares, and the list ends at a zero header word. In the
+header, little-endian: **bytes 0-1 a 16-bit value, byte 2 the key, byte 3 the
+number of extra words that follow**. So a record occupies `4 + 4 * extra`
+bytes, and the walk is `record += (record[3] << 2) + 4`. `loadcore` 12 returns
+**the record's address**, not its value, and `0` when the key is absent; a
+caller that wants the 16-bit value reads it from the returned pointer.
+
+**BOOT-8b — key 4 is the boot mode.** `loadcore` builds it from the mode it
+was entered with, and `IGREETING` selects its banner from it: `0` a cold boot,
+`1` a soft reboot, `2` the intermediate stage of an update reboot, `3` the
+kernel a merge hands to (`docs/analysis/45`). **Key 5 is the command line**,
+tokenised, and is what a mode-2 boot's `MODLOAD` reads to find the module to
+load.
+
+**BOOT-8c — the block `loadcore` is entered with.** The boot loader builds an
+eight-word block at the absolute address **`0x20000`** and passes its address
+as `loadcore`'s only argument:
+
+| Offset | What |
+| --- | --- |
+| `+0x00` | RAM size in MiB |
+| `+0x04` | the boot mode, which becomes key 4 |
+| `+0x08` | the command line, or `0`; when present it is copied to `0x20020` |
+| `+0x0c` | the record of the `SYSMEM` the loader has already started |
+| `+0x10` | the base of a region to keep reserved, or `0` |
+| `+0x14` | that region's size |
+| `+0x18` | how many entries the list holds |
+| `+0x1c` | the list of modules to load, after the command line's copy |
+
+A rebuild that keeps its boot list somewhere else of its own is free to, but
+`loadcore`'s entry signature and `0x3F0`'s contents are ABI the same way
+`0x3F0` itself is.
 
 ## BOOT-9: IOPBTCONF grammar
 

@@ -319,6 +319,41 @@ intermediate stage needs, and it also explains `ADDDRV`'s
 `ADDDRV` anywhere in `REBOOT`/`MODLOAD`/`UDNL`: it is simply the seventeenth
 name of this list.
 
+**The block and the records, read out of the bytes.** `IOPBOOT+0x30`..`+0xa8`
+builds eight words at the absolute address `0x00020000` — `$19 = 0x20000`,
+`$21`/`$17`/`$16` are its own `(ramMB, mode, cmdline)` arguments:
+
+```
+a068  sw $21, 0x00($19)      # RAM in MiB
+a06c  sw $17, 0x04($19)      # the mode
+a070  sw $zero, 0x08($19)    # the command line, cleared
+a078  sw $4,  0x1c($19)      # the module list, starting at 0x20020
+a080  jal 0x578              # with a command line: copy it to 0x20020,
+a084  sw $4,  0x08($19)      #   point +0x08 at it, and push +0x1c past it
+```
+
+and `LOADCORE+0x50`..`+0xa8` reads all eight back. `+0x0c` is the record of
+the `SYSMEM` the loader already started, `+0x10`/`+0x14` a region to keep
+reserved, `+0x18` the list's length. `LOADCORE+0xc8` then writes its own
+record table's address to **both** `0x3F0` and `0x3F4`.
+
+A record's shape falls out of `loadcore` ordinal 12 (`LOADCORE+0x640`), which
+is the only reader:
+
+```
+ 640  lw   $3, 0x3f0($zero)
+ 648  lw   $2, 0x0($3)        # a zero header word ends the list
+ 658  lbu  $2, 0x2($3)        # byte 2 is the key
+ 660  beq  $4, $2, 0x694      #   ... and the record's *address* is returned
+ 668  lbu  $2, 0x3($3)        # byte 3 is the count of extra words
+ 674  addiu $2, $2, 0x4       # so the stride is 4 + 4*extra
+```
+
+Bytes 0-1 are a 16-bit value. `LOADCORE+0x120` builds key 4 from the block's
+mode halfword (`lhu $2, 0x3c($fp)` / `or $2, 0x40000`), which is why key 4 is
+the boot mode and why `IGREETING`'s four banners are exactly the four modes.
+Written up as `spec/03` BOOT-8a-c.
+
 **`MODLOAD` is what loads `UDNL`, from a bootup callback, in the second
 stage.** Its module entry reads boot record key 4 and registers one:
 
