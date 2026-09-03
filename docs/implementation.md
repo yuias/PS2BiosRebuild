@@ -663,17 +663,20 @@ raise those two lines, so the library binds and registers but its callbacks
 may never run. A client that only needs the bind -- which is why this was
 built -- is served either way.
 
-**`STDIO` writes to the console byte, not through a `tty:` device.** The
-reference formats through `SYSCLIB` and writes over `IOMAN`
-(`docs/analysis/08`); ours formats through the same `SYSCLIB` ordinal 18 and
-stores the bytes at `0xBF80380C` directly, because there is no `tty:` driver
-to open. The bytes and their order are the same; what is missing is the
-device layer between.
+**`STDIO` prints where the reference is silent -- a deliberate deviation.**
+The reference formats through `SYSCLIB` and writes over `IOMAN`
+(`docs/analysis/08`), and since nothing in `rom0` registers a `tty:` device,
+the bytes go nowhere: booting a title on the reference image produces **no**
+IOP console output at all, which was checked rather than assumed. Ours
+formats through the same `SYSCLIB` ordinal 18 but stores the bytes straight
+at `0xBF80380C`, the console address, so they appear.
 
-Worth more than its size: nearly every module a title loads calls `stdio`
-ordinal 4 to say what is wrong with it, and while that printf said nothing,
-two of this project's walls each cost a session of disassembly to find
-something the module had been announcing all along.
+It is kept because of what it is worth: nearly every module a title loads
+calls `stdio` ordinal 4 to say what is wrong with it, and while that printf
+said nothing, two of this project's walls each cost a session of disassembly
+to find something the module had been announcing all along. It should become
+a build option before the image is presented as a faithful replacement --
+the deviation is small and one-way, but it is real.
 
 **`SYSMEM`'s `Kprintf` forwards nowhere yet.** IRX-6c. Ordinal 14 answers `0`
 until ordinal 15 installs a hook, which is the state the reference ships in
