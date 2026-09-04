@@ -374,10 +374,15 @@ PS2_IMPORT(_import_excepman_register, 4)
 PS2_IMPORT(_import_excepman_register_priority, 5)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 int _import_excepman_register(uint32_t cause, void *handler);
 int _import_excepman_register_priority(uint32_t cause, uint32_t priority, void *handler);
+int _import_loadcore_register(void *table);
 
 // intrman.S: the two handler structures.
 extern uint32_t _intrman_interrupt_handler[];
@@ -460,6 +465,9 @@ uint32_t *_intrman_syscall(uint32_t *frame, uint32_t instruction) {
 // EXCEPMAN, the DMA line's handler to this module's own table, and every
 // mask starts closed.
 int _module_start(int, char **) {
+    if (_import_loadcore_register(&intrman_exports) < 0) {
+        return 1;
+    }
     writeWord(kIntMask, 0);
     writeWord(kDicr, 0);
     writeWord(kDicr2, 0);

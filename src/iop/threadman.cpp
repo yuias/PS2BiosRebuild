@@ -184,6 +184,7 @@ void _import_timrman_set_compare(uint32_t timer_id, uint32_t compare);
 int _import_timrman_intr_code(uint32_t timer_id);
 void _import_intrman_set_new_ctx(uint32_t *(*callback)(uint32_t *));
 void _import_intrman_set_should_preempt(int (*callback)());
+int _import_loadcore_register(void *table);
 }
 
 struct Critical {
@@ -1930,6 +1931,17 @@ void *getThreadmanData() {
     },
 };
 
+// IRX-10a: four libraries, so residency requires every one to register --
+// the same shape sysclib's `registerLibraries` uses for its two.
+bool registerLibraries() {
+    const int thbase_result = _import_loadcore_register(&thbase_exports);
+    const int thevent_result = _import_loadcore_register(&thevent_exports);
+    const int thsemap_result = _import_loadcore_register(&thsemap_exports);
+    const int thmsgbx_result = _import_loadcore_register(&thmsgbx_exports);
+    return thbase_result >= 0 && thevent_result >= 0 && thsemap_result >= 0 &&
+           thmsgbx_result >= 0;
+}
+
 }  // namespace
 
 PS2_IMPORTS_BEGIN("sysmem\0\0", 0x0101)
@@ -1957,12 +1969,19 @@ PS2_IMPORT(_import_timrman_set_compare, 11)
 PS2_IMPORT(_import_timrman_intr_code, 16)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 // IRX-12: the entry. IOP-3i: the idle thread and a record for the code that
 // is running -- the boot, which goes on to the rest of the list on this
 // thread -- then the hooks, and interrupts on as the very last thing.
 int _module_start(int, char **) {
+    if (!registerLibraries()) {
+        return 1;
+    }
     for (Queue &queue : ready) {
         queue = {kNone, kNone};
     }

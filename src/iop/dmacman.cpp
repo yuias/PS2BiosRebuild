@@ -17,6 +17,10 @@ using ps2::module::ExportTable;
 using ps2::module::reservedHook;
 using ps2::module::slot;
 
+extern "C" {
+int _import_loadcore_register(void *table);
+}
+
 constexpr uintptr_t kBank1 = 0xBF801080;        // channels 0..6, 0x10 apart
 constexpr uintptr_t kBank2 = 0xBF801500;        // channels 7..13
 constexpr uintptr_t kDpcr = 0xBF8010F0;
@@ -171,11 +175,18 @@ int unimplemented() {
 
 }  // namespace
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 // What the reference's entry leaves in the priority registers and the
 // second bank's enable (docs/analysis/37 §3.6).
 int _module_start(int, char **) {
+    if (_import_loadcore_register(&dmacman_exports) < 0) {
+        return 1;
+    }
     writeWord(kDpcr, 0x07777777);
     writeWord(kDpcr2, 0x07777777);
     writeWord(kDpcr3, 0x00000777);

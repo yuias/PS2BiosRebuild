@@ -121,6 +121,7 @@ int _import_sifman_set_dchain();
 int _import_sifman_set_dma(const Transfer *list, uint32_t count);
 int _import_sifman_set_dma_intr(const Transfer *list, uint32_t count,
                                 void (*function)(void *), void *arg);
+int _import_loadcore_register(void *table);
 }
 
 void writeWord(uintptr_t address, uint32_t value) {
@@ -596,11 +597,20 @@ PS2_IMPORT(_import_sifman_set_dma, 7)
 PS2_IMPORT(_import_sifman_set_dma_intr, 32)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 // The module's entry, called by the loader as entry(argc, argv, 0, record)
 // (spec/02 IRX-10).
 int _module_start(int, char **) {
+    // IRX-10a: registered before anything else runs.
+    if (_import_loadcore_register(&sifcmd_exports) < 0) {
+        return 1;
+    }
+
     // BOOT-10b: the address the EE is to send packets to is published before
     // the handshake announces that this side is up. The reference reaches
     // SMCOM through a `sifman` ordinal this project has not decoded, so the

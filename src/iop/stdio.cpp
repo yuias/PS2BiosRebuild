@@ -20,6 +20,7 @@ extern "C" {
 // reference's own STDIO uses.
 int _import_sysclib_prnt(void (*out)(void *, int), void *ctx, const char *format,
                          void *args);
+int _import_loadcore_register(void *table);
 }
 
 namespace {
@@ -74,10 +75,16 @@ PS2_IMPORTS_BEGIN("sysclib\0", 0x0101)
 PS2_IMPORT(_import_sysclib_prnt, 18)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
+// IRX-10a: supersedes SYSCLIB's provisional 1.01 stub with this module's own
+// 1.02 table.
 int _module_start(int, char **) {
-    return 0;                           // resident
+    return _import_loadcore_register(&stdio_exports) < 0 ? 1 : 0;
 }
 
 }  // extern "C"

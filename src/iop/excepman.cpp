@@ -20,6 +20,10 @@ using ps2::module::ExportTable;
 using ps2::module::reservedHook;
 using ps2::module::slot;
 
+extern "C" {
+int _import_loadcore_register(void *table);
+}
+
 constexpr uint32_t kCauses = 16;
 constexpr uint32_t kNodes = 32;                 // IOP-1d: the reference's pool
 
@@ -259,14 +263,22 @@ asm(
 
 }  // namespace
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 extern const uint32_t _excepman_vector[];
 extern const uint32_t _excepman_vector_end[];
 
 // IRX-12: the entry. Installs the vector and an empty table -- every cause
-// falls through to the stop -- and stays resident.
+// falls through to the stop -- and stays resident. IRX-10a first: the library
+// is registered before the vector is installed.
 int _module_start(int, char **) {
+    if (_import_loadcore_register(&excepman_exports) < 0) {
+        return 1;
+    }
     preparePool();
     for (uint32_t cause = 0; cause < kCauses; cause++) {
         chain[cause] = nullptr;

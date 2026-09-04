@@ -23,6 +23,7 @@ int _import_intrman_disable(uint32_t irq, uint32_t *was_pending);
 int _import_intrman_suspend(uint32_t *state);
 int _import_intrman_resume(uint32_t state);
 int _import_intrman_query_context();
+int _import_loadcore_register(void *table);
 }
 
 namespace {
@@ -439,9 +440,16 @@ PS2_IMPORT(_import_intrman_resume, 18)
 PS2_IMPORT(_import_intrman_query_context, 23)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 int _module_start(int, char **) {
+    if (_import_loadcore_register(&timrman_exports) < 0) {
+        return 1;
+    }
     for (auto &count : in_use) {
         count = 0;
     }

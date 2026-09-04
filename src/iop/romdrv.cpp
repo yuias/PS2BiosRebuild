@@ -62,6 +62,7 @@ extern "C" {
 int _import_ioman_add_drv(void *device);
 int _import_intrman_suspend(uint32_t *state);
 int _import_intrman_resume(uint32_t state);
+int _import_loadcore_register(void *table);
 }
 
 // Walk a table from `image_start`, as ARC-3 says offsets are implied.
@@ -321,11 +322,18 @@ PS2_IMPORT(_import_intrman_suspend, 17)
 PS2_IMPORT(_import_intrman_resume, 18)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 // The residency code is the registration's sign bit, as the reference
 // derives it (docs/analysis/11).
 int _module_start(int, char **) {
+    if (_import_loadcore_register(&romdrv_exports) < 0) {
+        return 1;
+    }
     return initDevice() < 0 ? 1 : 0;
 }
 

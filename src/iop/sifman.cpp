@@ -112,6 +112,7 @@ int _import_intrman_register(uint32_t irq, uint32_t mode, int (*handler)(void *)
 int _import_intrman_enable(uint32_t irq);
 int _import_intrman_suspend(uint32_t *state);
 int _import_intrman_resume(uint32_t state);
+int _import_loadcore_register(void *table);
 }
 
 [[nodiscard]] uint32_t readWord(uintptr_t address) {
@@ -358,12 +359,21 @@ PS2_IMPORT(_import_intrman_suspend, 17)
 PS2_IMPORT(_import_intrman_resume, 18)
 PS2_IMPORTS_END()
 
+PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register, 6)
+PS2_IMPORTS_END()
+
 extern "C" {
 
 // The module's entry, called by the loader as entry(argc, argv, 0, record)
 // (spec/02 IRX-10). Nothing here waits for the EE: the handshake is ordinal
 // 5, so that the module that owns the command buffer decides when it happens.
 int _module_start(int, char **) {
+    // IRX-10a: registered before anything else runs.
+    if (_import_loadcore_register(&sifman_exports) < 0) {
+        return 1;
+    }
+
     // BOOT-11j: enable the second bank's channels before anything uses them.
     writeWord(kDmaDpcr2, kDmaDpcr2All);
     writeWord(kDmaDmacen, 1);
