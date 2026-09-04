@@ -1,5 +1,14 @@
 # Development rules
 
+## Comment style
+
+- Write concise code comments
+  - Focus on the "why" rather than the "what".
+  - Avoid stating the obvious; only explain non-trivial logic or edge cases.
+- Keep comments up to date when changing the code they describe.
+- Do not add comments that merely mark generated or modified sections.
+- Prefer `//` over `/* */`. Both are acceptable, but be consistent within a file.
+
 ## C/C++ Naming conventions
 
 Google C++ Style Guide (https://google.github.io/styleguide/cppguide.html) with the following modifications.
@@ -26,13 +35,3 @@ Google C++ Style Guide (https://google.github.io/styleguide/cppguide.html) with 
 - Deviate when aligning with STL or external library conventions,
   e.g. `begin()`, `end()`, `value_type`, `iterator_category`.
 - Types intended to satisfy STL concepts follow STL naming.
-
-## Comment style
-
-- Use clear, concise words for inline comments.
-- Write concise code comments
-  - Focus on the "why" rather than the "what".
-  - Avoid stating the obvious; only explain non-trivial logic or edge cases.
-- Keep comments up to date when changing the code they describe.
-- Do not add comments that merely mark generated or modified sections.
-- Prefer `//` over `/* */`. Both are acceptable, but be consistent within a file.
