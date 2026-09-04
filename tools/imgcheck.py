@@ -65,6 +65,15 @@ def expectedLibraries(image: pathlib.Path, modules: list[str]) -> list[str]:
 CROSS_CALL_RESULT = 0x1F8020
 HEAP_START = 0x00020000
 
+# spec/03 BOOT-8: LOADCORE's entry publishes its boot-record table at both
+# 0x3F0 and 0x3F4, and key 4 carries the mode it was entered with -- 0 on a
+# cold boot. Reading it back is what proves the entry took BOOT-8c's block
+# rather than the ordinary IRX arguments.
+BOOT_RECORDS = 0x3F0
+BOOT_RECORDS_ALSO = 0x3F4
+KEY_BOOT_MODE = 4
+COLD_BOOT = 0
+
 RESET_COP0 = (("Config", 0x00073003), ("Status", 0x70400000),
               ("Count", 0), ("Compare", 1))
 RESET_TLB = (0, 0x70000000, 0x80000007, 0x00000007)
@@ -223,6 +232,27 @@ def checkIop(image: pathlib.Path) -> list[str]:
         problems.append(f"IRX-15e: the boot image ends at {image_end:#x}, "
                         f"at or past SYSMEM's heap start {HEAP_START:#x} -- "
                         f"the heap has to clear the image")
+
+    # BOOT-8: the record table is published at both addresses, and key 4 is
+    # the mode. A record's header is a 16-bit value, then the key, then the
+    # count of extra words (BOOT-8a).
+    table = bus.read(BOOT_RECORDS, 4)
+    if table == 0 or table != bus.read(BOOT_RECORDS_ALSO, 4):
+        problems.append(f"BOOT-8: the boot records are at {table:#x} and "
+                        f"{bus.read(BOOT_RECORDS_ALSO, 4):#x} -- LOADCORE's "
+                        f"entry did not publish them at both addresses")
+    else:
+        mode = None
+        record = table
+        while (header := bus.read(record, 4)) != 0:
+            if (header >> 16) & 0xFF == KEY_BOOT_MODE:
+                mode = header & 0xFFFF
+                break
+            record += ((header >> 24) & 0xFF) * 4 + 4
+        if mode != COLD_BOOT:
+            problems.append(f"BOOT-8b: boot record key 4 reads {mode}, want "
+                            f"{COLD_BOOT} -- LOADCORE was not entered with "
+                            f"BOOT-8c's block, or built the record wrongly")
 
     # IRX-12 and IRX-9 together: LOADCORE's entry ran, called across the
     # binding into SYSMEM, and got the heap back.
