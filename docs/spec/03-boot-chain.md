@@ -188,32 +188,77 @@ bytes, and the walk is `record += (record[3] << 2) + 4`. `loadcore` 12 returns
 **the record's address**, not its value, and `0` when the key is absent; a
 caller that wants the 16-bit value reads it from the returned pointer.
 
-**BOOT-8b — key 4 is the boot mode.** `loadcore` builds it from the mode it
-was entered with, and `IGREETING` selects its banner from it: `0` a cold boot,
-`1` a soft reboot, `2` the intermediate stage of an update reboot, `3` the
-kernel a merge hands to (`docs/analysis/45`). **Key 5 is the command line**: `loadcore`
-splits it once and registers the record with **one extra word**, the argument
-array, which is what a mode-2 boot's `MODLOAD` reads to find the module to
-load and what to hand it.
+**BOOT-8b — key 4 is the boot mode.** `loadcore` builds it from the low 16
+bits of the mode it was entered with, and `IGREETING` selects its banner from
+it: `0` a cold boot, `1` a soft reboot, `2` the intermediate stage of an
+update reboot, `3` the kernel a merge hands to (`docs/analysis/45`). **Key 5
+is the command line**: `loadcore` copies the string somewhere of its own and
+registers the record with **one extra word, a pointer to that copy**. It does
+not tokenise it -- a mode-2 boot's `MODLOAD` is what splits the string into
+the module to load and the arguments to hand it.
 
 **BOOT-8c — the block `loadcore` is entered with.** The boot loader builds an
-eight-word block at the absolute address **`0x20000`** and passes its address
-as `loadcore`'s only argument:
+eight-word block and passes its address as `loadcore`'s only argument. The
+address is the loader's to choose -- `loadcore` reads the block only through
+that argument, and copies all eight words before it allocates anything.
 
 | Offset | What |
 | --- | --- |
-| `+0x00` | RAM size in MiB |
-| `+0x04` | the boot mode, which becomes key 4 |
-| `+0x08` | the command line, or `0`; when present it is copied to `0x20020` |
-| `+0x0c` | the record of the `SYSMEM` the loader has already started |
+| `+0x00` | RAM size in **MiB**; `loadcore` puts its stack at the top of it |
+| `+0x04` | the boot mode, of which the low 16 bits become key 4 |
+| `+0x08` | the command line, or `0` |
+| `+0x0c` | the **load base** of the `SYSMEM` the loader has already started |
 | `+0x10` | the base of a region to keep reserved, or `0` |
 | `+0x14` | that region's size |
-| `+0x18` | how many entries the list holds |
-| `+0x1c` | the list of modules to load, after the command line's copy |
+| `+0x18` | an upper bound on the list's length |
+| `+0x1c` | the list of modules to load |
 
-A rebuild that keeps its boot list somewhere else of its own is free to, but
-`loadcore`'s entry signature and `0x3F0`'s contents are ABI the same way
-`0x3F0` itself is.
+`+0x0c` is a load base and not a record, and it carries two things at once: a
+module's export table is at its own offset 0, so the base **is** `SYSMEM`'s
+export table, which `loadcore` makes the registry's first entry -- overwriting
+its magic word with the link (IRX-4c). And the 0x30 bytes *below* the base are
+`SYSMEM`'s module record. So the loader must place both `SYSMEM` and
+`loadcore` itself at a base whose preceding 0x30 bytes it has filled in, and
+must **not** register either table itself: `loadcore` registers its own with
+ordinal 6 from its entry, and a magic word already overwritten makes that
+call fail silently, leaving every later module with no `loadcore` to bind to.
+
+`+0x18` is only a size -- how much to copy and how many post-boot callback
+slots to reserve. Overestimating is harmless; the walk itself ends at a zero
+word.
+
+**BOOT-8d — the list's elements.** One word each, terminated by a zero word,
+and the walk starts at **index 2**: entries 0 and 1 are `SYSMEM` and
+`loadcore`, which the boot loader has already placed. Two forms:
+
+| Form | Meaning |
+| --- | --- |
+| an even address | where the module's file image is; the loader reads its ELF headers there |
+| `(address << 2) \| 1` | load the next module at this fixed address, from BOOT-9's `!addr` directive |
+
+Any other odd word is skipped. A fixed address applies to the module after it
+and is forgotten once used; it names where the module's **record** goes, so
+the module itself lands 0x30 bytes higher.
+
+**BOOT-8e — how a boot-list module is entered, and what its answer means.**
+The call is `entry(0, 0, &list[i], 0)` with the module's own `$gp`: the third
+argument is the address of the list word the module came from, and no record
+pointer is passed. The return value is read twice.
+
+Its low two bits decide residency: `1` unloads the module -- its libraries are
+released and its memory freed -- `2` keeps it resident and removable, and `0`
+or `3` keep it resident. Everything above those two bits is a **function
+pointer**, and a non-zero one is registered as a post-boot callback at
+priority 2. So a module that returns anything but `0`, `1`, `2` or `3` has
+registered whatever it returned as code to jump to, which is why an error
+return of `-1` from a boot-list entry is not a failure report but a crash.
+
+**BOOT-8f — the post-boot passes.** When the list is done, the registered
+callbacks are run in **four passes**, numbered 0 to 3; each pass walks them in
+registration order and calls the ones whose function pointer's low two bits
+equal the pass number, with the registrant's `$gp`. Pass 3 is where the thread
+manager starts scheduling, and it does not return; the loader's entry spins if
+it ever does.
 
 ## BOOT-9: IOPBTCONF grammar
 
