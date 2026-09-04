@@ -1,4 +1,4 @@
-// TIMRMAN: the IOP's six hardware timers, handed out and programmed by
+// TIMEMANI: the IOP's six hardware timers, handed out and programmed by
 // register address.
 //
 // docs/spec/06-iop-kernel.md IOP-7, from docs/analysis/44. A timer id is its

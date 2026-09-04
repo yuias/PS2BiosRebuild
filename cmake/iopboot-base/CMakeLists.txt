@@ -32,7 +32,7 @@ add_custom_command(
     DEPENDS "${PS2_SOURCE_DIR}/tools/mkromdir.py" "${PS2_MANIFEST}"
             "${PS2_SOURCE_DIR}/src/rom/iopbtconf.txt"
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
-            sysmem.elf loadcore.elf excepman.elf intrman.elf timrman.elf
+            sysmem.elf loadcore.elf excepman.elf intrman.elf timemani.elf
             threadman.elf sysclib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf
             stdio.elf ioptty.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf
             secrman.elf sio2man.elf

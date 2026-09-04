@@ -679,7 +679,7 @@ shared one global completion-callback slot rather than one per run. The ring
 holds each run's DMA tag list, so the storage the channel is reading never
 moves, and each run carries its own callback.
 
-**`TIMRMAN`'s table reaches 24, where the reference's stops at 16.** IOP-7f
+**`TIMEMANI`'s table reaches 24, where the reference's stops at 16.** IOP-7f
 and `docs/analysis/49`. The four extra ordinals belong to the `timrman`
 v1.03 a title's `IOPRP` image carries, not to rom0's v1.01, and on hardware
 `EZMIDI` gets them from the `UDNL` merge. Ours does not merge (see `REBOOT`
@@ -1106,12 +1106,17 @@ than a transcription, and they are worth building against a merge already
 known to be right. Until they exist, a reboot that names an image comes back
 with the modules `rom0` holds, which is what it already did.
 
-**Our boot list names `TIMRMAN` where the reference's names `TIMEMANP` and
-`TIMEMANI`**, so the disc's `TIMEMANI` 2.02 is not picked up: a merge matches
-by name, and that name is not in our list. The `timrman` ordinals a title's
-drivers want past 16 are implemented here directly instead
-(`docs/analysis/49`), so nothing breaks, but the merged kernel differs from
-the reference's by one module and it is this one.
+**Our boot list names `TIMEMANI` alone where the reference's names
+`TIMEMANP` and `TIMEMANI`.** The entry name is what a merge matches on, so
+the module has to carry the reference's; without it the disc's `TIMEMANI`
+2.02 is never picked up, and the disc's `THREADMAN` 2.03 -- which imports
+`timrman` v1.03 -- binds against our v1.01 table instead, ordinal for ordinal
+with no diagnostic. Only one of the pair is here because both of the
+reference's export `timrman` v1.01 and it has not been read how the second
+one survives the first having registered it; one module registers cleanly and
+the merge picks the disc's copy, which is the behaviour that matters. The
+`timrman` ordinals past 16 stay implemented here (`docs/analysis/49`) for the
+cold boot, where no disc module is involved.
 
 **The second stage of an update reboot runs; the merge at the end of it does
 not.** A reset that names an image is answered by the hand-back above, so the

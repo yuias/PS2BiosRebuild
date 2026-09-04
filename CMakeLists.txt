@@ -128,8 +128,10 @@ ps2AddModule(excepman MODULE Exception_Manager VERSION 1.00
     SOURCES src/iop/excepman.cpp)
 ps2AddModule(intrman MODULE Interrupt_Manager VERSION 1.00
     SOURCES src/iop/intrman.S src/iop/intrman.cpp)
-ps2AddModule(timrman MODULE Timer_Manager VERSION 1.00
-    SOURCES src/iop/timrman.cpp)
+# Named for the reference's archive entry, not for the library it exports:
+# the merge matches by entry name, and a title's IOPRP carries TIMEMANI.
+ps2AddModule(timemani MODULE Timer_Manager VERSION 1.00
+    SOURCES src/iop/timemani.cpp)
 ps2AddModule(threadman MODULE Multi_Thread_Manager VERSION 1.00
     SOURCES src/iop/threadman.cpp)
 ps2AddModule(sysclib MODULE System_C_lib VERSION 1.00
@@ -254,7 +256,7 @@ add_custom_command(
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf sysclib.elf
+            loadcore.elf excepman.elf intrman.elf timemani.elf threadman.elf sysclib.elf
             dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
             ioptty.elf sifman.elf sifcmd.elf eesync.elf loadfile.elf
             cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf udnl.elf
