@@ -55,7 +55,7 @@ constexpr uintptr_t kBootInfo = 0x00020000;
 constexpr uintptr_t kBiRamMiB = 0x00;
 constexpr uintptr_t kBiMode = 0x04;
 constexpr uintptr_t kBiCommandLine = 0x08;
-constexpr uintptr_t kBiSysmemRecord = 0x0C;
+constexpr uintptr_t kBiSysmemBase = 0x0C;
 constexpr uintptr_t kBiReservedBase = 0x10;
 constexpr uintptr_t kBiReservedSize = 0x14;
 constexpr uintptr_t kBiListCount = 0x18;
@@ -100,13 +100,17 @@ constexpr uintptr_t kRomSearchEnd = 0xBFC80000;  // BOOT-6b: the first 512 KiB
     return byte - 0x37;
 }
 
-void writeBootEntry(uint32_t index, uint32_t rom_address, uint32_t size) {
-    bootListWord(kBlEntries + index * 8) = rom_address;
-    bootListWord(kBlEntries + index * 8 + 4) = size;
+// BOOT-8d: one word per name, the address of the module's file image, with a
+// zero word after the last. The size the archive scan also found is not part
+// of the list: a loader reads the ELF headers at that address for everything
+// it needs.
+void writeBootEntry(uint32_t index, uint32_t rom_address) {
+    bootListWord(kBlEntries + index * 4) = rom_address;
+    bootListWord(kBlEntries + (index + 1) * 4) = 0;
 }
 
 [[nodiscard]] uint32_t bootEntryAddress(uint32_t index) {
-    return bootListWord(kBlEntries + index * 8);
+    return bootListWord(kBlEntries + index * 4);
 }
 
 void bootInfoWord(uintptr_t offset, uint32_t value) {
@@ -191,8 +195,7 @@ extern "C" {
             if (module_count >= kBootListMax) {
                 stop();
             }
-            writeBootEntry(module_count, static_cast<uint32_t>(module.address),
-                            module.size);
+            writeBootEntry(module_count, static_cast<uint32_t>(module.address));
             module_count++;
         }
     }
@@ -207,15 +210,6 @@ extern "C" {
     const Found romdir = find(kRomSearchStart, kRomSearchEnd, packName("ROMDIR"));
     bootListWord(kBlTable) = static_cast<uint32_t>(romdir.address);
 
-    // The registry starts empty. It has to be said rather than assumed: the
-    // head is a fixed word of RAM shared with `LOADCORE` (IRX-4c), not part
-    // of any module's data, so a reboot re-entering here would otherwise
-    // find the *previous* kernel's export tables still linked -- at
-    // addresses the modules about to be placed are going to overwrite. The
-    // first module to bind an import would then jump into whatever landed
-    // there.
-    registryHead() = 0;
-
     // BOOT-8c: only `SYSMEM` and `LOADCORE` are loaded here, in the order the
     // list gave them (BOOT-9c) -- the list's first two names, because a
     // loader that allocates needs a memory manager and a registry before it
@@ -223,24 +217,27 @@ extern "C" {
     if (module_count < 2) {
         stop();                                 // no memory manager, no loader
     }
-    uint32_t running_base = base_address;
-    uint32_t sysmem_record = 0;
+    uint32_t running_record = base_address;
+    uint32_t sysmem_base = 0;
     for (uint32_t index = 0; index < 2; index++) {
-        bootListWord(kBlLoaded + index * 4) = running_base;
-        bootListWord(kBlNext) = running_base;
-        const Loaded loaded = placeModule(bootEntryAddress(index), running_base);
+        const uint32_t module_base = running_record + kRecordSize;
+        bootListWord(kBlLoaded + index * 4) = module_base;
+        bootListWord(kBlNext) = module_base;
+        const Loaded loaded = placeModule(bootEntryAddress(index), running_record);
         if (loaded.next_base == 0) {
             stop();                             // a module that will not load
         }
         if (index == 0) {
-            // `SYSMEM` takes the ordinary IRX entry; `return & 3` decides
-            // residency, and with nothing to give memory back to, a module
-            // asking to go simply is not there.
-            (void)callEntry(loaded.entry, loaded.gp, 0, nullptr, loaded.record);
-            sysmem_record = loaded.record;
+            // BOOT-8c: `SYSMEM`'s entry takes the RAM size **in bytes**, not
+            // the byte code the boot block was given: the reference sizes its
+            // heap's top from it, and a zero there leaves that module marking
+            // itself uninitialised and refusing every allocation afterwards.
+            (void)callEntry(loaded.entry, loaded.gp, ram_size_byte << 20,
+                            nullptr, loaded.record);
+            sysmem_base = module_base;
         }
-        running_base = loaded.next_base;
-        bootListWord(kBlNext) = running_base;
+        running_record = loaded.next_base;
+        bootListWord(kBlNext) = running_record;
         if (index == 1) {
             // BOOT-8c: `LOADCORE`'s entry takes the block, not `argc`. It
             // loads the rest of the list and comes back, and the boot's own
@@ -248,14 +245,16 @@ extern "C" {
             bootInfoWord(kBiRamMiB, ram_size_byte);
             bootInfoWord(kBiMode, mode);
             bootInfoWord(kBiCommandLine, command_line);
-            bootInfoWord(kBiSysmemRecord, sysmem_record);
+            bootInfoWord(kBiSysmemBase, sysmem_base);
             bootInfoWord(kBiReservedBase, 0);
             bootInfoWord(kBiReservedSize, 0);
-            bootInfoWord(kBiListCount, module_count - 2);
-            // Our list stays where it is rather than being copied above the
-            // command line the way the reference's is: there is no command
-            // line on a cold boot, and this table is outside the heap.
-            bootInfoWord(kBiList, kBootList + kBlEntries + 2 * 8);
+            bootInfoWord(kBiListCount, module_count);
+            // BOOT-8d: the whole list, from index 0 -- the loader skips the
+            // two the boot block has already placed itself. Ours stays where
+            // it is rather than being copied above the command line the way
+            // the reference's is: there is no command line on a cold boot,
+            // and this table is outside the heap.
+            bootInfoWord(kBiList, kBootList + kBlEntries);
             (void)callEntry(loaded.entry, loaded.gp, kBootInfo, nullptr,
                             loaded.record);
         }

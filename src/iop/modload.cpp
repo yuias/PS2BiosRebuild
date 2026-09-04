@@ -68,6 +68,9 @@ uint32_t _import_intrman_invoke_in_kmode(uint32_t function, uint32_t a, uint32_t
 uint32_t *_import_loadcore_boot_record(uint32_t key);
 int _import_loadcore_add_bootup_callback(void (*function)(), int priority,
                                         void *argument);
+// Ordinal 6, the versioned library registration -- not ordinal 16, which
+// registers a module *record* and is what `_import_loadcore_register` names.
+int _import_loadcore_register_library(void *table);
 int _import_ioman_open(const char *path, int flags);
 int _import_ioman_close(int fd);
 int _import_ioman_read(int fd, void *buffer, int size);
@@ -407,6 +410,7 @@ PS2_IMPORT(_import_sysmem_release, 5)
 PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("loadcore", 0x0101)
+PS2_IMPORT(_import_loadcore_register_library, 6)
 PS2_IMPORT(_import_loadcore_flush, 4)
 PS2_IMPORT(_import_loadcore_link, 8)
 PS2_IMPORT(_import_loadcore_boot_record, 12)
@@ -419,6 +423,9 @@ PS2_IMPORTS_END()
 extern "C" {
 
 int _module_start(int, char **) {
+    if (_import_loadcore_register_library(&modload_exports) < 0) {
+        return 1;                       // IRX-10a: not resident
+    }
     // §2: the registration happens at module-init time and only in the
     // intermediate stage of an update reboot, which boot record key 4 names.
     const uint32_t *mode = _import_loadcore_boot_record(kKeyBootMode);

@@ -158,6 +158,7 @@ constexpr uint32_t kBootInfoWords = 8;
 constexpr uint32_t kBiRamMiB = 0;
 constexpr uint32_t kBiMode = 1;
 constexpr uint32_t kBiCommandLine = 2;
+constexpr uint32_t kBiSysmemBase = 3;
 constexpr uint32_t kBiListCount = 6;
 constexpr uint32_t kBiList = 7;
 
@@ -299,10 +300,10 @@ uint16_t next_module_id;
     return 0;
 }
 
-// Ordinal 23: load(image, info) -> 0 | -1, placing at `info->base`. The
-// module's exports are registered here, where the boot block registers a
-// list module's: a module that has not run cannot register itself, and its
-// own call of ordinal 6 from its entry then finds the table present.
+// Ordinal 23: load(image, info) -> 0 | -1, placing at `info->base`. It does
+// not register the module's exports: IRX-10a puts that in the module's own
+// entry, through ordinal 6, and a loader that did it first would leave the
+// table's magic word overwritten for that call to fail on.
 [[nodiscard]] int loadExecutable(const uint8_t *image, ps2::loader::ExecutableInfo *info) {
     ps2::loader::Segments segments;
     if (!ps2::loader::readHeaders(image, segments) || info->base == 0) {
@@ -311,8 +312,6 @@ uint16_t next_module_id;
     const ps2::loader::Placed placed = ps2::loader::place(image, segments, info->base);
     info->entry = placed.entry;
     info->gp = placed.gp;
-    ps2::loader::registerExports(reinterpret_cast<uint8_t *>(info->base),
-                                 reinterpret_cast<uint8_t *>(placed.end));
     return 0;
 }
 
@@ -493,6 +492,28 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     for (uint32_t k = 0; k < kBootInfoWords; k++) {
         boot_info[k] = block[k];
     }
+
+    // BOOT-8c: the registry's first entry is `SYSMEM`'s export table, which
+    // is its load base, because a module's table is at its own offset zero.
+    // The boot block registers nothing -- registering would overwrite the
+    // magic word this module's own ordinal-6 call two lines below needs to
+    // see -- so this is where the registry starts.
+    registryHead() = boot_info[kBiSysmemBase];
+    *reinterpret_cast<volatile uint32_t *>(boot_info[kBiSysmemBase]) = 0;
+
+    // IRX-9, then IRX-10a: with `SYSMEM` in the registry this module can bind
+    // its own imports -- which the boot block could not do for it, since the
+    // registry did not exist when it was placed -- and then register its own
+    // table. Its extent comes from the record the boot block filled in
+    // (IRX-12c): the load segment's file bytes at `+0x1c`, its bss at `+0x24`.
+    const auto *own_record = reinterpret_cast<const uint32_t *>(record);
+    auto *own_base = reinterpret_cast<uint8_t *>(record + ps2::loader::kRecordSize);
+    (void)ps2::loader::bind(own_base, own_base + own_record[7] + own_record[9]);
+    if (registerVersioned(&loadcore_exports) < 0) {
+        for (;;) {                     // nothing after this could bind
+        }
+    }
+
     buildBootRecords();
 
     // IRX-9: calling the bound import proves the binding worked -- the same
@@ -502,19 +523,35 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     *reinterpret_cast<volatile uint32_t *>(kRanMarker) =
         static_cast<uint32_t>(address);
 
-    // BOOT-9c: the rest of the list, in order, each module placed past the
-    // last. The list is (ROM address, size) pairs and `IOPBOOT` has already
-    // taken the two it loaded off the front, so the index into the boot
-    // block's "where it was loaded" array counts from the difference.
-    const uint32_t count = boot_info[kBiListCount];
+    // BOOT-8d: the list is single words ending at a zero one, and the walk
+    // starts at index 2 -- entries 0 and 1 are `SYSMEM` and this module,
+    // which the boot block has already placed.
     const auto *entries = reinterpret_cast<const uint32_t *>(boot_info[kBiList]);
-    uint32_t index = bootListWord(kBlCount) - count;
-    uint32_t running_base = record + 0x20;
-    for (uint32_t k = 0; k < count; k++, index++) {
-        bootListWord(kBlLoaded + index * 4) = running_base;
-        bootListWord(kBlNext) = running_base;
+    // The first module of the list goes past this one's own image, whose
+    // extent is the record's `+0x1c` and `+0x24` again. With the record below
+    // the base (BOOT-8c) the record address is where this module *starts*,
+    // not where it ends, so it is not the answer.
+    uint32_t running_record =
+        (reinterpret_cast<uint32_t>(own_base) + own_record[7] + own_record[9]
+         + 15) & ~uint32_t{15};
+    uint32_t index = 2;
+    for (uint32_t k = 2; entries[k] != 0; k++, index++) {
+        const uint32_t word = entries[k];
+        if ((word & 0xF) == 1) {
+            // BOOT-8d's tagged entry: the module after it goes here.
+            running_record = word >> 2;
+            index--;
+            continue;
+        }
+        if ((word & 1) != 0) {
+            index--;
+            continue;                  // any other odd word is skipped
+        }
+        const uint32_t module_base = running_record + ps2::loader::kRecordSize;
+        bootListWord(kBlLoaded + index * 4) = module_base;
+        bootListWord(kBlNext) = module_base;
         const ps2::loader::Loaded loaded =
-            ps2::loader::placeModule(entries[k * 2], running_base);
+            ps2::loader::placeModule(word, running_record);
         if (loaded.next_base == 0) {
             for (;;) {                 // BOOT-9a: a module that will not load
             }
@@ -524,15 +561,16 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
         // cannot honour and records rather than acts on -- and everything
         // above them is a function pointer to run once the list is done.
         const uint32_t answer = ps2::loader::callEntry(
-            loaded.entry, loaded.gp, 0, nullptr, loaded.record);
+            loaded.entry, loaded.gp, 0, nullptr,
+            reinterpret_cast<uint32_t>(&entries[k]));
         if ((answer & ~uint32_t{3}) != 0) {
             (void)addBootupCallback(
                 reinterpret_cast<void (*)()>(answer & ~uint32_t{3}), 2,
                 nullptr);
         }
-        running_base = loaded.next_base;
+        running_record = loaded.next_base;
     }
-    bootListWord(kBlNext) = running_base;
+    bootListWord(kBlNext) = running_record;
 
     // BOOT-8f: four passes over the callbacks, each in registration order and
     // each calling only the ones registered for that pass. `callEntry` is the

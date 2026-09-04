@@ -425,20 +425,29 @@ overwritten. Ours keeps the base in `$k1`, so the restore reads the word it
 saved. What EE-6c actually requires — no shift between the `0x7C` mask and the
 index — is reproduced exactly.
 
-**The loader registers a module's exports; the module does not.** In the
-reference a module registers itself by calling `loadcore` ordinal 6 from its
-entry (IRX-10a). Ours has the loader do it, because the first module is loaded
-before any `loadcore` exists and would otherwise need a bootstrap path of its
-own. `LOADCORE` still exports ordinals 6 and 10 with the same semantics, over
-the same registry, for modules that register themselves the reference's way
-— and ordinal 6 answers yes to a table already in the registry, since a
-module loaded on request (`spec/06` IOP-5b) is registered by the loader
-before its entry makes the reference's own call.
+**Every module registers its own exports, and the boot block registers
+nothing.** IRX-10a and BOOT-8c. No reference loader scans a segment for an
+export table: a module calls `loadcore` ordinal 6 from its entry, and the two
+that cannot -- `SYSMEM`, which has no `loadcore` to call yet, and `LOADCORE`
+itself -- are handled by the boot block passing `SYSMEM`'s load base in the
+block, which *is* its export table, and by `LOADCORE` binding its own imports
+and calling its own ordinal 6 before it does anything else. A loader that
+registered a table first would overwrite the magic word that call needs to
+see, and the call would fail silently -- which is precisely what would have
+happened to the merged kernel's `LOADCORE` 2.06.
 
 **The registry head is at a fixed address.** The reference keeps it inside
-`LOADCORE`'s data. Ours is a word of low RAM shared between the boot block's
-loader and `LOADCORE`, for the same reason: something has to own it before
-`LOADCORE` is loaded.
+`LOADCORE`'s data, where it can, because `LOADCORE` is the only thing that
+touches it. Ours is a word of low RAM, because `src/iop/loader.hpp` is shared
+between the boot block and `LOADCORE` and the boot block binds the two modules
+it places before `LOADCORE` runs.
+
+**A module's export table is at its offset zero.** `src/link/irx.ld` puts
+`.iopexport` ahead of the code for every module, where the reference only does
+it for `SYSMEM`. It has to be true of `SYSMEM`, because BOOT-8c gives the
+loader that table by giving it the module's load base and nothing else; doing
+it everywhere costs nothing and removes the question of which module it is
+true for.
 
 **`SYSMEM`'s allocator is two bump cursors, not a free list.** IRX-15b's low
 and high modes are honoured -- each end of the heap has a cursor and the two

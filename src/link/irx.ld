@@ -5,12 +5,14 @@ ENTRY(_module_start)
 SECTIONS
 {
     . = 0;
-    .text : { *(.text .text.*) }
-    /* The export and import tables the loader looks for. They are part of the
-       text segment, because that is the only region it scans for them
-       (spec/02 IRX-8), and they follow the code so a module's offsets still
-       read as its code. */
+    /* The export tables come first, at offset zero, because BOOT-8c makes a
+       module's load base and its first export table the same address: that is
+       how the boot block tells the loader where SYSMEM's is, having no other
+       way to name it. The import tables follow the code. Both are inside the
+       text segment, which is the only region a loader scans for them
+       (spec/02 IRX-8b). */
     .iopexport : { *(.iopexport) }
+    .text : { *(.text .text.*) }
     .iopimport : { *(.iopimport) }
     .rodata : { *(.rodata .rodata.*) }
     .data : { *(.data .data.*) }
