@@ -39,6 +39,15 @@ constexpr uint32_t kDmaFirst = 0x20;            // bank 1: 0x20..0x26
 constexpr uint32_t kDmaSecondBank = 0x28;       // bank 2: 0x28..0x2D
 constexpr uint32_t kDmaMaster = 1u << 23;       // DICR's master enable
 constexpr uint32_t kDicrFlags = 0x7F000000;     // write 1 to clear
+// IOP-2c: `EnableIntr`/`DisableIntr` take the line in the **low byte** and
+// read the rest as flags -- the reference masks with `0xFF` before it
+// compares anything. An implementation that tests the whole word against the
+// line ranges matches nothing and enables nothing, silently: `SIFCMD` 2.08
+// enables SIF1 as `0x22b`, and without this the merged kernel's receive chain
+// is never re-armed and the bus goes quiet the moment the title reboots.
+// The flag bits themselves (`0x100`, `0x200`) are **not** honoured here; see
+// docs/implementation.md.
+constexpr uint32_t kLineMask = 0xFF;
 constexpr uint32_t kStatusInterrupts = 0x401;   // IEc and Im2, as running code sees them
 
 // IOP-2k: the enable state as it travels *between* modules. A frame holds it
@@ -221,7 +230,8 @@ int releaseIntrHandler(uint32_t irq) {
 // The two banks' channel bits: DICR's bits 16..22 enable and 24..30 flag
 // channels 0..6; DICR2's the same for 7..13. DICR's bit 23 is the master for
 // both, and I_MASK's DMA line must be open for either to reach the CPU.
-int enableIntr(uint32_t irq) {
+int enableIntr(uint32_t line_and_flags) {
+    const uint32_t irq = line_and_flags & kLineMask;
     uint32_t state;
     cpuSuspendIntr(&state);
     if (irq < kDmaFirst) {
@@ -241,7 +251,8 @@ int enableIntr(uint32_t irq) {
     return kOk;
 }
 
-int disableIntr(uint32_t irq, uint32_t *was_pending) {
+int disableIntr(uint32_t line_and_flags, uint32_t *was_pending) {
+    const uint32_t irq = line_and_flags & kLineMask;
     uint32_t state;
     cpuSuspendIntr(&state);
     int result = kOk;

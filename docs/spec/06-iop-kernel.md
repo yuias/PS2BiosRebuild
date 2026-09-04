@@ -263,6 +263,21 @@ context switch can honour — a thread that blocked with the gate shut gets it
 back, and a thread primed by `THREADMAN` 2.03 starts with the `1` that path
 writes at `+0x90`.
 
+**IOP-2c2 — `EnableIntr`/`DisableIntr` take a line *and flags*.** Both mask
+their argument with `0xFF` before anything else (`INTRMANI` `+0x478` and
+`+0x658`), so the line is the low byte and the upper bits are a separate
+field. Only two are read, and only on the DMA paths: `0x100` also sets DICR's
+own low bit for the channel, `0x200` DICR2's -- at the channel index in bank 1
+and at index + 7 in bank 2. `SIFCMD` 2.08 enables SIF1 as **`0x22b`**, so an
+implementation that compares the whole word against the line ranges matches
+nothing and enables nothing, silently.
+
+`DisableIntr`'s out-parameter is **not** a pending flag: the reference
+reconstructs the argument that would re-enable the line -- the line plus
+whichever of those two low bits it found set -- and leaves `-0x67` there when
+it refuses. It answers `-0x67` for a line that was not enabled and `-0x65` for
+one out of range; both write the parameter.
+
 **IOP-2f — finding the source and acknowledging it.** The hardware path
 scans `I_STAT & I_MASK & <software overlay mask>` for its **lowest** set bit
 — ascending IRQ-number priority, the opposite convention from the EE's own

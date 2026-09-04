@@ -800,6 +800,17 @@ carries no library and no name any source the merge opens uses, so `rom0`'s
 copy is always the candidate that wins. It is on both boot lists, and at a
 cold boot it changes nothing, because no module of ours calls ordinal 14.
 
+**`EnableIntr` masks its argument to the line and ignores the flag bits.**
+IOP-2c2: the reference also sets DICR's or DICR2's low bit for the channel
+when `0x100` or `0x200` is passed, and its `DisableIntr` reports those bits
+back through the out-parameter instead of a pending flag. Implementing all of
+that faithfully **regressed the disc run** -- the title's MIDI and ADX drivers
+stopped one console line earlier and `cid=0x8000000a` fell from 97 to 49 --
+while masking the line alone left every count identical and fixed the merged
+kernel. Which of the extra writes costs the interrupt is not established, so
+the smaller change is what is built; the difference is recorded here rather
+than in the spec, which describes the reference.
+
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
 `Status`, and both reference builds do it unmasked, so a caller that passes
