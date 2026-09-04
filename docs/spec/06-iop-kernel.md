@@ -202,13 +202,42 @@ restore path branches on it: `0xAC0000FE` — the mode-0 baseline, so only
 `$1`–`$7`, `hi`, `lo`, `Status` and `EPC` are present; `0xFF00FFFE` — mode ≥ 1,
 adding `$8`–`$15`, `$24`, `$25`, `$gp`, `$fp`; `0xFFFFFFFE` — mode ≥ 2, adding
 `$16`–`$23`, hence a complete frame. Before the reschedule hooks (IOP-2j) are
-consulted the dispatcher **promotes whatever frame it holds to `0xFFFFFFFE`**,
-so every frame that crosses into a thread manager is a complete one. One
-further tag, `0xF0FF000C`, marks the frame the **reschedule syscall** builds
-(IOP-2k2): a voluntary switch saves no caller-saved register and no `hi`/`lo`,
-so its restore skips those groups. `CpuInvokeInKmode` (`syscall 0xc`) builds no
-frame at all — it calls `$a0` with `$a1`–`$a3` on the exception's own stack and
-returns to `EPC + 4`.
+consulted **the interrupt path promotes whatever frame it holds to
+`0xFFFFFFFE`**, so a frame reaching a thread manager that way is a complete
+one. The reschedule syscall (IOP-2k2) does not: it enters the hook call below
+the promotion and hands its own frame over as it built it, tagged
+`0xF0FF000C` — a voluntary switch saves no caller-saved register and no
+`hi`/`lo`, and the restore skips those groups. `CpuInvokeInKmode`
+(`syscall 0xc`) builds no frame at all: it calls `$a0` with `$a1`–`$a3` on the
+exception's own stack and returns to `EPC + 4`.
+
+**IOP-2k2 — the reschedule syscall's three arguments.** `syscall 0x20` is
+every voluntary switch, and its handler installs three caller registers into
+the frame it builds before calling `NewCtxCb` — `ShouldPreemptCb` is skipped,
+because the caller has already decided:
+
+| register | where it goes | meaning |
+| --- | --- | --- |
+| `$a0` | the frame's `$v0` slot (`+0x08`) | what the blocked call answers when the thread is resumed |
+| `$a1` | the frame's `$v1` slot (`+0x0c`) | its second return register |
+| `$a2` | the interrupt state to resume under | the value `CpuSuspendIntr` (ordinal 17) reported |
+
+Read from `INTRMANI` `+0x1400` and confirmed at the call site: `THREADMAN`
+2.03's own trap wrapper (`+0x6640`) sets none of them, so they pass through
+from its callers, and `DelayThread` (`+0x2cb4`) loads `$a0 = 0` and
+`$a2` = the word ordinal 17 gave it — the **same word** its error path
+(`+0x2c7c`) hands to `CpuResumeIntr`. `$a2` and `CpuResumeIntr`'s argument are
+therefore one thing, and a rebuild that drops `$a2` resumes the thread under
+whatever interrupt state the trap left, for ever.
+
+Where `$a2` lands depends on which interrupt manager is resident, and `rom0`
+ships two that both register `intrman` 1.02 (IOP-2k): `INTRMANI` stores it at
+`+0x90`, the `I_CTRL` gate, matching its own ordinals 17/18; `INTRMANP`
+(`+0x1090`) merges it into the frame's `Status` — `(Status & ~0x414) | $a2` —
+matching its Status-based ones. **Each module is self-consistent and a client
+cannot tell them apart**, because it only ever passes the value back. What a
+rebuild must not do is mix them: ordinal 17, ordinal 18 and `$a2` are one
+mechanism, and all three have to name the same state.
 
 `I_CTRL` reads as its value and closes itself on the read, so the entry stores
 it in the frame and re-arms the gate to `1` at once; the **return installs the
