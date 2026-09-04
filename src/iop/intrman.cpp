@@ -433,6 +433,11 @@ uint32_t *_intrman_dispatch(uint32_t *frame, uint32_t cause) {
 // for is a caller that needs to run with the exception's own privileges and
 // its own stack -- `MODLOAD`'s reboot core, which never comes back, is the
 // only user in this image (docs/analysis/45 §2).
+//
+// **The target runs with this module's `$gp`, not its own.** That is fine
+// for a target that reaches nothing through it, which the reboot core does
+// not; a target that does would need its `$gp` captured at the call and
+// installed here, the way `src/iop/loader.hpp`'s `callEntry` does.
 uint32_t *_intrman_syscall(uint32_t *frame, uint32_t instruction) {
     using ps2::context::slotOf;
     const uint32_t code = (instruction >> 6) & 0xFFFFF;
