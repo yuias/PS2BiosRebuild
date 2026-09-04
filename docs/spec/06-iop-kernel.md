@@ -239,6 +239,17 @@ cannot tell them apart**, because it only ever passes the value back. What a
 rebuild must not do is mix them: ordinal 17, ordinal 18 and `$a2` are one
 mechanism, and all three have to name the same state.
 
+**The state's encoding is the saved frame's, not running code's.** `Status`
+holds the enable three deep — `IEc`, `IEp`, `IEo` — and an exception pushes
+that stack, so the caller's live `IEc` is `IEp` by the time a handler reads it.
+The reference's ordinals 17 and 18 *are* the bodies of `syscall 0x10` and
+`0x14`, so they read and write a frame's `Status` and the value they exchange
+is `Status & 0x414` (`IEp`, `IEo`, `Im2`). A rebuild whose 17 and 18 are plain
+functions reading the live `Status` sees the same three bits one level up, at
+`0x405`, and **must still report them in the saved places** — because the value
+does not stay in the interrupt manager: `$a2` carries it into a frame, where
+`0x414` is what the bits mean.
+
 `I_CTRL` reads as its value and closes itself on the read, so the entry stores
 it in the frame and re-arms the gate to `1` at once; the **return installs the
 resumed frame's copy**, not the interrupted one's, which is the only rule a

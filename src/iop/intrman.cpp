@@ -41,6 +41,16 @@ constexpr uint32_t kDmaMaster = 1u << 23;       // DICR's master enable
 constexpr uint32_t kDicrFlags = 0x7F000000;     // write 1 to clear
 constexpr uint32_t kStatusInterrupts = 0x401;   // IEc and Im2, as running code sees them
 
+// IOP-2k: the enable state as it travels *between* modules. A frame holds it
+// one level down -- IEp, IEo and Im2 -- because the exception that built the
+// frame pushed Status's stack; running code holds the same three as IEc, IEp
+// and Im2. The saved-frame places are the ABI, because the value does not
+// stay in this module: a thread manager takes it from ordinal 17 and hands it
+// to the reschedule syscall as `$a2` (IOP-2k2), which merges it straight into
+// a saved frame's Status.
+constexpr uint32_t kStateSaved = 0x414;         // IEp, IEo, Im2
+constexpr uint32_t kStateLive = 0x405;          // the same three, one level up
+
 // kerr.h [header]
 constexpr int kOk = 0;
 constexpr int kErrorIllegalIrq = -0x65;         // KE_ILLEGAL_INTRCODE
@@ -119,17 +129,32 @@ extern "C" uint8_t _intrman_stack_top[];
 
 // --- IOP-2k: the enable state, edited in place ---------------------------
 
+// The reference's own 17 and 18 are the bodies of `syscall 0x10` and `0x14`,
+// so they read and write a *frame's* Status and report `Status & 0x414`
+// directly. These are plain functions reading the live Status, so the same
+// three bits sit one level up and are shifted into the saved places on the
+// way out and back down on the way in. Reporting this module's own view
+// instead would be invisible until a thread manager from another image
+// passed the value to `$a2` and had it land in the wrong Status bits.
+[[nodiscard]] uint32_t savedFormOf(uint32_t status) {
+    return ((status & 0x5) << 2) | (status & 0x400);
+}
+
+[[nodiscard]] uint32_t liveFormOf(uint32_t state) {
+    return ((state & 0x14) >> 2) | (state & 0x400);
+}
+
 int cpuSuspendIntr(uint32_t *state) {
     const uint32_t status = readStatus();
     if (state != nullptr) {
-        *state = status & kStatusInterrupts;
+        *state = savedFormOf(status);
     }
     writeStatus(status & ~kStatusInterrupts);
     return (status & 1) != 0 ? kOk : kErrorAlreadyDisabled;
 }
 
 int cpuResumeIntr(uint32_t state) {
-    writeStatus((readStatus() & ~kStatusInterrupts) | (state & kStatusInterrupts));
+    writeStatus((readStatus() & ~kStateLive) | liveFormOf(state));
     return kOk;
 }
 
@@ -451,6 +476,20 @@ uint32_t *_intrman_syscall(uint32_t *frame) {
     using ps2::context::slotOf;
     const uint32_t number = frame[slotOf(2)];
     if (number == 0x20) {
+        // IOP-2k2: a voluntary switch carries three arguments. `$a0` and
+        // `$a1` are what the blocked call answers with once its thread is
+        // resumed, and `$a2` the interrupt state to resume under -- the same
+        // word ordinal 17 reported. A handler that drops `$a2` leaves the
+        // caller under the trap's own state, which is interrupts off, for the
+        // rest of its life; that is what stopped the merged kernel, whose
+        // `THREADMAN` 2.03 blocks this way and nothing else.
+        //
+        // The mask on `$a2` is a deviation and docs/implementation.md records
+        // it: the reference ORs the word in whole.
+        frame[slotOf(2)] = frame[slotOf(4)];
+        frame[slotOf(3)] = frame[slotOf(5)];
+        frame[ps2::context::kStatus] =
+            (frame[ps2::context::kStatus] & ~kStateSaved) | (frame[slotOf(6)] & kStateSaved);
         return reschedule(frame);
     }
     if (number == 0xC) {

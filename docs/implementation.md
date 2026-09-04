@@ -800,6 +800,15 @@ carries no library and no name any source the merge opens uses, so `rom0`'s
 copy is always the candidate that wins. It is on both boot lists, and at a
 cold boot it changes nothing, because no module of ours calls ordinal 14.
 
+**The reschedule syscall masks `$a2`, where the reference ORs it whole.**
+IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
+`Status`, and both reference builds do it unmasked, so a caller that passes
+junk in the other bits sets them. Ours masks with `0x414` first. The
+difference is invisible to any well-formed caller — a thread manager passes
+what ordinal 17 gave it, which is already masked — and it keeps a forgotten
+`$a2` from putting the kernel into user mode silently, which is this
+project's most expensive failure shape.
+
 **`SYSMEM`'s `Kprintf` forwards nowhere yet.** IRX-6c. Ordinal 14 answers `0`
 until ordinal 15 installs a hook, which is the state the reference ships in
 -- nothing in its archive installs one either. Ordinal 15 is a plain swap;

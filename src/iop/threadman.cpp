@@ -436,12 +436,25 @@ uint32_t *newContext(uint32_t *frame) {
     return next.frame;
 }
 
-// Trap into INTRMAN's reschedule syscall (IOP-3h). The frame it pushes is
-// this thread's; what comes back in $v0 is whatever the waker wrote there.
+// Trap into INTRMAN's reschedule syscall (IOP-3h/IOP-2k2). The frame it
+// pushes is this thread's; what comes back in $v0 is whatever the waker
+// wrote there.
 [[nodiscard]] int32_t switchNow() {
     int32_t answer;
     asm volatile(
         // IOP-3h: the number goes in $v0 and the `syscall` carries no code.
+        // IOP-2k2: $a0 and $a1 are what this call answers with and $a2 the
+        // interrupt state to resume under. Zero for all three is this
+        // module's own convention: every trap here happens inside a
+        // `Critical`, whose destructor is the next thing to run when the
+        // switch returns and which restores the state itself, so $a2 = 0 --
+        // resume with interrupts shut -- is what the frame already held
+        // before the syscall carried them. The answer comes from the waker's
+        // `setAnswer`, which every wake path calls, so $a0 = 0 only decides
+        // what a *yield* leaves behind, which nothing reads.
+        "move  $a0, $zero\n\t"
+        "move  $a1, $zero\n\t"
+        "move  $a2, $zero\n\t"
         "addiu $v0, $zero, 0x20\n\t"
         "syscall\n\t"
         "move %0, $v0"
