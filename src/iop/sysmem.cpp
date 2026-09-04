@@ -24,6 +24,8 @@ namespace {
 // the stack the boot block put above that; the reference's is the RAM size
 // the reset path latched (spec/03 BOOT-4 step 5), still not plumbed through.
 constexpr uint32_t kHeapStart = 0x00020000;
+// BOOT-4: what a retail machine latches, for an entry that was told nothing.
+constexpr uint32_t kDefaultRamSize = 0x00200000;
 constexpr uint32_t kHeapEnd = 0x001F0000;
 
 // IRX-15a: the reference allocates in units of 0x100, which is also the
@@ -40,6 +42,8 @@ constexpr uint32_t kExportMagic = 0x41C00000;
 // ordinal tests for "initialised" (IRX-15e).
 uint32_t low_cursor;
 uint32_t high_cursor;
+// What the entry was told the machine has, which ordinal 6 answers.
+uint32_t ram_size;
 // The most recent block at each end -- the only ones `release` can give back,
 // and the only ones `blockSize` can answer for.
 uint32_t low_last;
@@ -119,6 +123,14 @@ int kprintfSet(KprintfHook hook, void *context) {
     return 0;
 }
 
+// Ordinal 6: memSize() -> the machine's RAM in bytes, as the entry was told
+// it (IRX-15). `UDNL` sizes the boot block's RAM-in-MiB word from it when it
+// stages the next kernel, so it has to answer the same number the boot block
+// started from rather than the top of this module's own heap.
+[[nodiscard]] int memSize() {
+    return static_cast<int>(ram_size);
+}
+
 // Ordinal 10: blockSize(address) -> the size in bytes of the block that
 // contains `address`, or -1.
 //
@@ -189,7 +201,7 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         unimplemented,                  // 3
         reinterpret_cast<int (*)(uint32_t)>(allocate),   // 4  allocate(mode, size, address)
         deallocate,                     // 5  release
-        unimplemented,                  // 6
+        reinterpret_cast<int (*)(uint32_t)>(memSize),      // 6  memory size
         unimplemented,                  // 7
         unimplemented,                  // 8
         unimplemented,                  // 9
@@ -223,6 +235,7 @@ extern "C" {
 // running off the end of it.
 int _module_start(int ram_size_byte, char **) {
     const auto ram_top = static_cast<uint32_t>(ram_size_byte) & ~uint32_t{0xFF};
+    ram_size = ram_top != 0 ? ram_top : kDefaultRamSize;
     low_cursor = kHeapStart;
     high_cursor = ram_top != 0 && ram_top < kHeapEnd ? ram_top : kHeapEnd;
     low_last = 0;

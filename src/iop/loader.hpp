@@ -436,11 +436,12 @@ struct Loaded {
     uint32_t record;
     uint32_t entry;
     uint32_t gp;
+    uint32_t text_size;                // IRX-8b: the range imports are bound over
 };
 
 [[nodiscard]] static Loaded placeModule(uint32_t rom_address,
                                         uint32_t record_address) {
-    Loaded loaded = {0, 0, 0, 0};
+    Loaded loaded = {0, 0, 0, 0, 0};
     const auto *rom = reinterpret_cast<const uint8_t *>(rom_address);
     Segments segments;
     if (!readHeaders(rom, segments)) {
@@ -467,17 +468,15 @@ struct Loaded {
     poke32(record + 0x20, placed.data_size);
     poke32(record + 0x24, placed.bss_size);
 
-    // IRX-9: bind what this module imports, so its entry can call it, over
-    // the **text** segment alone -- IRX-8b, and the range the reference's
-    // binder scans. What it *exports* is not registered here: neither
-    // reference loader scans a segment for an export table, and a module
-    // registers itself by calling `loadcore` ordinal 6 from its entry
-    // (IRX-10a). A loader that registered it first would overwrite the
-    // table's magic word with the registry link, and that call would then
-    // fail silently.
-    (void)bind(reinterpret_cast<uint8_t *>(base_address),
-               reinterpret_cast<uint8_t *>(base_address + placed.text_size));
-
+    // Placing is all this does. It does not **bind**, because a loader
+    // staging the *next* kernel binds against a registry that still belongs
+    // to the one running (`docs/analysis/51` §5) -- the caller says whether a
+    // module is joining the registry it can see. And it does not **register**:
+    // neither reference loader scans a segment for an export table, and a
+    // module registers itself by calling `loadcore` ordinal 6 from its entry
+    // (IRX-10a); a loader that did it first would overwrite the magic word
+    // that call needs to see.
+    loaded.text_size = placed.text_size;
     loaded.record = record_address;
     loaded.entry = placed.entry;
     loaded.gp = placed.gp;

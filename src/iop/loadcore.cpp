@@ -313,6 +313,7 @@ uint16_t next_module_id;
     const ps2::loader::Placed placed = ps2::loader::place(image, segments, info->base);
     info->entry = placed.entry;
     info->gp = placed.gp;
+    info->text_size = placed.text_size;
     return 0;
 }
 
@@ -559,6 +560,9 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
             for (;;) {                 // BOOT-9a: a module that will not load
             }
         }
+        (void)ps2::loader::bind(
+            reinterpret_cast<uint8_t *>(module_base),
+            reinterpret_cast<uint8_t *>(module_base + loaded.text_size));
         // BOOT-8e: the answer is read twice. Its low two bits decide
         // residency -- 1 asks to be unloaded, which a bump-placing loader
         // cannot honour and records rather than acts on -- and everything

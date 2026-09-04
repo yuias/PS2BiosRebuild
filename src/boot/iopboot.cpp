@@ -227,6 +227,10 @@ extern "C" {
         if (loaded.next_base == 0) {
             stop();                             // a module that will not load
         }
+        // IRX-9 over the text segment alone (IRX-8b): these two join the
+        // registry the boot is building, so they bind against it.
+        (void)bind(reinterpret_cast<uint8_t *>(module_base),
+                   reinterpret_cast<uint8_t *>(module_base + loaded.text_size));
         if (index == 0) {
             // BOOT-8c: `SYSMEM`'s entry takes the RAM size **in bytes**, not
             // the byte code the boot block was given: the reference sizes its
