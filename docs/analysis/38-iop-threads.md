@@ -910,11 +910,17 @@ run:
   reaches is `THREADMAN`'s own `ShouldPreemptCb`/`NewCtxCb` pair, but not the
   exact mechanism `INTRMANP` uses to get from "syscall 0x20 arrived" to "run
   the same tail the interrupt-return path uses."
-- **`0x940`'s incoming `$a0` and the exact GPR-slot layout of the `0xb8`-byte
-  context frame** were pinned only at the handful of offsets `StartThread`/
-  `0xf40` prime (`+0x70`/`+0x74`/`+0x78`/`+0x7c`/`+0x88`/`+0x8c`) and the one
-  `StartThread` writes (`+0x10`, the incoming `arg`) — the full register-to-
-  offset mapping for the remaining ~40 saved words was not derived.
+- ~~**`0x940`'s incoming `$a0` and the exact GPR-slot layout of the `0xb8`-byte
+  context frame**~~ — **closed 2026-09-05**, from `INTRMANI` 1.01's own
+  dispatcher rather than from this module: `$a0` is the outgoing thread's
+  frame, and the frame is the `0x98`-byte block of `docs/spec/06-iop-kernel.md`
+  IOP-2e2 — word 0 a save-state tag (**not `$0`**), `$1`–`$31` at
+  `+0x04`–`+0x7c`, `hi`/`lo`/`Status`/`EPC` at `+0x80`/`+0x84`/`+0x88`/`+0x8c`,
+  and the `I_CTRL` gate at `+0x90`. Every offset this document had already
+  pinned from the priming side falls into place, and the `0xb8` is the frame
+  plus the `0x20` bytes of headroom `StartThread` leaves above it. The disc
+  `THREADMAN` 2.03 tags a primed frame `0xFFFFFFFE` (complete) and writes
+  `+0x90 = 1`.
 - **`0x8ac`'s exact purpose** — read only far enough to identify it as a
   debug/sanity assertion (`SearchModuleCBByAddr`-based, `break 0x1` on
   failure) triggered from `0x940` when a target thread's address looks
@@ -962,8 +968,7 @@ implemented while `KE_SEMA_OVF` is not; and the dispatcher, down to the two
 globals (`0x67d0`/`0x67d4`) and the seven-instruction `ShouldPreemptCb` that
 is the entire reschedule decision, cross-confirmed against `docs/analysis/
 37`'s independent read of the `INTRMAN` side of the same two hooks. Left
-open: syscall `0x20`'s own handler body, the full context-frame layout
-beyond the handful of primed fields, and a few lower-priority ordinals
+open: syscall `0x20`'s own handler body and a few lower-priority ordinals
 (`Rotate`/`ChangeThreadPriority`'s re-enqueue mechanics, the alarm/`SysClock`
 group's own bodies) that this pass identified but did not independently
 disassemble.

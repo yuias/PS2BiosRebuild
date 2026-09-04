@@ -16,20 +16,26 @@
     .set noreorder
     .set noat
 
-    .set FRAME_BYTES, 0x90
-    .set SLOT_EPC,    0
-    .set SLOT_STATUS, 4
-    .set SLOT_HI,     8
-    .set SLOT_LO,     12
-    .set SLOT_REG,    16                  // + reg * 4
+    .set FRAME_BYTES, 0x98
+    .set SLOT_TAG,    0x00
+    .set SLOT_REG,    0x00                // + reg * 4, for $1..$31
+    .set SLOT_HI,     0x80
+    .set SLOT_LO,     0x84
+    .set SLOT_STATUS, 0x88
+    .set SLOT_EPC,    0x8C
+    .set SLOT_ICTRL,  0x90
+    .set TAG_FULL,    -2                  // 0xFFFFFFFE: every register present
     .set SAVED_AT,    0x400
     .set SAVED_EPC,   0x404
     .set SAVED_STATUS, 0x408
     .set SAVED_CAUSE, 0x40C
+    .set INT_CTRL_HI, 0xBF80              // I_CTRL is 0x1078 from here
+    .set INT_CTRL_LO, 0x1078
 
 // Push the frame: every register but $zero, $k0 and $k1, then hi/lo, then
-// the Status and EPC the vector saved. $sp's own slot holds the value it had
-// before the push, so a restore finds the interrupted stack again.
+// the Status and EPC the vector saved, then the I_CTRL gate. $sp's own slot
+// holds the value it had before the push, so a restore finds the interrupted
+// stack again. $at is scratch from the moment its saved copy is in the frame.
 // The R3000 delivers a load one instruction late (docs/spec/03 BOOT-8): a
 // `nop` sits between every `lw` here and the first use of what it loaded.
 .macro push_frame
@@ -52,13 +58,30 @@
     lw    $k0, SAVED_EPC($zero)
     nop
     sw    $k0, SLOT_EPC($sp)
+    // IOP-2e: reading I_CTRL closes the gate, so the value goes in the frame
+    // and the gate is re-armed here -- the frame's copy is what the return
+    // installs, which is how a thread that blocked with it shut gets it back.
+    lui   $at, INT_CTRL_HI
+    lw    $k0, INT_CTRL_LO($at)
+    nop
+    sw    $k0, SLOT_ICTRL($sp)
+    addiu $k0, $zero, 1
+    sw    $k0, INT_CTRL_LO($at)
+    addiu $k0, $zero, TAG_FULL
+    sw    $k0, SLOT_TAG($sp)
 .endm
 
-// Restore from the frame at $k0 and return to it. Status goes back first,
-// while interrupts are still held off by IEc being clear in what the
-// exception left; `rfe` then pops the pre-exception enable into place as the
-// last thing that happens.
+// Restore from the frame at $k0 and return to it. The frame's I_CTRL gate
+// goes back first, then Status, while interrupts are still held off by IEc
+// being clear in what the exception left; `rfe` then pops the pre-exception
+// enable into place as the last thing that happens. The tag at slot 0 is not
+// read: every frame this image builds is a complete one (src/iop/context.hpp).
+// $at is scratch until the register loop reaches it.
 .macro pop_frame_and_return
+    lui   $at, INT_CTRL_HI
+    lw    $k1, SLOT_ICTRL($k0)
+    nop
+    sw    $k1, INT_CTRL_LO($at)
     lw    $k1, SLOT_STATUS($k0)
     nop
     mtc0  $k1, $12

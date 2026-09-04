@@ -525,8 +525,10 @@ void primeFrame(Thread &thread, uint32_t arg) {
     for (uint32_t k = 0; k < context::kWords; k++) {
         frame[k] = 0;
     }
+    frame[context::kTag] = context::kTagFull;
     frame[context::kEpc] = reinterpret_cast<uintptr_t>(thread.entry);
     frame[context::kStatus] = kNewStatus;
+    frame[context::kIntCtrl] = 1;           // IOP-2e: the gate open, as THREADMAN 2.03 primes it
     frame[context::slotOf(4)] = arg;
     frame[context::slotOf(28)] = thread.gp;
     frame[context::slotOf(29)] = top - 16;

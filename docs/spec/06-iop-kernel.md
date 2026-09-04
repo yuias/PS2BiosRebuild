@@ -181,6 +181,40 @@ read: mode ≥ 1 additionally saves `$8`–`$15`, `$24`, `$25`, `gp`, `fp`; mode
 (`IP0`/`IP1`, the two software-interrupt lines) are checked and routed to a
 separate path if set.
 
+**IOP-2e2 — the context frame INTRMAN builds.** Read out of `INTRMANI` 1.01's
+dispatcher and confirmed against `THREADMAN` 2.03's thread-start path, which
+primes frames at these offsets. It is `0x98` bytes on the interrupted stack,
+and it is **ABI, not a rebuild's choice**: a thread manager out of a title's
+own image hands frames back at this layout.
+
+| offset | contents |
+| --- | --- |
+| `+0x00` | the save-state tag, below — **not `$0`** |
+| `+0x04`–`+0x7c` | `$1`–`$31`, in register order; `+0x74` (`$sp`) holds the pointer the frame was pushed from |
+| `+0x80`, `+0x84` | `hi`, `lo` |
+| `+0x88` | `Status`, as the exception left it (the pre-exception enable one level down, in `IEp`) |
+| `+0x8c` | `EPC`; the syscall handler's own return advances it past the trap |
+| `+0x90` | the `I_CTRL` (`0xBF801078`) gate the exception found |
+| `+0x94` | unused; the allocation is `0x98` and the writes end at `+0x90` |
+
+The tag at word 0 is how IOP-2e's deferred preservation is recorded, and the
+restore path branches on it: `0xAC0000FE` — the mode-0 baseline, so only
+`$1`–`$7`, `hi`, `lo`, `Status` and `EPC` are present; `0xFF00FFFE` — mode ≥ 1,
+adding `$8`–`$15`, `$24`, `$25`, `$gp`, `$fp`; `0xFFFFFFFE` — mode ≥ 2, adding
+`$16`–`$23`, hence a complete frame. Before the reschedule hooks (IOP-2j) are
+consulted the dispatcher **promotes whatever frame it holds to `0xFFFFFFFE`**,
+so every frame that crosses into a thread manager is a complete one. One
+further tag, `0xF0FF000C`, marks the frame `CpuInvokeInKmode` builds, whose
+own restore skips `$8`–`$15`/`$24`/`$25` and returns through `$v0`/`$v1` slots
+its caller filled.
+
+`I_CTRL` reads as its value and closes itself on the read, so the entry stores
+it in the frame and re-arms the gate to `1` at once; the **return installs the
+resumed frame's copy**, not the interrupted one's, which is the only rule a
+context switch can honour — a thread that blocked with the gate shut gets it
+back, and a thread primed by `THREADMAN` 2.03 starts with the `1` that path
+writes at `+0x90`.
+
 **IOP-2f — finding the source and acknowledging it.** The hardware path
 scans `I_STAT & I_MASK & <software overlay mask>` for its **lowest** set bit
 — ascending IRQ-number priority, the opposite convention from the EE's own
@@ -490,7 +524,9 @@ ordinal 28) resolves a mismatch: stores the outgoing thread's just-finished
 saved-frame pointer into its own record (the only point that pointer is kept
 current), falls back to a ready-queue pick if nothing was pre-selected, and
 returns the target thread's own saved-frame pointer, which INTRMAN then loads
-as the new stack pointer. Every voluntary block/yield point funnels through
+as the new stack pointer. The frame both hooks pass is IOP-2e2's, and a thread
+manager primes a fresh one at those offsets: it is the interface between the
+two modules, and they need not come from the same image. Every voluntary block/yield point funnels through
 one dedicated reschedule syscall, with up to four caller arguments left in
 `$a0`–`$a3` for the handler; its handler **must** produce the same effect the
 interrupt-return tail already produces (top up saved registers, ask

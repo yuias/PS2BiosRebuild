@@ -395,9 +395,9 @@ extern uint32_t _intrman_syscall_handler[];
 // are Cause's own two bits, cleared there.
 uint32_t *_intrman_dispatch(uint32_t *frame, uint32_t cause) {
     const bool nested = queryIntrStack(frame[ps2::context::slotOf(29)]);
-    // I_CTRL reads as its value and clears itself on the read; the gate is
-    // put back as it was on the way out, as the reference's dispatcher does.
-    const uint32_t gate = readWord(kIntCtrl);
+    // The I_CTRL gate is the frame's, not this dispatcher's: intrman.S saved
+    // it on entry and the return installs the *resumed* frame's copy, which
+    // is the reference's rule and the only one a context switch can honour.
     if (cause & 0x300) {
         const uint32_t line = (cause & 0x100) != 0 ? 0 : 1;
         writeCause(readCause() & ~(0x100u << line));
@@ -425,9 +425,7 @@ uint32_t *_intrman_dispatch(uint32_t *frame, uint32_t cause) {
             }
         }
     }
-    uint32_t *resume = nested ? frame : reschedule(frame);
-    writeWord(kIntCtrl, gate);
-    return resume;
+    return nested ? frame : reschedule(frame);
 }
 
 // IOP-3h: the kernel's own syscalls. **The number is in `$v0`, not in the
