@@ -136,6 +136,12 @@ ps2AddModule(threadman MODULE Multi_Thread_Manager VERSION 1.00
     SOURCES src/iop/threadman.cpp)
 ps2AddModule(sysclib MODULE System_C_lib VERSION 1.00
     SOURCES src/iop/sysclib.cpp)
+# The reference's own boot list loads this right after SYSCLIB and before
+# THREADMAN (docs/analysis/03); ours already loads THREADMAN earlier than
+# SYSCLIB, so only the "after SYSCLIB" half is kept -- see the boot list
+# files, where it actually governs load order.
+ps2AddModule(heaplib MODULE Heap_lib VERSION 1.00
+    SOURCES src/iop/heaplib.cpp)
 ps2AddModule(dmacman MODULE DMA_Controller_Manager VERSION 1.00
     SOURCES src/iop/dmacman.cpp)
 ps2AddModule(vblank MODULE Vblank_service VERSION 1.00
@@ -257,7 +263,7 @@ add_custom_command(
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timemani.elf threadman.elf sysclib.elf
-            dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
+            heaplib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
             ioptty.elf sifman.elf sifcmd.elf eesync.elf loadfile.elf
             cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf udnl.elf
             osdsys.elf eeload.elf

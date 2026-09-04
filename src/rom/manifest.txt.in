@@ -19,6 +19,7 @@ INTRMAN       @PS2_BINARY_DIR@/intrman.irx    @@PS2_BINARY_DIR@/intrman.extinfo
 TIMEMANI      @PS2_BINARY_DIR@/timemani.irx   @@PS2_BINARY_DIR@/timemani.extinfo
 THREADMAN     @PS2_BINARY_DIR@/threadman.irx  @@PS2_BINARY_DIR@/threadman.extinfo
 SYSCLIB       @PS2_BINARY_DIR@/sysclib.irx    @@PS2_BINARY_DIR@/sysclib.extinfo
+HEAPLIB       @PS2_BINARY_DIR@/heaplib.irx    @@PS2_BINARY_DIR@/heaplib.extinfo
 DMACMAN       @PS2_BINARY_DIR@/dmacman.irx    @@PS2_BINARY_DIR@/dmacman.extinfo
 VBLANK        @PS2_BINARY_DIR@/vblank.irx     @@PS2_BINARY_DIR@/vblank.extinfo
 IOMAN         @PS2_BINARY_DIR@/ioman.irx      @@PS2_BINARY_DIR@/ioman.extinfo
