@@ -61,8 +61,6 @@ constexpr uintptr_t kBiReservedSize = 0x14;
 constexpr uintptr_t kBiListCount = 0x18;
 constexpr uintptr_t kBiList = 0x1C;
 
-constexpr uint32_t kModeColdBoot = 0;          // BOOT-8b
-
 constexpr uintptr_t kBootList = 0x001F8100;
 constexpr uint32_t kBootListMax = 64;
 constexpr uintptr_t kBlCount = 0x000;
@@ -123,9 +121,27 @@ extern "C" {
 // The reference sizes its own stack from it (BOOT-7); this rebuild is called
 // from `reset_iop.cpp` with a stack already sized the same way, so the
 // argument's only remaining use is BOOT-8c's first word.
-[[noreturn]] void iopboot(uint32_t ram_size_byte) {
-    // Resolve IOPBTCONF with the archive scan (BOOT-6a).
-    const Found list = find(kRomSearchStart, kRomSearchEnd, packName("IOPBTCONF"));
+//
+// The other three are a reboot's (docs/analysis/45 §2): `MODLOAD`'s teardown
+// core re-enters this function rather than the reset vector, with a mode and,
+// for an update reboot, the command line at a fixed low address. The cold
+// boot's call site names them too rather than leaving them to whatever the
+// registers held -- the reference reaches this with `jr` and takes its
+// chances there.
+[[noreturn]] void iopboot(uint32_t ram_size_byte, uint32_t mode,
+                          uint32_t command_line, uint32_t) {
+    // BOOT-9e: the list's name is built, not stored -- "IOPBTCONF" with its
+    // ninth byte overwritten by the mode's digit, so a soft reboot asks for
+    // `IOPBTCON1` and an update reboot's intermediate stage for `IOPBTCON2`.
+    // The overwrite is unconditional, as the reference's is, so a cold boot
+    // asks for `IOPBTCON0` and reaches the ordinary list by the same
+    // fallback any mode without a list of its own does.
+    char list_name[kNameLength] = {'I', 'O', 'P', 'B', 'T', 'C', 'O', 'N', 'F', 0};
+    list_name[8] = static_cast<char>('0' + (mode & 0xF));
+    Found list = find(kRomSearchStart, kRomSearchEnd, list_name);
+    if (list.address == 0) {
+        list = find(kRomSearchStart, kRomSearchEnd, packName("IOPBTCONF"));
+    }
     if (list.address == 0) {
         stop();                                // BOOT-9a: no list, no boot
     }
@@ -191,6 +207,15 @@ extern "C" {
     const Found romdir = find(kRomSearchStart, kRomSearchEnd, packName("ROMDIR"));
     bootListWord(kBlTable) = static_cast<uint32_t>(romdir.address);
 
+    // The registry starts empty. It has to be said rather than assumed: the
+    // head is a fixed word of RAM shared with `LOADCORE` (IRX-4c), not part
+    // of any module's data, so a reboot re-entering here would otherwise
+    // find the *previous* kernel's export tables still linked -- at
+    // addresses the modules about to be placed are going to overwrite. The
+    // first module to bind an import would then jump into whatever landed
+    // there.
+    registryHead() = 0;
+
     // BOOT-8c: only `SYSMEM` and `LOADCORE` are loaded here, in the order the
     // list gave them (BOOT-9c) -- the list's first two names, because a
     // loader that allocates needs a memory manager and a registry before it
@@ -221,8 +246,8 @@ extern "C" {
             // loads the rest of the list and comes back, and the boot's own
             // thread goes to sleep below.
             bootInfoWord(kBiRamMiB, ram_size_byte);
-            bootInfoWord(kBiMode, kModeColdBoot);
-            bootInfoWord(kBiCommandLine, 0);
+            bootInfoWord(kBiMode, mode);
+            bootInfoWord(kBiCommandLine, command_line);
             bootInfoWord(kBiSysmemRecord, sysmem_record);
             bootInfoWord(kBiReservedBase, 0);
             bootInfoWord(kBiReservedSize, 0);

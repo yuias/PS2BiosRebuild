@@ -320,6 +320,9 @@ int unimplemented() {
     return -1;
 }
 
+// intrman.S: ordinal 14's body, which is one `syscall` and a return.
+extern "C" void _intrman_invoke_in_kmode();
+
 // IRX-4: the export table, IOP-2a's ordinals.
 [[gnu::used]] ExportTable<32> intrman_exports = {
     ps2::module::kExportMagic,
@@ -342,7 +345,7 @@ int unimplemented() {
         slot(cpuEnableIntr),            // 11
         slot(unimplemented),            // 12
         slot(unimplemented),            // 13
-        slot(unimplemented),            // 14 CpuInvokeInKmode
+        slot(_intrman_invoke_in_kmode), // 14 CpuInvokeInKmode
         slot(disableDispatchIntr),      // 15
         slot(enableDispatchIntr),       // 16
         slot(cpuSuspendIntr),           // 17
@@ -422,12 +425,28 @@ uint32_t *_intrman_dispatch(uint32_t *frame, uint32_t cause) {
     return resume;
 }
 
-// IOP-3h: the reschedule syscall. Its code field is THREADMAN's number; any
-// other just returns past the instruction.
+// IOP-3h: the reschedule syscall. Its code field is THREADMAN's number;
+// `0xc` is `CpuInvokeInKmode`, and any other just returns past the
+// instruction.
+//
+// `CpuInvokeInKmode` calls $a0 with $a1..$a3 and answers in $v0. What it is
+// for is a caller that needs to run with the exception's own privileges and
+// its own stack -- `MODLOAD`'s reboot core, which never comes back, is the
+// only user in this image (docs/analysis/45 §2).
 uint32_t *_intrman_syscall(uint32_t *frame, uint32_t instruction) {
+    using ps2::context::slotOf;
     const uint32_t code = (instruction >> 6) & 0xFFFFF;
     if (code == 0x20) {
         return reschedule(frame);
+    }
+    if (code == 0xC) {
+        const auto function = reinterpret_cast<uint32_t (*)(uint32_t, uint32_t, uint32_t)>(
+            frame[slotOf(4)]);
+        if (function != nullptr) {
+            frame[slotOf(2)] = function(frame[slotOf(5)], frame[slotOf(6)],
+                                        frame[slotOf(7)]);
+        }
+        return frame;
     }
     return frame;
 }

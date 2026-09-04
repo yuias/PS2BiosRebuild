@@ -20,6 +20,7 @@ inline constexpr uintptr_t kCtrl = 0xBD000040;
 
 inline constexpr uint32_t kFlagSifInit = 0x00010000;  // BOOT-10: SIF_STAT_SIFINIT
 inline constexpr uint32_t kFlagCmdInit = 0x00020000;  // BOOT-12b: SIF_STAT_CMDINIT
+inline constexpr uint32_t kFlagBootEnd = 0x00040000;  // SIF_STAT_BOOTEND [header]
 
 // `sceSifSetDma`'s descriptor [header]: IOP memory to send, where in EE
 // memory it lands, and the attributes of the run.

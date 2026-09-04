@@ -8,6 +8,7 @@
 // goes back unmodified through `*result`; the answer is the module's id, or
 // one of IOP-5e's errors.
 
+#include "../boot/archive.hpp"
 #include "loader.hpp"
 #include "module.hpp"
 
@@ -32,7 +33,36 @@ constexpr int kOpenRead = 1;                    // O_RDONLY [header]
 constexpr uint32_t kArgvMax = 16;
 constexpr uint32_t kArgBytesMax = 256;
 
+// --- the reboot core (docs/analysis/45 §2) -----------------------------------
+//
+// Ordinal 4 does not do the work; it traps, through `intrman` 14, into the
+// function below, which runs in the exception's own context and never comes
+// back. That indirection is the reference's, and the reason for it is the
+// stack: what re-enters `IOPBOOT` cannot be standing on the stack of a thread
+// whose module is about to be reloaded over it.
+constexpr uintptr_t kRomSearchStart = 0xBFC00000;
+constexpr uintptr_t kRomSearchEnd = 0xBFC80000;  // BOOT-6b: the first 512 KiB
+
+// BOOT-4 step 2's own value, in `src/boot/reset.S`: the top of the 2 MiB a
+// retail machine has. The boot list's modules are placed from `0x800` up and
+// the boot's own words sit at `0x1F8100`, so this is above everything a boot
+// writes and below the block the stack grows down through.
+constexpr uintptr_t kBootStackTop = 0x001FFFF0;
+
+// §2: an update reboot leaves the argument string at this absolute address
+// and hands `IOPBOOT` the address rather than the string, because the copy
+// has to survive the reload of whatever module the string was living in.
+constexpr uintptr_t kCommandLine = 0x480;
+constexpr uint32_t kCommandLineMax = 0x80;
+
+constexpr uint32_t kModeSoftReboot = 1;         // BOOT-8b
+constexpr uint32_t kModeUpdateStage = 2;
+
+constexpr uint32_t kRamMiB = 2;                 // BOOT-4 step 5's retail latch
+
 extern "C" {
+uint32_t _import_intrman_invoke_in_kmode(uint32_t function, uint32_t a, uint32_t b,
+                                         uint32_t c);
 int _import_ioman_open(const char *path, int flags);
 int _import_ioman_close(int fd);
 int _import_ioman_read(int fd, void *buffer, int size);
@@ -191,6 +221,79 @@ int unimplemented() {
     return -1;
 }
 
+// The reboot core, reached only through `intrman` 14's trap. It runs in the
+// exception's own context, on the interrupt stack, and does not return.
+//
+// **The reference tears every resident module down first** and this does not:
+// its walk calls a per-module hook out of each record, reached through a
+// `loadcore` ordinal this project has not identified, and no module here
+// exposes one to call. The walk is therefore absent rather than empty, and
+// what follows is the rest of §2 -- the argument's copy to a fixed address,
+// the mode, and the re-entry into `IOPBOOT`. It also does not re-apply
+// BOOT-4 step 1's bus table: nothing between here and `IOPBOOT` disturbs it,
+// where on hardware the reference is guarding against a controller that a
+// half-finished transfer left in another state.
+uint32_t rebootCore(uint32_t /* tag */, uint32_t argument, uint32_t mode) {
+    const auto *arg = reinterpret_cast<const char *>(argument);
+    uint32_t boot_mode = kModeSoftReboot;
+    uint32_t command_line = 0;
+    if (arg != nullptr && arg[0] != '\0') {
+        // §2: the string is copied out of whatever module is holding it,
+        // because that module is about to be loaded over.
+        auto *at = reinterpret_cast<char *>(kCommandLine);
+        uint32_t k = 0;
+        for (; k + 1 < kCommandLineMax && arg[k] != '\0'; k++) {
+            at[k] = arg[k];
+        }
+        at[k] = '\0';
+        boot_mode = (mode & 0xFF00) | kModeUpdateStage;
+        command_line = kCommandLine;
+    }
+
+    const ps2::archive::Found boot = ps2::archive::find(
+        kRomSearchStart, kRomSearchEnd, ps2::archive::packName("IOPBOOT"));
+    if (boot.address == 0) {
+        for (;;) {                              // BOOT-6d: a terminal stop
+        }
+    }
+
+    // The stack has to move before the jump: this one belongs to a thread
+    // whose module the reload is about to overwrite. `$t0`-`$t3` are named in
+    // the clobber list so the operands cannot land in them, which is what
+    // makes it safe to fill `$a0`-`$a3` from copies rather than directly.
+    asm volatile(
+        ".set noreorder\n\t"
+        "move $t0, %0\n\t"
+        "move $t1, %1\n\t"
+        "move $t2, %2\n\t"
+        "move $t3, %3\n\t"
+        "move $a0, $t1\n\t"
+        "move $a1, $t2\n\t"
+        "move $a2, $t3\n\t"
+        "move $a3, $zero\n\t"
+        "lui  $sp, 0x1f\n\t"
+        "ori  $sp, $sp, 0xfff0\n\t"
+        "jr   $t0\n\t"
+        "nop\n\t"
+        ".set reorder\n\t"
+        :
+        : "r"(static_cast<uint32_t>(boot.address)), "r"(kRamMiB),
+          "r"(boot_mode), "r"(command_line)
+        : "$4", "$5", "$6", "$7", "$8", "$9", "$10", "$11", "memory");
+    __builtin_unreachable();
+}
+
+// Ordinal 4, `ReBootStart(argument, mode)`: the trap, and nothing else. An
+// empty argument is a plain soft reboot; anything else names a loader and an
+// image, and starts the intermediate stage of an update reboot. The first
+// argument the core takes is the reference's `"modload"` tag, which nothing
+// here reads.
+int reBootStart(const char *argument, uint32_t mode) {
+    return static_cast<int>(_import_intrman_invoke_in_kmode(
+        reinterpret_cast<uint32_t>(rebootCore), 0,
+        reinterpret_cast<uint32_t>(argument), mode));
+}
+
 [[gnu::used]] ExportTable<16> modload_exports = {
     ps2::module::kExportMagic,
     0,
@@ -202,7 +305,7 @@ int unimplemented() {
         slot(reservedHook),             // 1
         slot(reservedHook),             // 2
         slot(reservedHook),             // 3
-        slot(unimplemented),            // 4  ReBootStart
+        slot(reBootStart),              // 4  ReBootStart
         slot(unimplemented),            // 5  LoadModuleAddress
         slot(unimplemented),            // 6  LoadModule
         slot(loadStartModule),          // 7  LoadStartModule
@@ -219,6 +322,10 @@ int unimplemented() {
 };
 
 }  // namespace
+
+PS2_IMPORTS_BEGIN("intrman\0", 0x0102)
+PS2_IMPORT(_import_intrman_invoke_in_kmode, 14)
+PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("ioman\0\0\0", 0x0102)
 PS2_IMPORT(_import_ioman_open, 4)

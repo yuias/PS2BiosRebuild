@@ -93,7 +93,9 @@ extern "C" {
     // BOOT-6c: entered with the RAM-size byte, and it never returns. The
     // reference reaches it with `jr`, having nothing to return to; a call leaves
     // a return address IOPBOOT will not use.
-    reinterpret_cast<void (*)(uint32_t)>(iopboot.address)(kRamSizeByte);
+    // BOOT-8b: mode 0 is the cold boot, and there is no command line.
+    reinterpret_cast<void (*)(uint32_t, uint32_t, uint32_t, uint32_t)>(
+        iopboot.address)(kRamSizeByte, 0, 0, 0);
     for (;;) {
     }
 }

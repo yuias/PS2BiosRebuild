@@ -126,6 +126,19 @@ _intrman_syscall_handler:
     move  $k0, $v0
     pop_frame_and_return
 
+// IOP-2d and docs/analysis/37: `intrman` ordinal 14, `CpuInvokeInKmode`, is
+// itself a bare `syscall 0xc` -- the arguments a caller set up are the ones
+// the handler reads out of the frame, so there is nothing between the two but
+// the trap. It must be written here for that reason: a compiler would build a
+// prologue, and the frame would then hold its registers rather than the
+// caller's.
+    .text
+    .globl _intrman_invoke_in_kmode
+_intrman_invoke_in_kmode:
+    syscall 0xc
+    jr    $ra
+    nop
+
     .section .bss, "aw", @nobits
     .align 4
     .globl _intrman_stack

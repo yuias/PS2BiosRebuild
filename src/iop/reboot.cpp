@@ -10,22 +10,24 @@
 // resident module down and lets UDNL merge the named image over rom0's
 // archive by highest module version (§2).
 //
-// **This rebuild does not do that.** What it implements is the wire protocol
-// and the hand-back: the packet is parsed as the reference parses it, the
+// **An empty argument is served for real, and anything else is not.** The
+// packet is parsed as the reference parses it either way, and the
 // dispatch-context handler does nothing but record and wake (§1's split, and
 // a requirement rather than a style choice -- the handler runs in the SIF
-// interrupt), and the worker thread re-arms the receiving channel and raises
-// the flags a rebooted IOP raises. No module is torn down, nothing is
-// reloaded, and the image the argument names is never opened, so the modules
-// running after this "reboot" are the ones that were running before it.
+// interrupt). Then the worker branches:
 //
-// That is a real deviation and it is visible to a client in one way: a title
-// rebooting to get a *newer* CDVDMAN/CDVDFSV than `rom0:` holds gets this
-// image's own instead. It is deliberate. The merge is the large half of
-// analysis 45 and most of that document's open questions live in it, while
-// the hand-back is what unblocks the boot -- a title that has sent this
-// command spins in `sceSifIopSync` until `SMFLG`'s `SIF_STAT_BOOTEND` comes
-// back, and nothing else it does can proceed first.
+// - **No argument**: `modload` ordinal 4, which traps into the reboot core
+//   and re-enters `IOPBOOT` with mode 1. Every module on the list is placed
+//   and entered again, so this is a reboot in the sense the caller means.
+// - **An argument**: the hand-back. The image the argument names is never
+//   opened and no module is torn down, so the modules running after this
+//   "reboot" are the ones that were running before it. It is visible to a
+//   client in one way: a title rebooting to get a *newer* CDVDMAN/CDVDFSV
+//   than `rom0:` holds gets this image's own instead. It is deliberate --
+//   the merge is the large half of analysis 45 -- and the hand-back is what
+//   unblocks that boot, since a title spins in `sceSifIopSync` until
+//   `SMFLG`'s `SIF_STAT_BOOTEND` comes back and nothing else it does can
+//   proceed first.
 //
 // Why the flags and not just the one bit: the EE's own reset zeroes the
 // software registers its RPC layer keeps its addresses in, so the client
@@ -90,6 +92,7 @@ int _import_thbase_delay(uint32_t usec);
 int _import_sifcmd_add_cmd_handler(uint32_t cid, void *function, void *arg);
 int _import_sifman_set_dchain();
 int _import_sifman_set_smflag(uint32_t bits);
+int _import_modload_reboot(const char *argument, uint32_t mode);
 }
 
 // What the handler recorded for the worker, exactly the two fields the
@@ -132,6 +135,10 @@ void rebootThread(void *) {
         }
         request.pending = 0;
         _import_thbase_delay(kSettleMicroseconds);
+        if (request.arg[0] == '\0') {
+            // §2: mode 1, and it does not come back.
+            (void)_import_modload_reboot(request.arg, request.mode);
+        }
         // A reboot discards whatever was in flight on the receiving channel,
         // so it is armed again before anything is announced.
         _import_sifman_set_dchain();
@@ -154,6 +161,10 @@ PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("sifcmd\0\0", 0x0101)
 PS2_IMPORT(_import_sifcmd_add_cmd_handler, 10)
+PS2_IMPORTS_END()
+
+PS2_IMPORTS_BEGIN("modload\0", 0x0101)
+PS2_IMPORT(_import_modload_reboot, 4)
 PS2_IMPORTS_END()
 
 PS2_IMPORTS_BEGIN("sifman\0\0", 0x0101)

@@ -184,8 +184,14 @@ int _module_start(int, char **) {
                                          nullptr);
 
     // BOOT-12b: the boot list is done and every server is registered, so the
-    // EE may start sending. A write to SMFLG from this side sets (BOOT-10c).
-    (void)_import_sifman_set_smflag(ps2::sif::kFlagCmdInit);
+    // EE may start sending, and the boot itself is over. A write to SMFLG
+    // from this side sets, so both bits go up in one (BOOT-10c).
+    //
+    // `BOOTEND` is what a client spins on in `sceSifIopSync` after asking for
+    // a reboot, and it is the reason this module is last: raised any earlier
+    // it would answer for a boot that has not finished.
+    (void)_import_sifman_set_smflag(ps2::sif::kFlagCmdInit
+                                    | ps2::sif::kFlagBootEnd);
 
     return 0;                                    // resident
 }

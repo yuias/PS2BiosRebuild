@@ -593,26 +593,51 @@ at 1.01 directly rather than by storing 1.02 and decrementing it the way the
 reference does; the registration a client sees is the same, and `rom0:STDIO`
 supersedes it either way.
 
-**`REBOOT` answers the reset command but does not reboot.** `docs/analysis/45`.
-The wire protocol is the reference's: `sceSifAddCmdHandler(0x80000003, ...)`
-from a worker thread, a dispatch-context handler that only records the
-packet's `arglen`/`mode`/`arg` and wakes that thread, and the worker doing
-everything blocking. What the worker does, though, is re-arm the receiving
-channel and raise `SMFLG`'s `SIF_STAT_SIFINIT`, `SIF_STAT_CMDINIT` and
-`SIF_STAT_BOOTEND` — not tear down the resident modules, re-apply the bus
-table, or hand the argument to `UDNL` for the version merge. Nothing opens
-the image the argument names. A client therefore comes back to the same
-modules it had, where a real reboot would give it whichever of the named
-image's and `rom0:`'s modules is the newer per name. The bits are raised
-after a 20 ms delay, because whether a client clears `SMFLG` before or after
-sending the packet was not established and an instant raise would be erased
-by the later order. `EESYNC` gained the three library calls this needs:
-`sifcmd` ordinal 10 (`sceSifAddCmdHandler`, an eight-entry table consulted
-for any command id the built-in dispatch does not answer), `sifman` ordinal 5
-(`sceSifSetDChain`, which re-arms the receiver) and `sifman` ordinal 22
-(raise `SMFLG` bits — the ordinal's identity is inferred from the argument
-the reference's `REBOOT` passes it, and is one of `docs/analysis/45`'s open
-questions).
+**A reset command with no argument reboots; one with an argument does not.**
+`docs/analysis/45`. The wire protocol is the reference's either way:
+`sceSifAddCmdHandler(0x80000003, ...)` from a worker thread, a
+dispatch-context handler that only records the packet's `arglen`/`mode`/`arg`
+and wakes that thread, and the worker doing everything blocking.
+
+With **no argument** the worker calls `modload` ordinal 4, which traps
+through `intrman` 14 (`CpuInvokeInKmode`, a bare `syscall 0xc`) into the
+reboot core. That core moves the stack to the boot's own top — the one it is
+standing on belongs to a thread whose module is about to be loaded over —
+resolves `IOPBOOT` by the same archive scan the boot block uses, and
+re-enters it with mode 1. Every module on the list is placed and entered
+again, `LOADCORE` publishes boot record key 4 as `1`, and the two processors
+meet again from the beginning. `tests/iopreset` is the client that judges it.
+
+Two things the reference does here are missing, both stated at the code. It
+walks the resident module list first and calls a per-module teardown hook out
+of each record, reached through a `loadcore` ordinal this project has not
+identified — no module here exposes such a hook, so the walk is absent rather
+than empty. And it re-applies BOOT-4 step 1's bus table, which guards against
+a controller a half-finished transfer left in another state; nothing between
+the trap and `IOPBOOT` disturbs it here.
+
+With **an argument** the worker still takes the old path: re-arm the
+receiving channel and raise `SMFLG`'s `SIF_STAT_SIFINIT`, `SIF_STAT_CMDINIT`
+and `SIF_STAT_BOOTEND`, without opening the image the argument names. A
+client therefore comes back to the same modules it had, where a real reboot
+would give it whichever of the named image's and `rom0:`'s modules is the
+newer per name. The bits are raised after a 20 ms delay, because whether a
+client clears `SMFLG` before or after sending the packet was not established
+and an instant raise would be erased by the later order.
+
+**The EE's `MSFLG` bit is never cleared, and that is what makes a reboot
+finishable.** `sceSifInit` answers the EE's `SIF_STAT_SIFINIT` with one of
+its own in `SMFLG` and leaves the EE's standing. A write to `MSFLG` from this
+side would clear it (BOOT-10c), and the EE raises it exactly once, at its own
+initialisation: `sceSifIopReset` clears only `SMFLG`'s three bits — read out
+of the SDK's own `SifIopReset`, which writes `0x40000`, `0x10000` and
+`0x20000` to register 4 and touches `MSFLG` not at all. A rebooted kernel
+that waited for that bit again would wait for a client that is itself waiting
+for `SIF_STAT_BOOTEND`.
+
+**`SIF_STAT_BOOTEND` is `EESYNC`'s, raised with `CMDINIT`.** It says the boot
+list has run out, which is what a client spins on in `sceSifIopSync`, and it
+is the reason that module is last.
 
 Because nothing is merged, our own `LOADFILE` keeps serving the title after
 the reset, and it has to answer the version query the module a title expects
@@ -1048,7 +1073,22 @@ and both cost a link error each.
 leaves the code two bytes out of alignment, and the instruction stream decodes
 as garbage from that point on (`unknown opcode 0x3f`). `.align 2` after data.
 
+**The registry head is cleared by `IOPBOOT`, not assumed empty.** IRX-4c's
+head is a fixed word of RAM shared with `LOADCORE` rather than part of any
+module's data, so it survives a reboot — with the previous kernel's export
+tables still linked into it, at addresses the modules about to be placed are
+going to overwrite. The first import bound would then jump into whatever
+landed there. It cost one debugging round to find; the clear is one line and
+the comment explaining it is six.
+
 ## How the image is judged
+
+Two programs built with someone else's toolchain judge what a simulator
+cannot. `tests/m1` is the milestone program of `docs/project-state.md` §6;
+`tests/iopreset` asks for an IOP reset and reports what comes back, which is
+the only way to see a reboot from the outside. Both are stored in the
+`OSDSYS` slot (`-DPS2_TEST_PROGRAM=`), built by their own `build.sh` through
+the `ps2dev` container, and never committed as binaries.
 
 `tools/imgcheck.py` is the build's own gate, and it is deliberately *stated*
 rather than lenient: it asserts what the image claims to do at this milestone

@@ -269,12 +269,15 @@ int sifInit() {
     writeWord(ps2::sif::kCtrl, kCtrlSif0Path);
     writeWord(ps2::sif::kCtrl, kCtrlSif1Path);
 
-    // BOOT-10b: answer with a bit of our own, then record what the EE
-    // published and clear its flag -- our write to MSFLG is an
-    // acknowledgement, not a request.
+    // BOOT-10b: answer with a bit of our own, and record what the EE
+    // published. **The EE's bit is left standing.** A write to MSFLG from
+    // this side would clear it, and a soft reboot could then never finish:
+    // the EE raises that bit once, at its own initialisation, and
+    // `sceSifIopReset` clears only SMFLG's three (read out of the SDK's own
+    // `SifIopReset`). A rebooted kernel that waited for it again would wait
+    // for a client that is itself waiting for `SIF_STAT_BOOTEND`.
     writeWord(ps2::sif::kSmflg, ps2::sif::kFlagSifInit);   // our write sets
     ee_area = readWord(ps2::sif::kMscom);
-    writeWord(ps2::sif::kMsflg, ps2::sif::kFlagSifInit);   // our write clears
 
     sif_initialised = 1;
     return 0;
