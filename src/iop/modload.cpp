@@ -305,8 +305,8 @@ void mode2Bootup() {
         // request that cannot be answered.
         return;
     }
-    auto **argv = reinterpret_cast<char **>(record[1]);
-    if (argv == nullptr || argv[0] == nullptr) {
+    const auto *line = reinterpret_cast<const char *>(record[1]);
+    if (line == nullptr) {
         return;
     }
     const uint32_t *mode_record = _import_loadcore_boot_record(kKeyBootMode);
@@ -314,24 +314,40 @@ void mode2Bootup() {
         return;                                 // the path that is not read
     }
 
-    // IOP-5d: the arguments travel as NUL-separated bytes with a length, not
-    // as an array, so what key 5 tokenised is joined again for the callee --
-    // the same bytes, one copy later.
+    // BOOT-8b: key 5 is the line itself, untokenised, so the split happens
+    // here. The first token is the module to load; IOP-5d wants the rest as
+    // NUL-separated bytes with a length, which is what splitting on spaces
+    // into one buffer produces directly -- the terminator each token needs is
+    // the separator the next one is behind.
+    char name[kArgBytesMax];
     char args[kArgBytesMax];
+    uint32_t at = 0;
+    while (line[at] == ' ') {
+        at++;
+    }
+    uint32_t n = 0;
+    while (line[at] != '\0' && line[at] != ' ' && n + 1 < kArgBytesMax) {
+        name[n++] = line[at++];
+    }
+    name[n] = '\0';
+    if (n == 0) {
+        return;
+    }
     uint32_t length = 0;
-    for (uint32_t k = 1; argv[k] != nullptr && k < kArgvMax; k++) {
-        for (const char *at = argv[k]; *at != '\0'; at++) {
-            if (length + 2 > kArgBytesMax) {
-                break;
-            }
-            args[length++] = *at;
+    while (line[at] != '\0' && length + 1 < kArgBytesMax) {
+        while (line[at] == ' ') {
+            at++;
         }
-        if (length + 1 <= kArgBytesMax) {
-            args[length++] = '\0';
+        if (line[at] == '\0') {
+            break;
         }
+        while (line[at] != '\0' && line[at] != ' ' && length + 2 < kArgBytesMax) {
+            args[length++] = line[at++];
+        }
+        args[length++] = '\0';
     }
     int result = 0;
-    (void)loadStartModule(argv[0], length, length != 0 ? args : nullptr, &result);
+    (void)loadStartModule(name, length, length != 0 ? args : nullptr, &result);
 }
 
 // Ordinal 4, `ReBootStart(argument, mode)`: the trap, and nothing else. An

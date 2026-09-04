@@ -1156,7 +1156,8 @@ that, it works end to end: the reboot core copies the argument to `0x480` and
 gives `IOPBOOT` mode `(mode & 0xff00) | 2`; `IOPBOOT` builds `IOPBTCON2` and
 finds it, so a sixteen-name list boots -- everything that reads a disc, and
 nothing that talks to the EE, which is the reference's own rule applied to
-ours; `LOADCORE` tokenises the command line into boot record key 5;
+ours; `LOADCORE` copies the command line and points boot record key 5 at
+the copy, and `MODLOAD`'s callback is what splits it;
 `MODLOAD`'s entry sees key 4 read `2` and registers a bootup callback; and
 that callback, run after the list, loads `argv[0]` with the rest as its
 arguments. Judged by loading `rom0:SIO2MAN` through it and reading the module
