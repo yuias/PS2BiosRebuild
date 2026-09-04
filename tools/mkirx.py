@@ -38,10 +38,6 @@ SHF_ALLOC = 0x2
 # meets them all needs nothing else.
 ALLOWED_RELOCATIONS = {2: "R_MIPS_32", 4: "R_MIPS_26", 5: "R_MIPS_HI16",
                        6: "R_MIPS_LO16"}
-# IRX-3a: how many HI16 may wait for one LO16 -- the loader in `IOPBOOT` holds
-# that many, and a module needing more is refused rather than misloaded.
-HI16_RUN_MAX = 8
-
 IOPMOD_FIXED = 26                # bytes before the NUL-terminated name
 NO_MODULE_INFO = 0xFFFFFFFF
 
@@ -106,27 +102,37 @@ def loadImage(data: bytes, sections: list[Section]) -> tuple[bytes, int, int, in
 
 
 def readRelocations(data: bytes, sections: list[Section], image: bytes) -> bytes:
-    """The REL entries, filtered to the four types IRX-3 allows.
+    """The fixups, as IRX-3 stores them: `offset` then the bare type.
 
     The symbol index is dropped: a loader rebases in place and has no symbol
     table to consult, and leaving indices behind would point at a table this
     file does not carry.
 
-    IRX-3a pairs each `HI16` with the `LO16` that follows it, so the carry out
-    of the rebased low half reaches the high one. The reference's compiler
-    emits one pair per address; ours does two things more. A `lui` kept live
-    across several accesses emits one `HI16` followed by several `LO16` --
-    sound only if every one of them names the same address, since a single
-    high half cannot serve two addresses once a load-time delta is added. And
-    several `lui` of one address, hoisted apart from their uses, emit a run of
-    `HI16` followed by the one `LO16` the object writer paired them all with --
-    the pairing a static link would resolve them by, so applying that `LO16`
-    to every `HI16` of the run is what the linker would have done. That is
-    what is checked here: a `HI16` must be followed, after at most a short run
-    of other `HI16`, by a `LO16` of its symbol, and a `LO16` with no `HI16`
-    before it must repeat, symbol and low half, one that was paired. Anything
-    else is refused rather than left to fault at some load addresses and not
-    others.
+    IRX-3a pairs each `HI16` with the `LO16` that follows it, and the
+    reference loader takes "follows" literally: it resolves a `HI16` by
+    reading the *next* entry's target word, without checking that entry's
+    type. So the only portable stream is strictly alternating -- every `HI16`
+    immediately followed by a `LO16` of its address -- and a run of two
+    `HI16` misrelocates the first, silently, at load addresses that differ
+    from the link address.
+
+    Our object writer does not emit that stream. It groups a symbol's `HI16`
+    together and leaves the `LO16` that pairs with them elsewhere: the same
+    address materialised twice comes out as two adjacent `HI16` and two
+    `LO16` further along, and an address kept live in a register across
+    several accesses comes out as one `HI16` and several `LO16`. Neither is a
+    codegen choice -- the instructions are already in the right order in the
+    text -- so the fixups are re-ordered here rather than the code being
+    written around the object writer.
+
+    The re-ordering is sound because only `HI16` reads a neighbour: `LO16`,
+    `R_MIPS_32` and `R_MIPS_26` each correct their own word from the load
+    delta alone, so moving one changes nothing as long as it is still applied
+    exactly once. Each `HI16` therefore takes its own `LO16`, chosen to have
+    the symbol and low half of the one the object writer paired its run with,
+    so the address every `HI16` resolves to is the address it resolved to
+    before. A `HI16` with no `LO16` left to take is refused: nothing can make
+    that one portable.
     """
     out = bytearray()
     paired: set[tuple[int, int]] = set()
@@ -140,35 +146,69 @@ def readRelocations(data: bytes, sections: list[Section], image: bytes) -> bytes
             continue
         entries = [struct.unpack_from("<II", data, section.offset + k * 8)
                    for k in range(section.size // 8)]
-        run: list[tuple[int, int]] = []          # HI16s waiting for their LO16
+        parsed: list[tuple[int, int, int, int]] = []
         for offset, info in entries:
             kind = info & 0xFF
-            symbol = info >> 8
             if kind not in ALLOWED_RELOCATIONS:
                 sys.exit(f"mkirx: {section.name} carries relocation type "
                          f"{kind}, which IRX-3 does not allow")
-            out += struct.pack("<II", offset, kind)
             low = struct.unpack_from("<H", image, offset)[0] \
                 if kind in (5, 6) else 0
-            if kind != 6 and run and (kind != 5 or len(run) >= HI16_RUN_MAX):
-                sys.exit(f"mkirx: HI16 at {run[0][0]:#x} in {section.name} "
-                         "is not followed by a LO16 of its symbol (IRX-3a)")
-            if kind == 5:                        # R_MIPS_HI16
-                run.append((offset, symbol))
-            elif kind == 6:                      # R_MIPS_LO16
-                for hi_offset, hi_symbol in run:
-                    if hi_symbol != symbol:
-                        sys.exit(f"mkirx: HI16 at {hi_offset:#x} in "
+            parsed.append((offset, kind, info >> 8, low))
+
+        # Which address each HI16 resolves to today: the low half of the LO16
+        # that ends the run it belongs to.
+        wanted: dict[int, tuple[int, int]] = {}
+        run: list[int] = []
+        for index, (offset, kind, symbol, low) in enumerate(parsed):
+            if kind == 5:
+                run.append(index)
+                continue
+            if kind == 6 and run:
+                for hi in run:
+                    if parsed[hi][2] != symbol:
+                        sys.exit(f"mkirx: HI16 at {parsed[hi][0]:#x} in "
                                  f"{section.name} is not followed by a LO16 "
                                  "of its symbol (IRX-3a)")
-                if run:
-                    paired.add((symbol, low))
-                    run = []
-                else:
-                    unpaired.append((symbol, low, f"{offset:#x} in {section.name}"))
+                    wanted[hi] = (symbol, low)
+            elif run:
+                sys.exit(f"mkirx: HI16 at {parsed[run[0]][0]:#x} in "
+                         f"{section.name} is not followed by a LO16 of its "
+                         "symbol (IRX-3a)")
+            run = []
         if run:
-            sys.exit(f"mkirx: HI16 at {run[0][0]:#x} in {section.name} "
-                     "is not followed by a LO16 of its symbol (IRX-3a)")
+            sys.exit(f"mkirx: HI16 at {parsed[run[0]][0]:#x} in "
+                     f"{section.name} is not followed by a LO16 of its "
+                     "symbol (IRX-3a)")
+
+        # Give each HI16 a LO16 of that address, one apiece.
+        free: dict[tuple[int, int], list[int]] = {}
+        for index, (offset, kind, symbol, low) in enumerate(parsed):
+            if kind == 6:
+                free.setdefault((symbol, low), []).append(index)
+        partner: dict[int, int] = {}
+        taken: set[int] = set()
+        for index, (offset, kind, symbol, low) in enumerate(parsed):
+            if kind != 5:
+                continue
+            candidates = free.get(wanted[index], [])
+            if not candidates:
+                sys.exit(f"mkirx: HI16 at {offset:#x} in {section.name} has "
+                         "no LO16 of its own to pair with (IRX-3a)")
+            chosen = candidates.pop(0)
+            partner[index] = chosen
+            taken.add(chosen)
+            paired.add(wanted[index])
+
+        for index, (offset, kind, symbol, low) in enumerate(parsed):
+            if index in taken:
+                continue                     # emitted after its HI16 instead
+            out += struct.pack("<II", offset, kind)
+            if kind == 5:
+                mate = partner[index]
+                out += struct.pack("<II", parsed[mate][0], 6)
+            elif kind == 6:
+                unpaired.append((symbol, low, f"{offset:#x} in {section.name}"))
     for symbol, low, where in unpaired:
         if (symbol, low) not in paired:
             sys.exit(f"mkirx: LO16 at {where} shares no HI16 with an address "

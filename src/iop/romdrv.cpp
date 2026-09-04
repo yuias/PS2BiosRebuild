@@ -294,7 +294,7 @@ int initDevice() {
     return _import_ioman_add_drv(&device);
 }
 
-[[gnu::used]] ExportTable<6> romdrv_exports = {
+PS2_EXPORT_TABLE ExportTable<6> romdrv_exports = {
     ps2::module::kExportMagic,
     0,
     0x0201,                                     // IRX-2b: romdrv 2.01

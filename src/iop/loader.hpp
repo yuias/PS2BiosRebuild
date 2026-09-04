@@ -167,11 +167,12 @@ struct Segments {
     return segments.load_filesz != 0 && segments.iopmod_offset != 0;
 }
 
-// IRX-3a: the HI16s waiting for a LO16. One per address in the reference's
-// modules; a compiler that hoists several `lui` of one address apart from
-// their uses emits a short run of them before the LO16 they share, and every
-// one of the run is rebased by it. `tools/mkirx.py` refuses a longer run.
-inline constexpr uint32_t kHeldHi16Max = 8;
+// IRX-3a: the HI16 waiting for a LO16 -- exactly one, which is all the
+// reference's loader holds and all any module may need. It resolves a HI16
+// from the very next REL entry without checking that entry's type, so a run
+// of two misrelocates the first; `tools/mkirx.py` re-orders the fixups into
+// strict pairs so no module ever presents one.
+inline constexpr uint32_t kHeldHi16Max = 1;
 
 struct HeldHi16 {
     uint32_t *address[kHeldHi16Max];

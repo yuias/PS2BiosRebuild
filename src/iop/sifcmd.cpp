@@ -488,7 +488,7 @@ int addCmdHandler(uint32_t cid, void *function, void *arg) {
 }
 
 // IRX-4: the library server modules import (spec/06 IOP-5f's ordinals).
-[[gnu::used]] ps2::module::ExportTable<32> sifcmd_exports = {
+PS2_EXPORT_TABLE ps2::module::ExportTable<32> sifcmd_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

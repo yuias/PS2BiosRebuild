@@ -389,7 +389,7 @@ int stopHardTimer(uint32_t timer_id) {
     return 0;
 }
 
-[[gnu::used]] ExportTable<25> timrman_exports = {
+PS2_EXPORT_TABLE ExportTable<25> timrman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

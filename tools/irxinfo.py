@@ -26,7 +26,6 @@ import sys
 PT_LOAD = 1
 PT_IOPMOD = 0x70000080
 SHT_REL = 9
-HI16_RUN_MAX = 8        # IRX-3a: the longest run of HI16 a loader holds
 R_MIPS_32 = 2
 
 EXPORT_MAGIC = 0x41C00000
@@ -159,11 +158,11 @@ def checkModule(irx: Irx) -> list[str]:
     require(e_machine == 8, "IRX-1", f"e_machine is {e_machine}, want 8 (MIPS)")
     require(irx.iopmod_off is not None, "IRX-1", "no PT_IOPMOD segment")
 
-    # IRX-3a: every HI16 is followed by the LO16 it pairs with. The reference's
-    # modules pair one to one; ours may carry further LO16s that share a paired
-    # high half, and short runs of HI16 that share one LO16 (`tools/mkirx.py`
-    # checks they name the same address), so what is required here is the
-    # pairing, not equal counts.
+    # IRX-3b: every HI16 is *immediately* followed by a LO16, because the
+    # reference loader resolves it from the next REL entry without checking
+    # that entry's type. A module may still carry more LO16 than HI16 -- one
+    # `lui` kept live across several accesses to one address -- so what is
+    # required here is the adjacency, not equal counts.
     (shoff,) = struct.unpack_from("<I", d, 32)
     entsize, count, _ = struct.unpack_from("<HHH", d, 46)
     hi = lo = orphans = 0
@@ -176,24 +175,24 @@ def checkModule(irx: Irx) -> list[str]:
                  for k in range(size // 8)]
         hi += kinds.count(5)
         lo += kinds.count(6)
-        run = 0
-        for kind in kinds:
-            if kind == 5:
-                run += 1
-                if run > HI16_RUN_MAX:
-                    orphans += 1
-            elif kind == 6:
-                run = 0
-            else:
-                orphans += run
-                run = 0
-        orphans += run
-    require(orphans == 0, "IRX-3a", f"{orphans} HI16 not followed by a LO16")
+        for index, kind in enumerate(kinds):
+            if kind != 5:
+                continue
+            if index + 1 >= len(kinds) or kinds[index + 1] != 6:
+                orphans += 1
+    require(orphans == 0, "IRX-3b",
+            f"{orphans} HI16 not immediately followed by a LO16")
     require(hi <= lo, "IRX-3a", f"{hi} HI16 against {lo} LO16")
 
     relocated = irx.relocatedWords()
     for t in irx.tables():
         where = f"{t['kind']} {t['tag']!r} @{t['vaddr']:#x}"
+        # IRX-8b: the loader scans the text segment for these and nothing
+        # else, so a table past `text_size` is never found.
+        text_size = (irx.moduleInfo() or {}).get("text")
+        if text_size is not None:
+            require(t["vaddr"] < text_size, "IRX-8b",
+                    f"{where} is past text_size {text_size:#x}")
         require(t["vaddr"] % 4 == 0, "IRX-4b", f"{where} is not word-aligned")
         if t["kind"] == "export":
             entries = irx.exportEntries(t["vaddr"])

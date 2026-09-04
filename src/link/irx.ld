@@ -6,6 +6,12 @@ SECTIONS
 {
     . = 0;
     .text : { *(.text .text.*) }
+    /* The export and import tables the loader looks for. They are part of the
+       text segment, because that is the only region it scans for them
+       (spec/02 IRX-8), and they follow the code so a module's offsets still
+       read as its code. */
+    .iopexport : { *(.iopexport) }
+    .iopimport : { *(.iopimport) }
     .rodata : { *(.rodata .rodata.*) }
     .data : { *(.data .data.*) }
     .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) }

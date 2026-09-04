@@ -1804,7 +1804,7 @@ void *getThreadmanData() {
 
 // --- the tables (IOP-3a) ----------------------------------------------------------
 
-[[gnu::used]] ExportTable<42> thbase_exports = {
+PS2_EXPORT_TABLE ExportTable<42> thbase_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -1857,7 +1857,7 @@ void *getThreadmanData() {
     },
 };
 
-[[gnu::used]] ExportTable<15> thevent_exports = {
+PS2_EXPORT_TABLE ExportTable<15> thevent_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -1883,7 +1883,7 @@ void *getThreadmanData() {
     },
 };
 
-[[gnu::used]] ExportTable<13> thsemap_exports = {
+PS2_EXPORT_TABLE ExportTable<13> thsemap_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -1907,7 +1907,7 @@ void *getThreadmanData() {
     },
 };
 
-[[gnu::used]] ExportTable<13> thmsgbx_exports = {
+PS2_EXPORT_TABLE ExportTable<13> thmsgbx_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

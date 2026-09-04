@@ -53,7 +53,7 @@ int printfImpl(const char *format, ...) {
     return count;
 }
 
-[[gnu::used]] ExportTable<5> stdio_exports = {
+PS2_EXPORT_TABLE ExportTable<5> stdio_exports = {
     ps2::module::kExportMagic,
     0,
     0x0102,

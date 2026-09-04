@@ -20,6 +20,10 @@ namespace ps2::module {
 
 inline constexpr uint32_t kExportMagic = 0x41C00000;
 
+// Where an export table goes: inside the text segment, next to the import
+// tables, for the reason `PS2_IMPORTS_BEGIN` gives below.
+#define PS2_EXPORT_TABLE [[gnu::used, gnu::section(".iopexport")]]
+
 // IRX-4 and IRX-5: a table of N entries plus the zero terminator (IRX-5b).
 // Kept mutable on purpose: the loader overwrites `magic` with the registry
 // link when it registers the table (IRX-4c).
@@ -54,13 +58,16 @@ template <typename F>
 //     PS2_IMPORTS_END()
 //
 // The tag is the eight bytes of IRX-4a, so a shorter name carries its own
-// NUL padding. The table lives in `.data`, like the assembly it stands in
-// for: IOP memory carries no execute permission to lose. `.set noreorder`
+// NUL padding. The table lives in `.text`, where the reference's does and
+// where it has to: the loader binds imports by scanning the text segment
+// alone (IRX-8), so a table past `text_size` is never seen and every stub in
+// it stays a silent `jr $ra`. IOP memory carries no execute permission to
+// lose, so a table of data among the code costs nothing. `.set noreorder`
 // keeps the assembler from touching the delay slot -- the `addiu` must be
 // the literal next word, ordinal and all. Each macro is one top-level `asm`
 // statement, and the compiler emits them in source order.
 #define PS2_IMPORTS_BEGIN(tag8, version)                                  \
-    asm(".pushsection .data,\"aw\"\n"                                     \
+    asm(".pushsection .iopimport,\"ax\"\n"                                     \
         ".set noreorder\n"                                                \
         ".align 2\n"                                                      \
         ".word 0x41E00000\n"                                              \
@@ -72,7 +79,11 @@ template <typename F>
     asm(".globl " #symbol "\n" #symbol ":\n"                              \
         "jr $ra\n"                                                        \
         "addiu $zero, $zero, " #ordinal "\n");
+// IRX-8: the terminator is a whole zero stub, not one zero word -- the
+// reference's binder reads the word after it as well and stops only when
+// both are zero.
 #define PS2_IMPORTS_END()                                                 \
     asm(".word 0\n"                                                       \
+        ".word 0\n"                                                       \
         ".set reorder\n"                                                  \
         ".popsection\n");

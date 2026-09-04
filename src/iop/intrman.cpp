@@ -324,7 +324,7 @@ int unimplemented() {
 extern "C" void _intrman_invoke_in_kmode();
 
 // IRX-4: the export table, IOP-2a's ordinals.
-[[gnu::used]] ExportTable<32> intrman_exports = {
+PS2_EXPORT_TABLE ExportTable<32> intrman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0102,

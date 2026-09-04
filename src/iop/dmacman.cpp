@@ -126,7 +126,7 @@ int unimplemented() {
     return -1;
 }
 
-[[gnu::used]] ExportTable<36> dmacman_exports = {
+PS2_EXPORT_TABLE ExportTable<36> dmacman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0102,

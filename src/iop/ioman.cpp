@@ -320,7 +320,7 @@ int delDrv(const char *name) {
     return 0;                                   // IOP-4a: always 0
 }
 
-[[gnu::used]] ExportTable<25> ioman_exports = {
+PS2_EXPORT_TABLE ExportTable<25> ioman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0102,

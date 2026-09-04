@@ -195,7 +195,7 @@ uint32_t *getTable() {
 }
 
 // IRX-4: the export table.
-[[gnu::used]] ExportTable<9> excepman_exports = {
+PS2_EXPORT_TABLE ExportTable<9> excepman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

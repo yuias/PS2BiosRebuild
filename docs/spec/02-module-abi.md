@@ -73,32 +73,40 @@ carry from the rebased low half is applied to the high half. This is the only
 non-mechanical part of the fixup. In the reference archive the two occur in
 equal counts — one pair per address — in all 57 modules.
 
-*Deviation, our modules only:* a compiler that keeps one `lui` live across
-several accesses to the same address emits one `HI16` followed by several
-`LO16`, so our modules may carry more `LO16` than `HI16`; and one that hoists
-several `lui` of one address apart from their uses emits a short run of `HI16`
-followed by the one `LO16` the object writer paired them all with, the pairing
-a static link resolves them by. The first is sound only when every `LO16`
-sharing a high half names the same address — one high half cannot serve two
-addresses once a load-time delta is added — and `tools/mkirx.py` refuses a
-module where it cannot see that: a `HI16` must be followed, after at most
-eight other `HI16`, by a `LO16` of its symbol, and a `LO16` with no `HI16`
-before it must repeat, symbol and low half, one that was paired. A loader
-holds the run of `HI16` rather than one and applies the pairing `LO16`'s carry
-to every one of it, then **drops the run**: it has been consumed. A `LO16`
-that finds nothing held is one of the repeats above, so the `lui` it belongs
-to already carries the right high half from the pairing that did happen, and
-only this instruction's own low half is rebased -- no held `HI16` is touched.
+**IRX-3b:** The pairing is **positional**, and strictly so. The reference
+loader resolves a `HI16` by reading the *next* `REL` entry, taking the low
+half of the word that entry points at as its partner, and never checking that
+entry's type. So a `HI16` must be immediately followed by a `LO16` of its own
+address: a run of two `HI16` resolves the first against the second `lui`'s
+immediate and misrelocates it, silently, at every load address but the link
+address. Nothing else in the relocation stream reads a neighbour -- `LO16`,
+`R_MIPS_32` and `R_MIPS_26` each correct their own word from the load delta
+alone -- so the order of everything else is free, and a `LO16` with no `HI16`
+before it is well defined: its own low half is rebased and no high half is
+touched.
 
-*A loader that keeps the run instead, and lets each further `LO16` rewrite it,
+*Deviation, our modules only:* our object writer does not emit that stream. It
+groups a symbol's `HI16` together and leaves the `LO16` they pair with
+elsewhere, so a run of two `HI16` and a `LO16` further along is ordinary
+output, as is one `HI16` with several `LO16` where one `lui` was kept live
+across several accesses to the same address. The instructions are in the right
+order in the text; only the fixups are grouped. `tools/mkirx.py` therefore
+re-orders them into strict pairs as it writes the module: each `HI16` takes
+its own `LO16`, chosen to carry the symbol and low half of the one the object
+writer paired its run with, so every `HI16` resolves to the address it
+resolved to before, and each `LO16` is still applied exactly once. A `HI16`
+with no `LO16` left to take is refused -- nothing can make that one portable.
+`tools/irxinfo.py --check` requires the resulting pairing rather than equal
+counts.
+
+*A loader that holds a run of `HI16` and lets each further `LO16` rewrite it
 is wrong and fails in a way that hides.* When two pairings interleave -- a
 `lui`, its `LO16`, a second `lui`, its `LO16`, then a repeat of the first
 address -- the repeat rewrites the **second** `lui` with the first address's
 high half. The two high halves differ only when the two addresses' low halves
 carry differently, which depends on where the module was loaded, so the module
 runs correctly until something is inserted ahead of it on the boot list. This
-project shipped that loader and found it exactly that way. `tools/irxinfo.py --check` requires the pairing and no
-longer equal counts.
+project shipped that loader and found it exactly that way.
 
 ## IRX-4: Library table header
 
@@ -194,7 +202,8 @@ importers expect them, but is free to fill them with a return stub.
 
 ## IRX-8: Import tables
 
-Entries are 8-byte stubs, two instructions each, terminated by a zero word:
+Entries are 8-byte stubs, two instructions each, terminated by a zero stub --
+two zero words, not one:
 
 ```
 jr    $ra                      # 0x03E00008
@@ -202,7 +211,16 @@ addiu $zero, $zero, <ordinal>  # 0x2400xxxx: opcode 9, ordinal in the low 16 bit
 ```
 
 **IRX-8a:** Unbound, a stub returns harmlessly. An unresolved import is
-survivable rather than fatal, and a build must preserve that property.
+survivable rather than fatal for the stub itself; the module that carries it
+is not so lucky, since a loader that finds no exporter for a table refuses the
+whole module.
+
+**IRX-8b:** An import table lives inside the **text** segment, and so does an
+export table. A loader finds import tables by scanning `[base, base +
+text_size)` for the magic of IRX-4, and nothing outside that range is ever
+looked at: a table placed past `text_size` is never bound, and every stub in
+it stays a silent `jr $ra`. All 57 reference modules place both kinds of table
+at the end of their text.
 
 ## IRX-9: Binding
 

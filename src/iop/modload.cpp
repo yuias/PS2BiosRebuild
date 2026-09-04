@@ -344,7 +344,7 @@ int reBootStart(const char *argument, uint32_t mode) {
         reinterpret_cast<uint32_t>(argument), mode));
 }
 
-[[gnu::used]] ExportTable<16> modload_exports = {
+PS2_EXPORT_TABLE ExportTable<16> modload_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

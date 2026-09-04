@@ -951,7 +951,7 @@ int moduleEntry() {
     return registerLibraries();
 }
 
-[[gnu::used]] ExportTable<42> sysclib_exports = {
+PS2_EXPORT_TABLE ExportTable<42> sysclib_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,
@@ -1010,7 +1010,7 @@ int moduleEntry() {
 // stored 1.02 -- so that `LOADCORE`'s "strictly greater minor" rule lets
 // `STDIO`'s later registration take over rather than being rejected as a
 // same-or-lower generation of the same library.
-[[gnu::used]] ExportTable<14> stdio_exports = {
+PS2_EXPORT_TABLE ExportTable<14> stdio_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

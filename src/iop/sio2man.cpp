@@ -264,7 +264,7 @@ int deinit() {
 
 extern "C" int _module_start(int, char **);
 
-[[gnu::used]] ExportTable<26> sio2man_exports = {
+PS2_EXPORT_TABLE ExportTable<26> sio2man_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

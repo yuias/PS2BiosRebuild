@@ -739,6 +739,22 @@ to find something the module had been announcing all along. It should become
 a build option before the image is presented as a faithful replacement --
 the deviation is small and one-way, but it is real.
 
+**The export and import tables live in the text segment, and the fixups are
+re-ordered to pair strictly.** Two things a merged kernel's loader requires
+that ours did not (IRX-3b, IRX-8b), both found by reading the `LOADCORE` 2.06
+a title's `IOPRP` carries rather than by anything failing. It binds imports by
+scanning `[base, base + text_size)` for the table magic, and every table of
+ours began exactly at `text_size`, in `.data` -- so under that loader not one
+import of ours would have been bound, and every stub would have stayed a
+silent `jr $ra`. And it resolves a `HI16` from the next `REL` entry without
+checking that entry's type, where ours holds a queue; our object writer groups
+a symbol's `HI16` together, so seven modules carried a run that loader would
+have misrelocated. The tables now go to `.iopexport`/`.iopimport`, which
+`src/link/irx.ld` places inside text after the code, and `tools/mkirx.py`
+re-orders each module's fixups into strict `HI16`/`LO16` pairs as it writes
+them -- sound because only `HI16` reads a neighbour. Neither change moves an
+instruction; the address sweep at three bases is byte-identical.
+
 **`IOPTTY` keeps that console across a title's reboot -- the same deviation,
 one module further.** A title's reboot merges its own modules over ours
 (`docs/analysis/45`), and both `STDIO` and `IOMAN` come from the disc: the

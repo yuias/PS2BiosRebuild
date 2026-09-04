@@ -303,7 +303,7 @@ int sifSetSmFlag(uint32_t bits) {
     return 0;
 }
 
-[[gnu::used]] ps2::module::ExportTable<36> sifman_exports = {
+PS2_EXPORT_TABLE ps2::module::ExportTable<36> sifman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,

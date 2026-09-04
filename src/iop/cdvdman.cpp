@@ -655,7 +655,7 @@ int exportStub() {
     return 0;
 }
 
-[[gnu::used]] ExportTable<62> cdvdman_exports = {
+PS2_EXPORT_TABLE ExportTable<62> cdvdman_exports = {
     ps2::module::kExportMagic,
     0,
     0x0101,                          // IRX-2b: the reference exports cdvdman v1.01

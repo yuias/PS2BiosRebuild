@@ -152,7 +152,7 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
 // `used`: nothing in this translation unit takes its address -- the loader
 // finds it by scanning for the magic word (IRX-4b), not through a reference
 // -- so an optimiser that only sees the call graph would otherwise drop it.
-[[gnu::used]] ExportTable sysmem_exports = {
+[[gnu::used, gnu::section(".iopexport")]] ExportTable sysmem_exports = {
     kExportMagic,
     0,                                  // head of the bound-client list
     0x0101,                             // version 1.01, BCD

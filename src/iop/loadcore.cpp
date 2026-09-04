@@ -394,7 +394,7 @@ template <typename F>
 // `used`: nothing in this translation unit takes its address -- the loader
 // finds it by scanning for the magic word (IRX-4b), not through a reference
 // -- so an optimiser that only sees the call graph would otherwise drop it.
-[[gnu::used]] ExportTable loadcore_exports = {
+[[gnu::used, gnu::section(".iopexport")]] ExportTable loadcore_exports = {
     kExportMagic,
     0,
     0x0101,                             // version 1.01, BCD
@@ -440,13 +440,13 @@ template <typename F>
 // a jump (IRX-9a). That exact encoding is one of the few things this project
 // keeps as raw instruction words rather than C++ (docs/implementation.md
 // "What is written in C++, and what cannot be"), so it stays a small
-// top-level `asm` block instead of a struct literal. It lives in `.data`,
-// like the assembly it replaces: IOP memory carries no execute permission to
-// lose, and IRX-8 does not ask for any. `.set noreorder` keeps the assembler
+// top-level `asm` block instead of a struct literal. It lives in the text
+// segment, where IRX-8's scan is the only thing that will ever find it.
+// `.set noreorder` keeps the assembler
 // from doing anything clever with the branch delay slot -- the `addiu` must
 // be the literal next word, ordinal and all.
 asm(
-    ".pushsection .data,\"aw\"\n"
+    ".pushsection .iopimport,\"ax\"\n"
     ".set noreorder\n"
     ".align 2\n"
     ".globl _sysmem_imports\n"
@@ -464,7 +464,8 @@ asm(
     "_import_sysmem_release:\n"
     "jr $ra\n"
     "addiu $zero, $zero, 5\n"           // ordinal 5: release
-    ".word 0\n"                         // the terminator
+    ".word 0\n"                         // IRX-8: a whole zero stub,
+    ".word 0\n"                         // not one zero word
     ".set reorder\n"
     ".popsection\n"
 );
