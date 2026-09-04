@@ -194,14 +194,33 @@ user-registered RPC servers share one receive path without a lookup by value.
 
 | n | name | installed by (IOP) | body |
 |---|---|---|---|
-| 0 | CHANGE_SADDR | `SIFCMD` module entry (system table, not individually traced) | not traced — **unresolved** |
+| 0 | CHANGE_SADDR | `SIFCMD` module entry | not traced — **unresolved** |
 | 1 | SET_SREG | ditto | writes `sreg[index] = value` via `sceSifSetSreg` — inferred from `sceSifSetSreg`'s own body (`0x40`) matching `SifCmdSRegData_t{header,index,value}` [header] exactly |
 | 2 | INIT_CMD | ditto | receives EE's receive-buffer address; replies `SET_SREG(0,1)` — inferred (§1 step 5/6), not directly traced |
-| 3 | RESET_CMD | ditto | not traced — **unresolved**; header shape is `SifCmdResetData_t{header,arglen,mode,arg[80]}` [header], matches `REBOOT`'s role (doc 12) |
+| 3 | RESET_CMD | **nobody, at boot** — the slot is empty until `REBOOT` claims it through `sceSifAddCmdHandler` (doc 45 §1) | header shape is `SifCmdResetData_t{header,arglen,mode,arg[80]}` [header] |
 | 8 | RPC_END | **client only** (registered by `sceSifInitRpc`, both platforms) | client's completion signal — see §3 |
 | 9 | RPC_BIND | `SIFCMD` `0xc48` (registered by `sceSifInitRpc` at `0x768`) | see §3 |
 | 0xA | RPC_CALL | `SIFCMD` `0xe08` (registered at `0x780`) | see §3 |
 | 0xC | RPC_RDATA | `SIFCMD` `0xa68` (registered at `0x798`) | see §3 |
+
+**The module entry fills three slots, not four, and an empty slot is silent.**
+Read out of both builds: the entry's installation run (`IOPRP310.IMG`'s
+`SIFCMD` 2.08 at `0x208`-`0x264`) writes handlers for 0, 1 and 2 only. The
+receive handler resolves a bit-31 `cid` by masking off bit 31 and rejecting an
+index of `0x20` or more, then loads the slot's function word and, when it is
+zero, **returns without replying and without complaining** (2.08's `0x794` to
+`0x7f8`; the same shape at `0x63c`-`0x698` in `rom0`'s 1.01, whose entries are
+eight bytes rather than twelve). So a system command nobody has claimed is not
+an error on this bus — it is a packet whose only effect is that it arrived.
+
+**Which is exactly what `cid 0x80000004` is.** The EE SDK's `sceSifSetDma`
+wrapper appends a 16-byte packet with that `cid` — `psize 0x10`, no payload,
+mode `INT_O|ERT` — to the end of every raw DMA run a program makes, addressed
+to the IOP's command buffer. Its whole purpose is to end the run on a block
+that raises the receiving channel's completion, so `SIFCMD` runs and re-arms.
+No IOP module registers slot 4, in `rom0`, in a title's `IOPRP` image or on a
+disc; none is meant to. A log full of it is a program streaming data, not a
+command being retried.
 
 The IOP's reply path is `isceSifSendCmd`/`sceSifSendCmd` → `_SifSendCmd`
 (`0x3e4`) → (unexported helper at `0x1660`, not traced past the stub table —
@@ -453,9 +472,10 @@ To satisfy `SifInitRpc` on an SDK-built EE client:
 ## 5. Unresolved
 
 - Exact writer of `SIF_STAT_CMDINIT` (`0x20000`) on the IOP side, and the
-  handler bodies for `SIF_CMD_CHANGE_SADDR` (0) / `SIF_CMD_RESET_CMD` (3),
-  were not located in the traced range of `SIFCMD`'s entry function (only
-  their table slots and, for RESET_CMD, the header's struct shape).
+  handler body for `SIF_CMD_CHANGE_SADDR` (0), were not located in the traced
+  range of `SIFCMD`'s entry function — only the slot it is installed in.
+  `SIF_CMD_RESET_CMD` (3) is off this list: the entry installs no handler for
+  it at all (§ "The module entry fills three slots").
 - The exact body of `SIF_CMD_INIT_CMD`'s IOP-side handler (who parses the
   EE's receive-buffer address, what the other 3 extra words carry) was not
   directly located — inferred from the client's send parameters (§1 step 5)
