@@ -210,12 +210,24 @@ extern "C" {
 // IRX-12: entry(argc, argv, 0, module_record), with the module's own $gp
 // installed. `return & 3` decides residency -- clear keeps the module -- and
 // a memory manager stays.
-int _module_start(int, char **) {
+// BOOT-8c: the entry takes the RAM size **in bytes** and answers the address
+// the boot loader should place the next module at -- the reference computes
+// both from its own image, putting its heap immediately above itself and
+// answering the base of that heap's first free block.
+//
+// Ours cannot answer, and says so with `0`: its heap is a fixed window
+// (IRX-15e's deviation, `docs/implementation.md`), not the space above its
+// own image, so the address it would name is not a placement address at all.
+// A `0` tells the boot loader to keep its own arithmetic. The RAM size is
+// honoured: a machine with less than this window would otherwise have a heap
+// running off the end of it.
+int _module_start(int ram_size_byte, char **) {
+    const auto ram_top = static_cast<uint32_t>(ram_size_byte) & ~uint32_t{0xFF};
     low_cursor = kHeapStart;
-    high_cursor = kHeapEnd;
+    high_cursor = ram_top != 0 && ram_top < kHeapEnd ? ram_top : kHeapEnd;
     low_last = 0;
     high_last = 0;
-    return 0;                          // resident
+    return 0;                          // resident, and no placement to offer
 }
 
 }  // extern "C"

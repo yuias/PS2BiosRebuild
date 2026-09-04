@@ -232,9 +232,21 @@ extern "C" {
             // the byte code the boot block was given: the reference sizes its
             // heap's top from it, and a zero there leaves that module marking
             // itself uninitialised and refusing every allocation afterwards.
-            (void)callEntry(loaded.entry, loaded.gp, ram_size_byte << 20,
-                            nullptr, loaded.record);
+            // BOOT-8c: and what it answers is where the next module goes --
+            // the reference's `SYSMEM` puts its heap above its own image and
+            // names that heap's first free block. Ours has a fixed heap and
+            // answers 0, which leaves the arithmetic here; the `SYSMEM` a
+            // title's image supplies answers for itself, and this is the
+            // number that has to be used then.
+            const uint32_t placement = callEntry(
+                loaded.entry, loaded.gp, ram_size_byte << 20, nullptr,
+                loaded.record);
             sysmem_base = module_base;
+            if (placement != 0) {
+                running_record = placement;
+                bootListWord(kBlNext) = running_record;
+                continue;
+            }
         }
         running_record = loaded.next_base;
         bootListWord(kBlNext) = running_record;

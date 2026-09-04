@@ -442,6 +442,16 @@ touches it. Ours is a word of low RAM, because `src/iop/loader.hpp` is shared
 between the boot block and `LOADCORE` and the boot block binds the two modules
 it places before `LOADCORE` runs.
 
+**`SYSMEM`'s entry answers `0` where the reference answers a placement
+address.** BOOT-8c: the entry takes RAM in bytes and returns where the boot
+loader should put the next module, which on the reference is the base of its
+heap's first free block -- the heap starting immediately above `SYSMEM`'s own
+image. Ours has a fixed heap window instead (IRX-15e's deviation below), so
+the address it could name is not a placement address, and it says so with `0`;
+the boot block keeps its own arithmetic when it sees one. The number is used
+when it is non-zero, which is the case that matters: after a title's reboot
+the `SYSMEM` being placed is the disc's, and it answers for itself.
+
 **A module's export table is at its offset zero.** `src/link/irx.ld` puts
 `.iopexport` ahead of the code for every module, where the reference only does
 it for `SYSMEM`. It has to be true of `SYSMEM`, because BOOT-8c gives the
