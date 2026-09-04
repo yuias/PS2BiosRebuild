@@ -125,10 +125,10 @@ reference and the reason for it.
 | --- | --- |
 | Build system | **CMake + Ninja + LLVM** — no cross-gcc needed; C++26, assembly only where the machine requires it |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
-| `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list and loads modules from it |
+| `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list, places `SYSMEM` and `LOADCORE`, and hands the rest to `LOADCORE` with BOOT-8c's block; `LOADCORE` loads them and publishes the boot records of BOOT-8 |
 | IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
-| EE handshake (BOOT-10) | **built** — `EESYNC` and the kernel's `sif.S` release each other |
+| EE handshake (BOOT-10) | **built** — `SIFMAN` ordinal 5 and the kernel's `sif.S` release each other, and `EESYNC`, last on the list, tells the EE the IOP is listening |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
 | The disc and the EE's file service (IOP-8, IOP-9) | **built and exercised against a retail disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC, and `CDVDFSV`'s five RPC services, of which `sceCdInit`, `sceCdSearchFile` and `sceCdDiskReady` are served in full and the two `fno` tables only as deep as `CDVDMAN` goes (`docs/implementation.md`) |
 | IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
@@ -642,7 +642,7 @@ with `SIO2MAN` loaded from the archive through `IOMAN`/`ROMDRV`, relocated
 and linked by `LOADCORE`, started by `MODLOAD` on `LOADFILE`'s thread, and
 parked on its event flag. What it took was the IOP kernel of `spec/06` —
 `EXCEPMAN`, `INTRMAN`, `THREADMAN`, `DMACMAN`, `IOMAN`, `MODLOAD`, `ROMDRV`,
-`STDIO`, `LOADFILE`, the `sifcmd` library in `EESYNC` — from four analysis
+`STDIO`, `LOADFILE`, `SIFMAN` and `SIFCMD` — from four analysis
 documents (`37`–`40`) written for it, and one toolchain fault found by it
 (`mkirx` sized a module's bss short; `docs/implementation.md`). The IOP now
 takes interrupts and switches threads from them, so §7's busy-bit row is
