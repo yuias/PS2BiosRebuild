@@ -923,12 +923,14 @@ first-pair bit preservation and the POST side effect are all implemented.
 
 ## What is not built yet
 
-`ninja -C build check` prints this list at the end of every successful run, so
-it cannot quietly go stale. This copy is the gate's own text:
+`ninja -C build check` prints this list at the end of every successful run.
+This copy is the gate's own text, and **the gate is the authority**: the two
+counts drifted between 2026-08-22 and 2026-09-05 without anyone noticing,
+because nothing compares them. Read the run, not this paragraph.
 
-- The rest of the boot list: 15 of its twenty-nine modules are built
+- The rest of the boot list: 24 of its twenty-nine modules are built
 - Supersession (spec/02 IRX-11): registration compares versions, but nothing yet inherits a superseded library's clients
-- 57 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
+- 46 of the 125 syscall slots: they resolve to the reporter of EE-8d rather than to their own handlers (spec/05 SYS-1)
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
 - The modules a title loads on request: SIO2MAN is the one the archive holds; PADMAN, MCMAN and the rest are not built
 - EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); the reference's own switches and its KELF path (docs/analysis/41 §3) are not parsed
