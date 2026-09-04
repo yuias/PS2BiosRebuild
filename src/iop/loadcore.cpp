@@ -253,11 +253,17 @@ void buildBootRecords() {
 // point is still the caller's, put there when the loader entered its module.
 // The end-of-list pass installs it again for the call, since by then the
 // register belongs to whoever ran last.
-constexpr uint32_t kBootupCallbacks = 4;
+constexpr uint32_t kBootupCallbacks = 8;
+constexpr uint32_t kBootupPasses = 4;
 
+// BOOT-8f: the pass a callback runs in is carried in the low two bits of the
+// stored function pointer, which are free because a function is word-aligned.
+// That is why the registration takes a priority and the pass loop reads none:
+// the two are the same field.
 struct BootupCallback {
-    void (*function)();
+    uint32_t function;                 // the entry point, with the pass in bits 0-1
     uint32_t gp;
+    void *argument;
 };
 
 BootupCallback bootup_callbacks[kBootupCallbacks];
@@ -269,12 +275,16 @@ uint32_t bootup_callback_count;
     return gp;
 }
 
-[[nodiscard]] int addBootupCallback(void (*function)()) {
+[[nodiscard]] int addBootupCallback(void (*function)(), int priority,
+                                    void *argument) {
     if (function == nullptr || bootup_callback_count == kBootupCallbacks) {
         return -1;
     }
-    bootup_callbacks[bootup_callback_count].function = function;
+    const auto packed = (reinterpret_cast<uint32_t>(function) & ~uint32_t{3})
+                        | (static_cast<uint32_t>(priority) & 3);
+    bootup_callbacks[bootup_callback_count].function = packed;
     bootup_callbacks[bootup_callback_count].gp = currentGp();
+    bootup_callbacks[bootup_callback_count].argument = argument;
     bootup_callback_count++;
     return 0;
 }
@@ -519,20 +529,39 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
             for (;;) {                 // BOOT-9a: a module that will not load
             }
         }
-        (void)ps2::loader::callEntry(loaded.entry, loaded.gp, 0, nullptr,
-                                     loaded.record);
+        // BOOT-8e: the answer is read twice. Its low two bits decide
+        // residency -- 1 asks to be unloaded, which a bump-placing loader
+        // cannot honour and records rather than acts on -- and everything
+        // above them is a function pointer to run once the list is done.
+        const uint32_t answer = ps2::loader::callEntry(
+            loaded.entry, loaded.gp, 0, nullptr, loaded.record);
+        if ((answer & ~uint32_t{3}) != 0) {
+            (void)addBootupCallback(
+                reinterpret_cast<void (*)()>(answer & ~uint32_t{3}), 2,
+                nullptr);
+        }
         running_base = loaded.next_base;
     }
     bootListWord(kBlNext) = running_base;
 
-    // The end-of-list pass: whatever asked to hear that the list is done,
-    // each with the `$gp` it registered under. `callEntry` is the invoke that
-    // installs one and puts this module's back; a callback takes no
-    // arguments, so the three it would pass are zero.
-    for (uint32_t k = 0; k < bootup_callback_count; k++) {
-        (void)ps2::loader::callEntry(
-            reinterpret_cast<uint32_t>(bootup_callbacks[k].function),
-            bootup_callbacks[k].gp, 0, nullptr, 0);
+    // BOOT-8f: four passes over the callbacks, each in registration order and
+    // each calling only the ones registered for that pass. `callEntry` is the
+    // invoke that installs the registrant's `$gp` and puts this module's back.
+    for (uint32_t pass = 0; pass < kBootupPasses; pass++) {
+        for (uint32_t k = 0; k < bootup_callback_count; k++) {
+            const uint32_t packed = bootup_callbacks[k].function;
+            if ((packed & 3) != pass) {
+                continue;
+            }
+            // The reference passes its own callback cursor in `$a0` and 1 in
+            // `$a1`; ours passes the argument the registration was given,
+            // which is what a callback here could actually use. Neither of
+            // ours reads either.
+            (void)ps2::loader::callEntry(
+                packed & ~uint32_t{3}, bootup_callbacks[k].gp,
+                reinterpret_cast<uint32_t>(bootup_callbacks[k].argument),
+                reinterpret_cast<char **>(1), 0);
+        }
     }
 
     return 0;                          // resident; `IOPBOOT` sleeps its thread

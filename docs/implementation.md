@@ -739,6 +739,21 @@ to find something the module had been announcing all along. It should become
 a build option before the image is presented as a faithful replacement --
 the deviation is small and one-way, but it is real.
 
+**A boot-list module's answer is read twice, and the callbacks run in four
+passes.** BOOT-8e and BOOT-8f. The low two bits of what a module's entry
+returns decide residency; everything above them is a function pointer, which
+the loader registers as a post-boot callback. `LOADCORE`'s ordinal 20 takes a
+priority alongside the function and stores the two in one word -- the priority
+in the pointer's low two bits, which are free because a function is
+word-aligned -- and that is the pass the callback runs in, which is why the
+pass loop reads no priority field of its own. `MODLOAD` registers its
+reboot callback in pass 1, where the reference's does.
+
+**A module that asks to be unloaded is not.** A `1` in those low two bits
+means "release my libraries and free my memory", which the reference's loader
+does and ours cannot: modules here are placed by bumping a cursor, so there is
+nothing to give back. No module of ours returns it.
+
 **The export and import tables live in the text segment, and the fixups are
 re-ordered to pair strictly.** Two things a merged kernel's loader requires
 that ours did not (IRX-3b, IRX-8b), both found by reading the `LOADCORE` 2.06

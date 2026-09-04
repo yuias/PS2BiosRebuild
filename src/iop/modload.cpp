@@ -66,7 +66,8 @@ extern "C" {
 uint32_t _import_intrman_invoke_in_kmode(uint32_t function, uint32_t a, uint32_t b,
                                          uint32_t c);
 uint32_t *_import_loadcore_boot_record(uint32_t key);
-int _import_loadcore_add_bootup_callback(void (*function)());
+int _import_loadcore_add_bootup_callback(void (*function)(), int priority,
+                                        void *argument);
 int _import_ioman_open(const char *path, int flags);
 int _import_ioman_close(int fd);
 int _import_ioman_read(int fd, void *buffer, int size);
@@ -406,7 +407,8 @@ int _module_start(int, char **) {
     // intermediate stage of an update reboot, which boot record key 4 names.
     const uint32_t *mode = _import_loadcore_boot_record(kKeyBootMode);
     if (mode != nullptr && (*mode & 0xFF) == kModeUpdateStage) {
-        (void)_import_loadcore_add_bootup_callback(mode2Bootup);
+        // BOOT-8f: pass 1, which is where the reference's MODLOAD registers it.
+        (void)_import_loadcore_add_bootup_callback(mode2Bootup, 1, nullptr);
     }
     return 0;                           // resident
 }
