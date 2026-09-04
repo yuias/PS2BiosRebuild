@@ -469,6 +469,10 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     bootListWord(kBlNext) = running_base;
 
     // The end-of-list pass: whatever asked to hear that the list is done.
+    // These run with *this* module's $gp, which is wrong for any registrant
+    // that has one of its own -- ordinal 20 will have to capture the caller's
+    // $gp and the call go through a `callEntry`-shaped invoke. Nothing
+    // registers one yet, so nothing has hit it.
     for (uint32_t k = 0; k < bootup_callback_count; k++) {
         bootup_callbacks[k]();
     }

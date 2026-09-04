@@ -426,13 +426,16 @@ static void registerExports(uint8_t *start, uint8_t *end) {
         "move  $a1, %4\n\t"
         "move  $a2, $zero\n\t"
         "move  $a3, %5\n\t"
-        "addiu $sp, $sp, -8\n\t"
-        "sw    $gp, 0($sp)\n\t"
+        // o32 reserves 0($sp)..15($sp) for the callee to spill its incoming
+        // arguments into, so the saved $gp goes above that window: an entry
+        // whose prologue stores $a0 would otherwise overwrite it.
+        "addiu $sp, $sp, -24\n\t"
+        "sw    $gp, 16($sp)\n\t"
         "move  $gp, %2\n\t"
         "jalr  %1\n\t"
         "nop\n\t"
-        "lw    $gp, 0($sp)\n\t"
-        "addiu $sp, $sp, 8\n\t"
+        "lw    $gp, 16($sp)\n\t"
+        "addiu $sp, $sp, 24\n\t"
         "move  %0, $v0\n\t"
         : "=r"(result)
         : "r"(entry), "r"(gp), "r"(argc), "r"(argv), "r"(record)
