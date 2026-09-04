@@ -800,16 +800,20 @@ carries no library and no name any source the merge opens uses, so `rom0`'s
 copy is always the candidate that wins. It is on both boot lists, and at a
 cold boot it changes nothing, because no module of ours calls ordinal 14.
 
-**`EnableIntr` masks its argument to the line and ignores the flag bits.**
-IOP-2c2: the reference also sets DICR's or DICR2's low bit for the channel
-when `0x100` or `0x200` is passed, and its `DisableIntr` reports those bits
-back through the out-parameter instead of a pending flag. Implementing all of
-that faithfully **regressed the disc run** -- the title's MIDI and ADX drivers
-stopped one console line earlier and `cid=0x8000000a` fell from 97 to 49 --
-while masking the line alone left every count identical and fixed the merged
-kernel. Which of the extra writes costs the interrupt is not established, so
-the smaller change is what is built; the difference is recorded here rather
-than in the spec, which describes the reference.
+**`EnableIntr`'s bank-1 path does not write DICR2.** IOP-2c2: the reference
+writes that register in *both* DMA paths -- in bank 1 it puts DICR2's own bits
+0..23 back, plus the channel's low bit when `0x200` is passed. That single
+write, and nothing else in the function, **costs an interrupt on PS2e**: with
+it the title's MIDI and ADX drivers stall one console line earlier and
+`cid=0x8000000a` falls from 97 to 49; without it every count is identical to
+the image before this ordinal was touched. Bisected to the line by removing it
+alone from an otherwise faithful implementation. The emulator's own model
+(`bus.rs`, DICR/DICR2) takes bits 0..23 from the write and treats 24..30 as
+write-1-to-clear, so the write should be inert and is not -- **which side is
+wrong is not established**, and it is worth an hour before this is called a
+deviation rather than a workaround. Everything else IOP-2c2 describes is
+built, including the `0x100`/`0x200` flag bits on the paths that keep them and
+`DisableIntr`'s reconstruct-the-argument out-parameter.
 
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's

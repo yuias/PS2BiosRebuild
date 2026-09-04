@@ -39,15 +39,20 @@ constexpr uint32_t kDmaFirst = 0x20;            // bank 1: 0x20..0x26
 constexpr uint32_t kDmaSecondBank = 0x28;       // bank 2: 0x28..0x2D
 constexpr uint32_t kDmaMaster = 1u << 23;       // DICR's master enable
 constexpr uint32_t kDicrFlags = 0x7F000000;     // write 1 to clear
+
 // IOP-2c: `EnableIntr`/`DisableIntr` take the line in the **low byte** and
-// read the rest as flags -- the reference masks with `0xFF` before it
-// compares anything. An implementation that tests the whole word against the
-// line ranges matches nothing and enables nothing, silently: `SIFCMD` 2.08
-// enables SIF1 as `0x22b`, and without this the merged kernel's receive chain
-// is never re-armed and the bus goes quiet the moment the title reboots.
-// The flag bits themselves (`0x100`, `0x200`) are **not** honoured here; see
-// docs/implementation.md.
+// read the rest as flags. The reference masks with `0xFF` before it compares
+// anything, so a caller may pass `line | 0x100 | 0x200`; an implementation
+// that tests the whole word against the line ranges matches nothing and
+// enables nothing, silently. `SIFCMD` 2.08 enables SIF1 as `0x22b`.
 constexpr uint32_t kLineMask = 0xFF;
+constexpr uint32_t kFlagDicr = 0x100;           // also set DICR's low bit for the channel
+constexpr uint32_t kFlagDicr2 = 0x200;          // also set DICR2's
+
+// Bits 24..31 of both DICR registers are acknowledge-on-write, so a write
+// that is configuring rather than acknowledging leaves them zero. This is the
+// reference's own mask, wider than `kDicrFlags` by the master flag at 31.
+constexpr uint32_t kDicrWritable = 0x00FFFFFF;
 constexpr uint32_t kStatusInterrupts = 0x401;   // IEc and Im2, as running code sees them
 
 // IOP-2k: the enable state as it travels *between* modules. A frame holds it
@@ -64,6 +69,7 @@ constexpr uint32_t kStateLive = 0x405;          // the same three, one level up
 constexpr int kOk = 0;
 constexpr int kErrorIllegalIrq = -0x65;         // KE_ILLEGAL_INTRCODE
 constexpr int kErrorAlreadyDisabled = -0x66;    // KE_CPUDI
+constexpr int kErrorNotEnabled = -0x67;         // KE_INTR_NOT_ENABLED
 constexpr int kErrorInUse = -0x68;              // KE_FOUND_HANDLER
 constexpr int kErrorSoftwareInUse = -0x69;
 
@@ -229,52 +235,105 @@ int releaseIntrHandler(uint32_t irq) {
 
 // The two banks' channel bits: DICR's bits 16..22 enable and 24..30 flag
 // channels 0..6; DICR2's the same for 7..13. DICR's bit 23 is the master for
-// both, and I_MASK's DMA line must be open for either to reach the CPU.
+// both, and I_MASK's DMA line must be open for either to reach the CPU. Both
+// registers also carry a low bit per channel -- DICR's at the channel index,
+// DICR2's at index + 7 for the second bank -- which the argument's `0x100`
+// and `0x200` flags select; the reference sets them here and reports them
+// back out of `DisableIntr`.
 int enableIntr(uint32_t line_and_flags) {
-    const uint32_t irq = line_and_flags & kLineMask;
-    uint32_t state;
-    cpuSuspendIntr(&state);
-    if (irq < kDmaFirst) {
-        writeWord(kIntMask, readWord(kIntMask) | (1u << irq));
-    } else if (irq < kDmaSecondBank - 1) {
-        const uint32_t channel = irq - kDmaFirst;
-        writeWord(kDicr, (readWord(kDicr) & ~kDicrFlags) | (1u << (16 + channel)) | kDmaMaster);
-        writeWord(kIntMask, readWord(kIntMask) | (1u << kDmaLine));
-    } else if (irq >= kDmaSecondBank && irq < kLines) {
-        const uint32_t channel = irq - kDmaSecondBank;
-        // DICR's bit 23 is the master for both banks (docs/analysis/37 §2.3).
-        writeWord(kDicr2, (readWord(kDicr2) & ~kDicrFlags) | (1u << (16 + channel)));
-        writeWord(kDicr, (readWord(kDicr) & ~kDicrFlags) | kDmaMaster);
-        writeWord(kIntMask, readWord(kIntMask) | (1u << kDmaLine));
-    }
-    cpuResumeIntr(state);
-    return kOk;
-}
-
-int disableIntr(uint32_t line_and_flags, uint32_t *was_pending) {
-    const uint32_t irq = line_and_flags & kLineMask;
+    const uint32_t line = line_and_flags & kLineMask;
+    const uint32_t flags = line_and_flags & ~kLineMask;
     uint32_t state;
     cpuSuspendIntr(&state);
     int result = kOk;
-    uint32_t pending = 0;
-    if (irq < kDmaFirst) {
-        pending = (readWord(kIntMask) >> irq) & 1;
-        writeWord(kIntMask, readWord(kIntMask) & ~(1u << irq));
-    } else if (irq < kDmaSecondBank - 1) {
-        const uint32_t channel = irq - kDmaFirst;
-        const uint32_t dicr = readWord(kDicr);
-        pending = (dicr >> (24 + channel)) & 1;
-        writeWord(kDicr, (dicr & ~kDicrFlags) & ~(1u << (16 + channel)));
-    } else if (irq >= kDmaSecondBank && irq < kLines) {
-        const uint32_t channel = irq - kDmaSecondBank;
-        const uint32_t dicr2 = readWord(kDicr2);
-        pending = (dicr2 >> (24 + channel)) & 1;
-        writeWord(kDicr2, (dicr2 & ~kDicrFlags) & ~(1u << (16 + channel)));
+    if (line < kDmaFirst) {
+        writeWord(kIntMask, readWord(kIntMask) | (1u << line));
+    } else if (line < kDmaSecondBank - 1) {
+        const uint32_t channel = line - kDmaFirst;
+        const uint32_t keep = kDicrWritable & ~(1u << channel);
+        uint32_t bits = (1u << (16 + channel)) | kDmaMaster;
+        if ((flags & kFlagDicr) != 0) {
+            bits |= 1u << channel;
+        }
+        writeWord(kDicr, (readWord(kDicr) & keep) | bits);
+        // The reference writes DICR2 here too -- its own bits 0..23 back, plus
+        // the channel's low bit when `0x200` is passed. That one write is left
+        // out: on PS2e it costs an interrupt, and the title's MIDI and ADX
+        // drivers stall with `cid=0x8000000a` down from 97 to 49. Bisected to
+        // this line alone; docs/implementation.md records it.
+        writeWord(kIntMask, readWord(kIntMask) | (1u << kDmaLine));
+    } else if (line >= kDmaSecondBank && line < kLines) {
+        const uint32_t channel = line - kDmaSecondBank;
+        const uint32_t low = channel + 7;       // DICR2's low bit for this channel
+        const uint32_t keep = kDicrWritable & ~(1u << low);
+        uint32_t bits = 1u << (16 + channel);
+        if ((flags & kFlagDicr2) != 0) {
+            bits |= 1u << low;
+        }
+        writeWord(kDicr2, (readWord(kDicr2) & keep) | bits);
+        // DICR's bit 23 is the master for both banks (docs/analysis/37 §2.3).
+        writeWord(kDicr, (readWord(kDicr) & kDicrWritable) | kDmaMaster);
+        writeWord(kIntMask, readWord(kIntMask) | (1u << kDmaLine));
     } else {
         result = kErrorIllegalIrq;
     }
-    if (was_pending != nullptr) {
-        *was_pending = pending;
+    cpuResumeIntr(state);
+    return result;
+}
+
+// The out-parameter is **not** a pending flag: the reference reconstructs the
+// argument that would re-enable this line -- the line plus whichever of the
+// two low bits it found set -- and leaves `-0x67` there when it refuses. A
+// line that was not enabled is `-0x67`, not success.
+int disableIntr(uint32_t line_and_flags, uint32_t *previous) {
+    const uint32_t line = line_and_flags & kLineMask;
+    uint32_t state;
+    cpuSuspendIntr(&state);
+    int result = kOk;
+    auto restore = static_cast<uint32_t>(kErrorNotEnabled);
+    if (line < kDmaFirst) {
+        const uint32_t bit = 1u << line;
+        const uint32_t mask = readWord(kIntMask);
+        writeWord(kIntMask, mask & ~bit);
+        if ((mask & bit) == 0) {
+            result = kErrorNotEnabled;
+        } else {
+            restore = line;
+        }
+    } else if (line < kDmaSecondBank - 1) {
+        const uint32_t channel = line - kDmaFirst;
+        const uint32_t enable = 1u << (16 + channel);
+        const uint32_t value = readWord(kDicr) & kDicrWritable;
+        if ((value & enable) == 0) {
+            result = kErrorNotEnabled;
+        } else {
+            restore = line;
+            if (((value >> channel) & 1) != 0) {
+                restore |= kFlagDicr;
+            }
+            if ((readWord(kDicr2) & (1u << channel)) != 0) {
+                restore |= kFlagDicr2;
+            }
+            writeWord(kDicr, value & ~enable);
+        }
+    } else if (line >= kDmaSecondBank && line < kLines) {
+        const uint32_t channel = line - kDmaSecondBank;
+        const uint32_t enable = 1u << (16 + channel);
+        const uint32_t value = readWord(kDicr2) & kDicrWritable;
+        if ((value & enable) == 0) {
+            result = kErrorNotEnabled;
+        } else {
+            restore = line;
+            if (((value >> (channel + 7)) & 1) != 0) {
+                restore |= kFlagDicr2;
+            }
+            writeWord(kDicr2, value & ~enable);
+        }
+    } else {
+        result = kErrorIllegalIrq;
+    }
+    if (previous != nullptr) {
+        *previous = restore;
     }
     cpuResumeIntr(state);
     return result;
