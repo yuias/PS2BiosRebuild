@@ -60,8 +60,8 @@ int main(void) {
     // does not end, and the evidence is a `--dump` of the IOP rather than
     // anything printed here. Having both in one program is what keeps that
     // scouting to a one-line change in the kernel.
-    sio_puts("# reset: SifIopReset(\"rom0:SIO2MAN\")\n");
-    SifIopReset("rom0:SIO2MAN", 0);
+    sio_puts("# reset: SifIopReset(\"rom0:UDNL\")\n");
+    SifIopReset("rom0:UDNL", 0);
     while (!SifIopSync()) {
     }
     sio_puts("# reset: the IOP came back again\n");

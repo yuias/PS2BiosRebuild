@@ -1073,6 +1073,35 @@ and both cost a link error each.
 leaves the code two bytes out of alignment, and the instruction stream decodes
 as garbage from that point on (`unknown opcode 0x3f`). `.align 2` after data.
 
+**`UDNL` resolves the merge and stages nothing.** `docs/analysis/45`
+§"UDNL: the merge core". `src/iop/udnl.cpp` opens every source the reboot's
+command line names, adds `rom0` by the same self-locating scan the boot block
+runs, resolves `IOPBTCONF` across that pool newest-source-first for the load
+*order*, and then picks each name's winner by the archive entry's own
+`EXTINFO` version record — strictly greater wins, so the newest source wins
+ties. Judged against `tools/iopmerge.py`, the same rule in Python: for the
+retail disc's own reboot the two agree name for name, version for version and
+source for source, fifteen names taken from
+`cdrom0:\MODULES\IOPRP310.IMG;1` and seven kept from `rom0`.
+
+**The version compared is the archive's, never the ELF's.** `ROMDRV` is the
+case that punishes the other choice: a module's own version and the version
+of a library it *exports* are independent fields (`spec/02` IRX-2b), and the
+reference's `ROMDRV` is `1.03` exporting `romdrv` `2.01`.
+
+**What it does not do is stage or hand over**, which are also the two steps
+the reference reading did not reach — so they are a reconstruction rather
+than a transcription, and they are worth building against a merge already
+known to be right. Until they exist, a reboot that names an image comes back
+with the modules `rom0` holds, which is what it already did.
+
+**Our boot list names `TIMRMAN` where the reference's names `TIMEMANP` and
+`TIMEMANI`**, so the disc's `TIMEMANI` 2.02 is not picked up: a merge matches
+by name, and that name is not in our list. The `timrman` ordinals a title's
+drivers want past 16 are implemented here directly instead
+(`docs/analysis/49`), so nothing breaks, but the merged kernel differs from
+the reference's by one module and it is this one.
+
 **The second stage of an update reboot runs; the merge at the end of it does
 not.** A reset that names an image is answered by the hand-back above, so the
 only way into this path today is a local change to `REBOOT`'s condition. With

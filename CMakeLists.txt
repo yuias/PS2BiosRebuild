@@ -161,6 +161,10 @@ ps2AddModule(secrman MODULE secrman_for_cex VERSION 1.03
 # Not on the boot list: the first module a program loads on request.
 ps2AddModule(sio2man MODULE sio2man VERSION 1.00
     SOURCES src/iop/sio2man.cpp)
+# Not on the boot list either: MODLOAD loads it by name when a reboot's
+# command line asks for it (docs/analysis/45 §2).
+ps2AddModule(udnl MODULE UDNL VERSION 1.00
+    SOURCES src/iop/udnl.cpp)
 ps2AddModule(sifman MODULE IOP_SIF_manager VERSION 1.01
     SOURCES src/iop/sifman.cpp)
 ps2AddModule(sifcmd MODULE IOP_SIF_rpc_interface VERSION 1.01
@@ -250,7 +254,7 @@ add_custom_command(
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf sysclib.elf
             dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
             sifman.elf sifcmd.elf eesync.elf loadfile.elf
-            cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf
+            cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf udnl.elf
             osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
 
