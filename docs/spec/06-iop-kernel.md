@@ -492,11 +492,19 @@ current), falls back to a ready-queue pick if nothing was pre-selected, and
 returns the target thread's own saved-frame pointer, which INTRMAN then loads
 as the new stack pointer. Every voluntary block/yield point funnels through
 one dedicated reschedule syscall, with up to four caller arguments left in
-`$a0`–`$a3` for the handler; the reference's own case body for that syscall
-was not independently decoded — a rebuild is free to choose its own syscall
-number, but its handler **must** produce the same effect the interrupt-return
-tail already produces (top up saved registers, ask `ShouldPreemptCb`, call
-`NewCtxCb`). Two further invocation shapes exist: **involuntary preemption**
+`$a0`–`$a3` for the handler; its handler **must** produce the same effect the
+interrupt-return tail already produces (top up saved registers, ask
+`ShouldPreemptCb`, call `NewCtxCb`).
+
+**The syscall number is in `$v0`, and the `syscall` instruction carries no
+code.** This is not a rebuild's choice: every caller in the reference loads
+`$v0` and traps bare, so a handler that reads the instruction's 20-bit code
+field sees `0` from all of them and returns having done nothing — silently,
+because a `syscall` that changes no register looks exactly like one that
+worked. `INTRMAN` ordinal 14 is `addiu $v0, $zero, 0xc` then `syscall`, and a
+thread manager reschedules with `$v0 = 0x20`; both numbers are ABI, because a
+thread manager and an interrupt manager from different images have to agree
+on them. `0x20` reschedules and `0xc` is `CpuInvokeInKmode`. Two further invocation shapes exist: **involuntary preemption**
 — a periodic timer interrupt reaching the end of the interrupt-return path
 with the current thread still RUN, comparing the lowest ready priority
 against the running thread's own; and **immediate hand-off on enqueue** — a

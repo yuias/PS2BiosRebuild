@@ -441,7 +441,9 @@ uint32_t *newContext(uint32_t *frame) {
 [[nodiscard]] int32_t switchNow() {
     int32_t answer;
     asm volatile(
-        "syscall 0x20\n\t"
+        // IOP-3h: the number goes in $v0 and the `syscall` carries no code.
+        "addiu $v0, $zero, 0x20\n\t"
+        "syscall\n\t"
         "move %0, $v0"
         : "=r"(answer)
         :

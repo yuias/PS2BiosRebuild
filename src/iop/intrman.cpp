@@ -430,26 +430,32 @@ uint32_t *_intrman_dispatch(uint32_t *frame, uint32_t cause) {
     return resume;
 }
 
-// IOP-3h: the reschedule syscall. Its code field is THREADMAN's number;
-// `0xc` is `CpuInvokeInKmode`, and any other just returns past the
-// instruction.
+// IOP-3h: the kernel's own syscalls. **The number is in `$v0`, not in the
+// instruction's code field** -- every reference caller emits a bare `syscall`
+// after loading `$v0`, which is what `intrman` ordinal 14 is in the reference
+// (`addiu $v0, $zero, 0xc` then `syscall`) and what the reference's thread
+// manager traps with to reschedule (`$v0 = 0x20`). A handler that reads the
+// code field instead sees `0` from all of them and returns without doing
+// anything, silently: that is exactly what the merged kernel's `THREADMAN`
+// 2.03 ran into, leaving its dispatcher never entered and interrupts off for
+// the rest of the boot.
 //
-// `CpuInvokeInKmode` calls $a0 with $a1..$a3 and answers in $v0. What it is
-// for is a caller that needs to run with the exception's own privileges and
-// its own stack -- `MODLOAD`'s reboot core, which never comes back, is the
-// only user in this image (docs/analysis/45 §2).
+// `0x20` reschedules. `0xc` is `CpuInvokeInKmode`: it calls `$a0` with
+// `$a1..$a3` and answers in `$v0`, for a caller that needs the exception's
+// own privileges and stack -- `MODLOAD`'s reboot core, which never comes
+// back, is the only user in this image (docs/analysis/45 §2).
 //
 // **The target runs with this module's `$gp`, not its own.** That is fine
 // for a target that reaches nothing through it, which the reboot core does
 // not; a target that does would need its `$gp` captured at the call and
 // installed here, the way `src/iop/loader.hpp`'s `callEntry` does.
-uint32_t *_intrman_syscall(uint32_t *frame, uint32_t instruction) {
+uint32_t *_intrman_syscall(uint32_t *frame) {
     using ps2::context::slotOf;
-    const uint32_t code = (instruction >> 6) & 0xFFFFF;
-    if (code == 0x20) {
+    const uint32_t number = frame[slotOf(2)];
+    if (number == 0x20) {
         return reschedule(frame);
     }
-    if (code == 0xC) {
+    if (number == 0xC) {
         const auto function = reinterpret_cast<uint32_t (*)(uint32_t, uint32_t, uint32_t)>(
             frame[slotOf(4)]);
         if (function != nullptr) {

@@ -115,27 +115,28 @@ _intrman_syscall_handler:
     push_frame
     lw    $k0, SLOT_EPC($sp)
     nop
-    lw    $a1, 0($k0)                     // the instruction, for its code field
     addiu $k0, $k0, 4
     sw    $k0, SLOT_EPC($sp)
     move  $a0, $sp
     la    $sp, _intrman_stack_top
     addiu $sp, $sp, -16
-    jal   _intrman_syscall                // (frame, instruction) -> frame
+    jal   _intrman_syscall                // (frame) -> frame; the number is $v0
     nop
     move  $k0, $v0
     pop_frame_and_return
 
 // IOP-2d and docs/analysis/37: `intrman` ordinal 14, `CpuInvokeInKmode`, is
-// itself a bare `syscall 0xc` -- the arguments a caller set up are the ones
-// the handler reads out of the frame, so there is nothing between the two but
-// the trap. It must be written here for that reason: a compiler would build a
-// prologue, and the frame would then hold its registers rather than the
-// caller's.
+// the number in `$v0` and a bare `syscall` -- IOP-3h, and instruction for
+// instruction what the reference's is. The arguments a caller set up are the
+// ones the handler reads out of the frame, so there is nothing between the
+// two but the trap. It must be written here for that reason: a compiler would
+// build a prologue, and the frame would then hold its registers rather than
+// the caller's.
     .text
     .globl _intrman_invoke_in_kmode
 _intrman_invoke_in_kmode:
-    syscall 0xc
+    addiu $v0, $zero, 0xc
+    syscall
     jr    $ra
     nop
 
