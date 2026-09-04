@@ -213,8 +213,14 @@ exception's own stack and returns to `EPC + 4`.
 
 **IOP-2k2 — the reschedule syscall's three arguments.** `syscall 0x20` is
 every voluntary switch, and its handler installs three caller registers into
-the frame it builds before calling `NewCtxCb` — `ShouldPreemptCb` is skipped,
-because the caller has already decided:
+the frame it builds before calling `NewCtxCb`. **`ShouldPreemptCb` is skipped
+and so is the tag promotion**, because the caller has already decided: the
+handler's tail is a jump straight to the `NewCtxCb` call, past both. Read at
+the addresses — `SetNewCtxCb` (ordinal 28) stores its callback at `+0x15a0`
+and `SetShouldPreemptCb` (ordinal 30) at `+0x15a4`; the interrupt path calls
+`+0x15a4` first and returns early if it answers `0`, then promotes, then calls
+`+0x15a0` and takes the frame it returns; the syscall's `+0x1400` ends `j` to
+that last call alone. The three arguments:
 
 | register | where it goes | meaning |
 | --- | --- | --- |
@@ -569,10 +575,11 @@ returns the target thread's own saved-frame pointer, which INTRMAN then loads
 as the new stack pointer. The frame both hooks pass is IOP-2e2's, and a thread
 manager primes a fresh one at those offsets: it is the interface between the
 two modules, and they need not come from the same image. Every voluntary block/yield point funnels through
-one dedicated reschedule syscall, with up to four caller arguments left in
-`$a0`–`$a3` for the handler; its handler **must** produce the same effect the
-interrupt-return tail already produces (top up saved registers, ask
-`ShouldPreemptCb`, call `NewCtxCb`).
+one dedicated reschedule syscall, whose three caller arguments are IOP-2k2's.
+Its handler does **not** reproduce the interrupt-return tail: it neither tops
+up the saved registers nor asks `ShouldPreemptCb`, and calls `NewCtxCb`
+directly — a caller that traps deliberately has already made the decision the
+predicate exists to make, and has no caller-saved register worth keeping.
 
 **The syscall number is in `$v0`, and the `syscall` instruction carries no
 code.** This is not a rebuild's choice: every caller in the reference loads
