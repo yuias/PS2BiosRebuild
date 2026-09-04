@@ -180,9 +180,9 @@ than asserted. (The `0x4` came back in `$v0` from an earlier stub encoding
 that put the ordinal there; the reference's stubs, and ours now, encode it in
 the `$zero`-targeted `addiu` — the word an emulator's IOP HLE looks for.)
 
-**And the two processors meet.** `EESYNC` is last in the boot list and does
-nothing but wait for the EE; the kernel's `sif.S` raises the flag it is waiting
-for. Run together, each releases the other:
+**And the two processors meet.** `SIFCMD`'s entry does nothing but wait for
+the EE, and `EESYNC`, last in the boot list, raises the bit that tells the EE
+the IOP is listening; the kernel's `sif.S` raises the flag `SIFCMD` waits for. Run together, each releases the other:
 
 ```sh
 python3 tools/ps2sim.py build/rom.bin --traffic
@@ -314,7 +314,7 @@ the thread runs, signals and exits, and `WaitSema` comes back —
 brings the command layer up through the slots of `spec/05` SYS-13 — reads the
 IOP's receive address from `SMCOM`, arms channel 5 with `0x78`, installs its
 channel-5 handler with `0x12`, and sends `INIT_CMD` twice through `0x77` —
-and the IOP's `EESYNC`, now the command service of `spec/03` BOOT-12, keeps
+and the IOP's `SIFCMD`, the command service of `spec/03` BOOT-12, keeps
 the address from the first and answers the second with `SET_SREG`. That
 packet lands where the client said, channel 5 finishes on the tag's
 interrupt bit, the DMAC raises IP3, and the kernel's interrupt entry (SYS-12)
@@ -339,7 +339,7 @@ reference does (`spec/05` SYS-10k): the program was started on a thread of
 its own, and the boot thread, left ready at priority 128, idles with
 interrupts enabled until the IOP's `RPC_END` lands, the SDK's handler signals
 the semaphore from the interrupt, and the exit of that interrupt switches
-back (SYS-12c, its first real run). `EESYNC` answers the bind with a loader
+back (SYS-12c, its first real run). `SIFCMD` answers the bind with a loader
 server and the call with what the reference answers for a file it has not
 got (`spec/03` BOOT-12e):
 
@@ -354,16 +354,16 @@ the IOP no loader to hand one to.
 **The IOP has a kernel, and the module loads.** `spec/06` is built module by
 module as the reference has them, on the boot list in the reference's order:
 `EXCEPMAN` installs the vector and its chains (IOP-1); `INTRMAN` delivers
-interrupts to registered handlers, both DMA banks included, and `EESYNC`
+interrupts to registered handlers, both DMA banks included, and `SIFCMD`
 serves every SIF packet from channel 10's handler, registered as irq `0x2B`
-the way the reference's `SIFCMD` registers it (IOP-2); `THREADMAN` schedules
+the way the reference's own does (IOP-2); `THREADMAN` schedules
 over INTRMAN's two hooks, with the boot thread sleeping once the list is
 loaded and an idle thread under everything (IOP-3); `DMACMAN` and `STDIO`
 exist for the imports of what follows; `IOMAN` and `ROMDRV` make the archive
 `rom0:` (IOP-4); `LOADCORE`'s probe/load/link/register ordinals and
 `MODLOAD`'s `LoadStartModule` load a module on request (IOP-5); and
-`LOADFILE` is a module of its own, its server registered through `EESYNC`'s
-`sifcmd` library and answered on its own thread, woken from the interrupt.
+`LOADFILE` is a module of its own, its server registered through `SIFCMD`'s
+library and answered on its own thread, woken from the interrupt.
 The archive carries `SIO2MAN` (IOP-6), and the program's fourth stage is
 what M1 asked for:
 
@@ -458,8 +458,9 @@ is still not plumbed through. Making `IOPBOOT` allocate its modules like the
 reference does would retire both deviations at once.
 
 **A file crosses the bus a window at a time.** The reference serves `rom0:`
-through `ROMDRV` over `SIFCMD`'s RPC; neither exists here yet, so `EESYNC`
-serves the EE's requests itself, in a protocol of our own: eight words naming
+through `ROMDRV` over `SIFCMD`'s RPC; `ROMDRV`'s server does not exist here
+yet, so `EESYNC` serves the EE's requests itself, through a command id of its
+own and a protocol to match: eight words naming
 an archive entry, a verb (size or content), the physical address in EE memory
 the answer is to land at, and for content a window — a byte offset and a
 length. The IOP answers at most 16 KiB per exchange, padded up to whole
@@ -471,14 +472,24 @@ program headers are staged. This is what lets a program of any size run from
 the archive, where a single 16 KiB buffer at each end used to be the limit —
 and the reference `OSDSYS` is a megabyte.
 
-**`EESYNC` is the command layer, the RPC layer and the file service in one
-module.** The reference spreads them over `SIFMAN`, `SIFCMD` and `ROMDRV`'s
-RPC; ours keeps them in the module that does the handshake, exporting the
-`sifcmd` library's server calls (ordinals 14, 17, 19, 22) so that `LOADFILE`
-registers its server the reference's way. Its entry returns, resident, and
-the boot thread sleeps at the end of the list (`spec/06` IOP-3i): `IOPBOOT`
-reaches `thbase`'s `SleepThread` through the registry rather than an import,
-being no module itself.
+**`SIFCMD` writes `SMCOM` itself.** The address the EE is to send packets to
+is the command buffer, which is `SIFCMD`'s; the reference publishes it through
+a `sifman` ordinal this project has not decoded, so `SIFCMD`'s entry writes the
+register directly and `SIFMAN`'s ordinal 5 does the rest of the handshake
+around it. Everything else of BOOT-11 is `SIFMAN`'s: `SIFCMD` reaches the bus
+only through ordinals 5, 6, 7 and 32.
+
+**`EESYNC` is a file service, where the reference's is a flag.** The reference
+spreads the EE-facing stack over `SIFMAN`, `SIFCMD` and `ROMDRV`'s RPC, and
+its `EESYNC` is the smallest module on the list: last, and there to tell the EE
+the IOP has come up. Ours is last and does that too — through `sifman` 24, the
+ordinal the reference's imports — but it also carries the file command the
+kernel's loader asks its questions with, because `ROMDRV`'s RPC server does not
+exist yet. It claims that command the way any module claims one, through
+`sceSifAddCmdHandler`. Its entry returns, resident, and the boot thread sleeps
+at the end of the list (`spec/06` IOP-3i): `IOPBOOT` reaches `thbase`'s
+`SleepThread` through the registry rather than an import, being no module
+itself.
 
 **One `INTRMAN`, and no syscall traps.** The reference ships a variant pair
 and keeps whichever the machine selects (`docs/analysis/06`); this image is
@@ -524,7 +535,7 @@ service, `docs/analysis/43` §12 -- is built: all three of its functions
 names), on its own thread and queue, with the same acknowledged-no-op for an
 `fno` it does not know. Its allocations come from `SYSMEM`'s bump allocator,
 so a free that is not the most recent one is refused where the reference's
-would succeed (IOP-4). `EESYNC` has no `sceSifGetOtherData` (`sifcmd` ordinal 23), which
+would succeed (IOP-4). `SIFCMD` has no `sceSifGetOtherData` (ordinal 23), which
 the reference uses to place a `read`'s unaligned head and tail at an EE
 address of any alignment, so ours sends the whole quadword those bytes fall
 in, zero-filled around them -- the same thing `LOADFILE` does for a segment's
@@ -598,24 +609,24 @@ their libraries `3100` and `2800` — so the constant is right for one of them
 and wrong for the other, and reading it out of the named image is part of the
 merge rather than of `LOADFILE`.
 
-**`EESYNC` sends one command run at a time, and bounds-checks the SREG
-file.** BOOT-12f and BOOT-12g. `sceSifSendCmd`/`isceSifSendCmd` fill the
-header and transfer the caller's packet in place, as the reference does, but
-where the reference queues up to 32 transfers ours answers `0` -- "not
-queued" -- while a run is still in flight or before the EE has named its
-packet buffer. That is inside the interface: the return value exists exactly
+**`SIFCMD` bounds-checks the SREG file.** BOOT-12f and BOOT-12g.
+`sceSifSendCmd`/`isceSifSendCmd` fill the header and transfer the caller's
+packet in place, as the reference does, and `SIFMAN`'s ring queues up to 32
+runs behind it; `0` -- "not queued" -- is left for a full ring and for a send
+made before the EE has named its packet buffer. That is inside the interface: the return value exists exactly
 so a caller can retry, and the clients seen so far loop on it. The SREG file
 is 32 words as the reference's is, but an out-of-range index is dropped
 rather than written; the reference checks neither its own ordinal 7 nor the
 index an incoming `SET_SREG` names, which from the EE is a write to any
 address that follows the array.
 
-**`EESYNC`'s `sifman` ordinals were off by one, and now are not.** BOOT-12h.
+**The `sifman` ordinals were off by one, and now are not.** BOOT-12h.
 Ordinal 5 held `SetDChain`, which belongs at 6, and ordinal 22 held the SMFLG
 write, which belongs at 24. Both are corrected, `REBOOT` now imports 6 and 24,
-and 22 is the MSFLG write it should have been. Ordinal 5 is `sceSifInit`,
-which our module's entry has already done by the time anything can call it,
-so it only raises the latch ordinal 29 reads. The tables grew to the
+and 22 is the MSFLG write it should have been. Ordinal 5 is `sceSifInit`: it
+carries the handshake itself and raises the latch ordinal 29 reads, so a
+client written as `if (!CheckInit()) Init()` finds the bus already up. The
+tables grew to the
 reference's extents -- `sifman` 36 slots, `sifcmd` 32 -- because an ordinal
 past the end binds to `jr $ra` and disappears.
 

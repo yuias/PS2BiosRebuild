@@ -24,6 +24,8 @@ IOMAN         @PS2_BINARY_DIR@/ioman.irx      @@PS2_BINARY_DIR@/ioman.extinfo
 MODLOAD       @PS2_BINARY_DIR@/modload.irx    @@PS2_BINARY_DIR@/modload.extinfo
 ROMDRV        @PS2_BINARY_DIR@/romdrv.irx     @@PS2_BINARY_DIR@/romdrv.extinfo
 STDIO         @PS2_BINARY_DIR@/stdio.irx      @@PS2_BINARY_DIR@/stdio.extinfo
+SIFMAN        @PS2_BINARY_DIR@/sifman.irx     @@PS2_BINARY_DIR@/sifman.extinfo
+SIFCMD        @PS2_BINARY_DIR@/sifcmd.irx     @@PS2_BINARY_DIR@/sifcmd.extinfo
 EESYNC        @PS2_BINARY_DIR@/eesync.irx     @@PS2_BINARY_DIR@/eesync.extinfo
 LOADFILE      @PS2_BINARY_DIR@/loadfile.irx   @@PS2_BINARY_DIR@/loadfile.extinfo
 CDVDMAN       @PS2_BINARY_DIR@/cdvdman.irx    @@PS2_BINARY_DIR@/cdvdman.extinfo

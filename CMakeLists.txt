@@ -161,6 +161,10 @@ ps2AddModule(secrman MODULE secrman_for_cex VERSION 1.03
 # Not on the boot list: the first module a program loads on request.
 ps2AddModule(sio2man MODULE sio2man VERSION 1.00
     SOURCES src/iop/sio2man.cpp)
+ps2AddModule(sifman MODULE IOP_SIF_manager VERSION 1.01
+    SOURCES src/iop/sifman.cpp)
+ps2AddModule(sifcmd MODULE IOP_SIF_rpc_interface VERSION 1.01
+    SOURCES src/iop/sifcmd.cpp)
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
@@ -243,7 +247,8 @@ add_custom_command(
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf sysclib.elf
-            dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf eesync.elf loadfile.elf
+            dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
+            sifman.elf sifcmd.elf eesync.elf loadfile.elf
             cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf
             osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")
