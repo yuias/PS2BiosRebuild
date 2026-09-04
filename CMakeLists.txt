@@ -277,3 +277,18 @@ add_custom_target(check
     DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")
+
+# tools/iopmerge.py --check needs the reference ROM and a retail disc image,
+# neither committed (docs/clean-room-policy.md), so this only joins the check
+# target when a checkout happens to have both.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/SCPH-50000.bin" AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/SLPS-25918.iso")
+    add_custom_command(TARGET check POST_BUILD
+        COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/iopmerge.py"
+                --rom0 "${CMAKE_CURRENT_SOURCE_DIR}/assets/SCPH-50000.bin"
+                --iso "${CMAKE_CURRENT_SOURCE_DIR}/assets/SLPS-25918.iso"
+                --check
+        USES_TERMINAL
+        COMMENT "Judging the offline IOP module merge model")
+endif()
