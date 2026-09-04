@@ -84,26 +84,6 @@ constexpr uintptr_t kRomSearchEnd = 0xBFC80000;  // BOOT-6b: the first 512 KiB
     }
 }
 
-// BOOT-9's `@` token: the rest is hexadecimal, parsed the way the reference
-// does -- '0'-'9' first, then anything in [0x57, 0x67) (nominally 'a'-'f',
-// though the upper bound is not checked against the letter itself), and
-// anything else taken as 'A'-'F' with no validation at all. IOPBTCONF only
-// ever holds well-formed hex, so the leniency is never exercised, but it is
-// exactly what the reference computes if it ever were.
-[[nodiscard]] uint32_t hexDigit(uint32_t byte) {
-    if (static_cast<uint32_t>(byte - '0') < 10) {
-        return byte - '0';
-    }
-    if (static_cast<uint32_t>(byte - 0x57) < 16) {
-        return byte - 0x57;
-    }
-    return byte - 0x37;
-}
-
-// BOOT-8d: one word per name, the address of the module's file image, with a
-// zero word after the last. The size the archive scan also found is not part
-// of the list: a loader reads the ELF headers at that address for everything
-// it needs.
 void writeBootEntry(uint32_t index, uint32_t rom_address) {
     bootListWord(kBlEntries + index * 4) = rom_address;
     bootListWord(kBlEntries + (index + 1) * 4) = 0;
@@ -168,7 +148,7 @@ extern "C" {
             i++;
             base_address = 0;
             while (i < list.size && text[i] >= 0x20) {
-                base_address = (base_address << 4) + hexDigit(text[i]);
+                base_address = (base_address << 4) + ps2::archive::hexDigit(text[i]);
                 i++;
             }
         } else if (c == '#') {

@@ -126,4 +126,24 @@ template <typename Want>
     return {0, 0};                        // no table in range
 }
 
+// BOOT-9's `@` token: the rest is hexadecimal, parsed the way the reference
+// does -- '0'-'9' first, then anything in [0x57, 0x67) (nominally 'a'-'f',
+// though the upper bound is not checked against the letter itself), and
+// anything else taken as 'A'-'F' with no validation at all. IOPBTCONF only
+// ever holds well-formed hex, so the leniency is never exercised, but it is
+// exactly what the reference computes if it ever were.
+[[nodiscard]] static constexpr uint32_t hexDigit(uint32_t byte) {
+    if (static_cast<uint32_t>(byte - '0') < 10) {
+        return byte - '0';
+    }
+    if (static_cast<uint32_t>(byte - 0x57) < 16) {
+        return byte - 0x57;
+    }
+    return byte - 0x37;
+}
+
+// BOOT-8d: one word per name, the address of the module's file image, with a
+// zero word after the last. The size the archive scan also found is not part
+// of the list: a loader reads the ELF headers at that address for everything
+// it needs.
 }  // namespace ps2::archive

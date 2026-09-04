@@ -441,7 +441,15 @@ struct Loaded {
 
 [[nodiscard]] static Loaded placeModule(uint32_t rom_address,
                                         uint32_t record_address) {
-    Loaded loaded = {0, 0, 0, 0, 0};
+    // Field by field rather than an aggregate initialiser: at this size the
+    // compiler answers a zeroed struct with a call to `memset`, and this
+    // image has no C library to answer it.
+    Loaded loaded;
+    loaded.next_base = 0;
+    loaded.record = 0;
+    loaded.entry = 0;
+    loaded.gp = 0;
+    loaded.text_size = 0;
     const auto *rom = reinterpret_cast<const uint8_t *>(rom_address);
     Segments segments;
     if (!readHeaders(rom, segments)) {

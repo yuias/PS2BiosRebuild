@@ -1168,20 +1168,31 @@ the merge picks the disc's copy, which is the behaviour that matters. The
 `timrman` ordinals past 16 stay implemented here (`docs/analysis/49`) for the
 cold boot, where no disc module is involved.
 
-**The second stage of an update reboot runs; the merge at the end of it does
-not.** A reset that names an image is answered by the hand-back above, so the
-only way into this path today is a local change to `REBOOT`'s condition. With
-that, it works end to end: the reboot core copies the argument to `0x480` and
-gives `IOPBOOT` mode `(mode & 0xff00) | 2`; `IOPBOOT` builds `IOPBTCON2` and
-finds it, so a sixteen-name list boots -- everything that reads a disc, and
-nothing that talks to the EE, which is the reference's own rule applied to
-ours; `LOADCORE` copies the command line and points boot record key 5 at
-the copy, and `MODLOAD`'s callback is what splits it;
-`MODLOAD`'s entry sees key 4 read `2` and registers a bootup callback; and
-that callback, run after the list, loads `argv[0]` with the rest as its
-arguments. Judged by loading `rom0:SIO2MAN` through it and reading the module
-record back: id 17, the sixteen-name list's count plus one. `rom0:UDNL` is
-what a title names there, and it does not exist yet.
+**A title's update reboot runs end to end, and the kernel it stages boots.**
+The only way into this path today is still a local change to `REBOOT`'s
+condition -- a reset that names an image is answered by the hand-back
+above -- but with it the whole chain works: the reboot core copies the
+argument to `0x480` and gives `IOPBOOT` mode `(mode & 0xff00) | 2`; `IOPBOOT`
+builds `IOPBTCON2` and finds it, so an eighteen-name list boots -- everything
+that reads a disc and nothing that talks to the EE, which is the reference's
+own rule applied to ours; `LOADCORE` puts the command line in boot record key
+5; `MODLOAD`'s entry sees key 4 read `2` and registers a bootup callback; that
+callback loads `rom0:UDNL` with the rest of the line as its arguments; `UDNL`
+resolves the merge, reads the title's image into one buffer behind a boot
+block and a boot list, and hands over.
+
+**What the staged kernel then does** is boot all twenty-four of its modules
+and register every library they export -- `SYSMEM` 2.03, `LOADCORE` 2.06,
+`THREADMAN` 2.03 and the rest from the disc, our `EXCEPMAN`, `INTRMAN`,
+`DMACMAN`, `VBLANK`, `SECRMAN`, `HEAPLIB`, `IOPTTY` and `REBOOT` from `rom0`.
+It reaches the last name on the list. `IOPTTY` is what makes any of that
+visible: the console it installs is the merged kernel's only voice.
+
+**Where it stops** is inside the disc's `EESYNC` 2.02, whose entry opens a
+file and waits on a flag its I/O never sets, so it polls once a second for
+ever. That is a working merged kernel waiting on an I/O path, not a fault in
+the staging -- the boot list is complete behind it -- and it is where the next
+work is.
 
 **The registry head is cleared by `IOPBOOT`, not assumed empty.** IRX-4c's
 head is a fixed word of RAM shared with `LOADCORE` rather than part of any
