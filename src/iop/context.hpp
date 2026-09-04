@@ -18,14 +18,15 @@
 //     +0x88          Status
 //     +0x8c          EPC
 //     +0x90          the I_CTRL gate the exception found
-//     +0x94          unused; the reference allocates 0x98 and writes 0x94
+//     +0x94          unused; the allocation is 0x98 and the writes end at +0x90
 //
 // **Word 0 is not `$0`.** It is how the reference defers saving registers a
 // handler will not touch: `0xAC0000FE` means only $1..$7, hi, lo, Status and
 // EPC are present, `0xFF00FFFE` adds $8..$15, $24, $25, $gp and $fp, and
 // `0xFFFFFFFE` adds $16..$23 and so describes a complete frame. The
 // reference's restore reads the tag and skips the groups a frame does not
-// carry. This module saves everything always, so every frame it builds is
+// carry; a fifth value, `0xF0FF000C`, marks the reschedule syscall's own
+// frame. This module saves everything always, so every frame it builds is
 // tagged `kTagFull` and the restore has nothing to branch on -- and the only
 // other frames on this image come from `THREADMAN` 2.03's thread-start path,
 // which writes the same tag.

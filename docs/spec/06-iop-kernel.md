@@ -204,9 +204,11 @@ adding `$8`–`$15`, `$24`, `$25`, `$gp`, `$fp`; `0xFFFFFFFE` — mode ≥ 2, ad
 `$16`–`$23`, hence a complete frame. Before the reschedule hooks (IOP-2j) are
 consulted the dispatcher **promotes whatever frame it holds to `0xFFFFFFFE`**,
 so every frame that crosses into a thread manager is a complete one. One
-further tag, `0xF0FF000C`, marks the frame `CpuInvokeInKmode` builds, whose
-own restore skips `$8`–`$15`/`$24`/`$25` and returns through `$v0`/`$v1` slots
-its caller filled.
+further tag, `0xF0FF000C`, marks the frame the **reschedule syscall** builds
+(IOP-2k2): a voluntary switch saves no caller-saved register and no `hi`/`lo`,
+so its restore skips those groups. `CpuInvokeInKmode` (`syscall 0xc`) builds no
+frame at all — it calls `$a0` with `$a1`–`$a3` on the exception's own stack and
+returns to `EPC + 4`.
 
 `I_CTRL` reads as its value and closes itself on the read, so the entry stores
 it in the frame and re-arms the gate to `1` at once; the **return installs the
