@@ -40,8 +40,10 @@ constexpr uint32_t kExportMagic = 0x41C00000;
 // ordinal tests for "initialised" (IRX-15e).
 uint32_t low_cursor;
 uint32_t high_cursor;
-// The most recent block at each end -- the only ones `release` can give back.
+// The most recent block at each end -- the only ones `release` can give back,
+// and the only ones `blockSize` can answer for.
 uint32_t low_last;
+uint32_t low_last_size;
 uint32_t high_last;
 uint32_t high_last_end;
 
@@ -104,6 +106,7 @@ int kprintfSet(KprintfHook hook, void *context) {
     if (mode == Lowest) {
         const uint32_t block = low_cursor;
         low_last = block;
+        low_last_size = rounded;
         low_cursor += rounded;
         return static_cast<int>(block);
     }
@@ -114,6 +117,27 @@ int kprintfSet(KprintfHook hook, void *context) {
         return static_cast<int>(high_cursor);
     }
     return 0;
+}
+
+// Ordinal 10: blockSize(address) -> the size in bytes of the block that
+// contains `address`, or -1.
+//
+// The reference keeps a record per block and matches any address inside one
+// (IRX-15). A pair of bump cursors keeps no records, so this answers for the
+// most recent block at each end and refuses everything else. That is the
+// whole of what `HEAPLIB` asks: it queries a chunk in the instruction after
+// allocating it, to find the rounding slack it may use. A wrong answer there
+// is not a refused allocation but a heap arena sized past its own memory, so
+// refusing is the only safe alternative to a record table.
+[[nodiscard]] int blockSize(uint32_t address) {
+    if (low_last != 0 && address >= low_last
+        && address < low_last + low_last_size) {
+        return static_cast<int>(low_last_size);
+    }
+    if (high_last != 0 && address >= high_last && address < high_last_end) {
+        return static_cast<int>(high_last_end - high_last);
+    }
+    return -1;
 }
 
 // Ordinal 5: release(address) -> 0, or -1.
@@ -169,7 +193,7 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         unimplemented,                  // 7
         unimplemented,                  // 8
         unimplemented,                  // 9
-        unimplemented,                  // 10
+        reinterpret_cast<int (*)(uint32_t)>(blockSize),    // 10 block size
         reservedHook,                   // 11 reserved (IRX-6a)
         reservedHook,                   // 12 reserved
         reservedHook,                   // 13 reserved
