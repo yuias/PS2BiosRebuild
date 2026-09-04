@@ -1323,3 +1323,95 @@ No gate for IOP-1's Block-A/HDB path (IOP-1c) or IOP-2's priority-3 cause-0
 handler (IOP-2d) is anticipated at all: neither affects anything the M1 or M2
 pulls exercise, and both are recorded here as open rather than as something a
 future tool is expected to close.
+
+## IOP-12: The heap (HEAPLIB)
+
+Derived from `docs/analysis/50`. `SYSMEM` hands out 0x100-granular blocks and
+takes back only the last one at each end (IRX-15), so nothing built directly
+on it can allocate and free in any order. This library is what supplies that,
+and the thread manager a title's `IOPRP` image carries needs it twice over:
+its alarm records and every variable pool it creates are heaps.
+
+**IOP-12a — what has to exist.** A library tagged `heaplib`, version 1.01,
+whose table reaches at least ordinal 8; the reference's eighteen entries keep
+every later ordinal where a client expects it. The module registers its table
+through `loadcore` ordinal 6 and returns that result unchanged, and holds no
+state of its own: a heap lives entirely in the `SYSMEM` memory the caller was
+given a handle to.
+
+**IOP-12b — the two magics.** A heap's first word is `heap + 1`; an arena's is
+`arena - 1`. They are self-relative so that a pointer given to the wrong entry
+point fails on the arithmetic rather than on a constant that could occur by
+chance, and so that a heap and its own first arena — which are 0x10 bytes
+apart — cannot be confused. Every entry point tests its argument's magic
+before touching anything else.
+
+**IOP-12c — the heap object.** `+0x0` magic, `+0x4` the growth size in the
+upper bits with the `SYSMEM` mode in bit 0, `+0x8` and `+0xc` the
+`{next, previous}` sentinel of the grown-chunk list, `+0x10` the first arena.
+A grown chunk is that node followed by its arena at the chunk's `+0x8`, so
+every walk reaches an arena as `node + 8`. Packing the growth size and the
+mode into one word makes "may this heap grow" and "how big is a new chunk"
+the same test: a non-growable heap reads as a growth size of zero. **New
+chunks are inserted directly after the sentinel**, so allocation tries the
+newest chunk first and the original one last.
+
+**IOP-12d — the arena.** `+0x0` magic, `+0x4` its size in bytes as given,
+`+0x8` the units currently allocated, `+0xc` the rover, `+0x10` the first
+block header. The unit is 8 bytes; a block header is one unit,
+`{next, size_in_units}`, with `size` counting the header, and the user pointer
+is the header plus 8 — so user memory is 8-byte aligned, not 16. **While a
+block is allocated its `next` word holds the arena's own address**, and that
+is what identifies a pointer's owner; while it is free the word links an
+address-ordered circular free list.
+
+**IOP-12e — preparing an arena.** `units = (size - 0x10) >> 3`. The last unit
+is an end sentinel of `size` zero, the first block takes `units - 1`, the free
+list is the circular pair of the two, the rover starts at the first block. A
+`size` below 0x29 leaves the memory untouched and reports nothing, so the
+magic never appears and every later call on that arena fails — which is the
+behaviour, not an oversight. The sentinel is what makes the search terminate:
+`size` zero satisfies no request.
+
+**IOP-12f — allocation is next-fit.** A request below 8 is raised to 8, so a
+zero-size request succeeds with 8 usable bytes;
+`units = ((n + 7) >> 3) + 1`. The search begins after the rover and takes the
+first block that fits; an exact fit is unlinked, a larger one is **split from
+its tail**, which leaves the free list's order untouched. The rover then names
+the predecessor of what was taken. One full circuit without a fit answers 0.
+When no chunk can serve the request and the heap may grow, a new chunk is
+taken from `SYSMEM` and the request retried against it.
+
+**IOP-12g — freeing.** The block's bracketing pair in the address-ordered free
+list is found, and the free is **refused with -3** if the block starts on a
+free header, runs into the following free block, or lies inside the preceding
+one. Otherwise the block is coalesced forward unless the next block is the
+sentinel, coalesced backward when the preceding free block ends exactly at it,
+and the rover is left on the predecessor. A grown chunk whose last block has
+just been freed is unlinked and returned to `SYSMEM`.
+
+**IOP-12h — the free size is title-visible.** `HeapChunkSize` answers
+`(((size - 0x10) >> 3) - used - 1) << 3` and validates nothing.
+`HeapTotalFreeSize` is that summed over every chunk. The thread manager stores
+the latter as a variable pool's capacity at creation and reports it from
+`ReferVplStatus`, so for a 0x800-byte pool the answer has to be `0x7d8`. This
+is the one number in the library that a title can read.
+
+**IOP-12i — the two sizings differ, deliberately.** `CreateHeap` sizes its
+first arena from the **request**, leaving up to 0xFF bytes of the block
+`SYSMEM` rounded up unused. The growth path sizes a new chunk's arena from
+**`SYSMEM` ordinal 10**, recovering that slack. So ordinal 10 must answer
+correctly for a block just allocated: an unimplemented `-1` there is not a
+failed allocation but an arena of 0xFFFFFFF7 bytes whose end sentinel lands
+below its own memory, and the corruption surfaces far from its cause. The new
+chunk is at least `n + 0x28` — the node, the arena header, one block header
+and the sentinel.
+
+**IOP-12j — failure.** Allocation failure is 0 everywhere. A bad heap is -4, a
+pointer no chunk owns is -1, and a double free of a block that has not been
+reissued is also -1, because the header's `next` word is a free-list link by
+then rather than the arena tag. A double free of a block that has been
+reissued succeeds and frees the new owner's memory; nothing can detect it.
+`DeleteHeap` frees every chunk whether or not anything is live in it. Nothing
+in the library disables interrupts, so serialising a heap is the caller's
+business.
