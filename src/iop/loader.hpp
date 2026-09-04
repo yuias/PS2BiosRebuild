@@ -280,6 +280,9 @@ struct Placed {
     uint32_t entry;
     uint32_t gp;
     uint32_t end;
+    uint32_t text_size;                // IRX-2: from `.iopmod`, not from a section
+    uint32_t data_size;
+    uint32_t bss_size;
 };
 
 // Copy the load segment to `base_address`, zero the bss behind it and apply
@@ -290,6 +293,9 @@ struct Placed {
     Placed placed;
     placed.entry = peek32(iopmod + 4) + base_address;
     placed.gp = peek32(iopmod + 8);
+    placed.text_size = peek32(iopmod + 12);
+    placed.data_size = peek32(iopmod + 16);
+    placed.bss_size = peek32(iopmod + 20);
     if (placed.gp != 0) {
         placed.gp += base_address;
     }
@@ -356,12 +362,18 @@ static uint32_t bind(uint8_t *start, uint8_t *end) {
         }
         const uint32_t tag0 = peek32(at + 12);
         const uint32_t tag1 = peek32(at + 16);
+        const auto major = static_cast<uint8_t>(peek16(at + 8) >> 8);
 
-        // Find the exporter: the same tag, at the registry head-most entry.
+        // Find the exporter, from the registry head: the same tag **and the
+        // same major version**, which together are a library's identity
+        // (IRX-10a), and not one registered with ordinal 10 -- that is what
+        // its flags bit 0 says, and it means "do not link me automatically".
         auto *exporter = reinterpret_cast<uint8_t *>(registryHead());
         while (exporter != nullptr
                && !(peek32(exporter + 12) == tag0
-                    && peek32(exporter + 16) == tag1)) {
+                    && peek32(exporter + 16) == tag1
+                    && static_cast<uint8_t>(peek16(exporter + 8) >> 8) == major
+                    && (peek16(exporter + 10) & 1) == 0)) {
             exporter = reinterpret_cast<uint8_t *>(peek32(exporter));
         }
         if (exporter == nullptr) {
@@ -451,17 +463,20 @@ struct Loaded {
     poke32(record + 0x10, placed.entry);
     poke32(record + 0x14, placed.gp);
     poke32(record + 0x18, base_address);
-    poke32(record + 0x1C, segments.load_filesz);
-    poke32(record + 0x24, segments.load_memsz - segments.load_filesz);
+    poke32(record + 0x1C, placed.text_size);
+    poke32(record + 0x20, placed.data_size);
+    poke32(record + 0x24, placed.bss_size);
 
-    // IRX-9: bind what this module imports, so its entry can call it. What it
-    // *exports* is not registered here -- neither reference loader scans a
-    // segment for an export table, and a module registers itself by calling
-    // `loadcore` ordinal 6 from its entry (IRX-10a). A loader that registered
-    // it first would overwrite the table's magic word with the registry link,
-    // and that call would then fail silently.
+    // IRX-9: bind what this module imports, so its entry can call it, over
+    // the **text** segment alone -- IRX-8b, and the range the reference's
+    // binder scans. What it *exports* is not registered here: neither
+    // reference loader scans a segment for an export table, and a module
+    // registers itself by calling `loadcore` ordinal 6 from its entry
+    // (IRX-10a). A loader that registered it first would overwrite the
+    // table's magic word with the registry link, and that call would then
+    // fail silently.
     (void)bind(reinterpret_cast<uint8_t *>(base_address),
-               reinterpret_cast<uint8_t *>(placed.end));
+               reinterpret_cast<uint8_t *>(base_address + placed.text_size));
 
     loaded.record = record_address;
     loaded.entry = placed.entry;

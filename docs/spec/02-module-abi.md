@@ -226,6 +226,11 @@ at the end of their text.
 
 To bind an importer's table against an exporter's:
 
+0. Find the exporter: walking from the registry head, the first table with the
+   **same tag and the same major version** -- together a library's identity
+   (IRX-10a) -- whose flags bit 0 is clear. A table registered by IRX-10b's
+   ordinal 10 has that bit set and is deliberately skipped: that ordinal means
+   "registered, but not to be linked automatically".
 1. Count the exporter's entries to the zero terminator.
 2. For each stub, require its **second** word to decode as `addiu` (opcode 9);
    take the ordinal from that word's low 16 bits.

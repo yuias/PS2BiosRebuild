@@ -34,6 +34,12 @@ namespace {
 
 constexpr uint32_t kExportMagic = 0x41C00000;
 
+// IRX-10a: what the two registration ordinals answer. The reference's codes,
+// not -1: a caller that tells them apart is telling "this is not a library"
+// from "one at least as new is already registered".
+constexpr int kErrorLibraryFound = -212;
+constexpr int kErrorIllegalLibrary = -214;
+
 // The registry head, at the address `src/boot/iopboot.cpp` uses. It is an
 // absolute constant rather than something this module owns because the two
 // are separate images and only the address can be shared.
@@ -83,19 +89,14 @@ static_assert(sizeof(LibraryTable) == 0x14);
 // strictly greater one is allowed to take over.
 [[nodiscard]] int registerVersioned(void *table_ptr) {
     auto *table = reinterpret_cast<LibraryTable *>(table_ptr);
-    if (table->link != kExportMagic) {
-        // Already in: the loader registers a table when it places the module
-        // (IOP-5b), so a module registering itself from its entry -- the
-        // reference's way -- finds its own table there and is told yes
-        // (docs/implementation.md). Anything else is not an export table.
-        for (auto *walk = reinterpret_cast<LibraryTable *>(registryHead());
-             walk != nullptr;
-             walk = reinterpret_cast<LibraryTable *>(walk->link)) {
-            if (walk == table) {
-                return 0;
-            }
-        }
-        return -1;
+    if (table_ptr == nullptr || table->link != kExportMagic) {
+        // Not an export table, or one already registered -- the magic word is
+        // what registration overwrites with the link, so a second call finds
+        // it gone. The reference refuses both, and this refuses them for the
+        // same reason: nothing here registers a table on a module's behalf
+        // any more, so a table that has lost its magic has already been
+        // through this.
+        return kErrorIllegalLibrary;
     }
     const auto *candidate_tag = reinterpret_cast<const uint32_t *>(table->tag);
     const auto major = static_cast<uint8_t>(table->version >> 8);
@@ -115,7 +116,7 @@ static_assert(sizeof(LibraryTable) == 0x14);
         // equal or lower is refused.
         return static_cast<uint8_t>(walk->version) < minor
                    ? registerAccept(table)
-                   : -1;
+                   : kErrorLibraryFound;
     }
     return registerAccept(table);       // nothing registered under this tag yet
 }
@@ -124,8 +125,8 @@ static_assert(sizeof(LibraryTable) == 0x14);
 // is set at run time -- the stored table always has flags 0.
 [[nodiscard]] int registerPinned(void *table_ptr) {
     auto *table = reinterpret_cast<LibraryTable *>(table_ptr);
-    if (table->link != kExportMagic) {
-        return -1;
+    if (table_ptr == nullptr || table->link != kExportMagic) {
+        return kErrorIllegalLibrary;
     }
     table->flags |= 1;
     return registerAccept(table);
@@ -505,10 +506,12 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     // its own imports -- which the boot block could not do for it, since the
     // registry did not exist when it was placed -- and then register its own
     // table. Its extent comes from the record the boot block filled in
-    // (IRX-12c): the load segment's file bytes at `+0x1c`, its bss at `+0x24`.
+    // (IRX-12c): text, data and bss sizes at `+0x1c`, `+0x20` and `+0x24`.
+    // IRX-8b puts every import table inside the text, which is the range the
+    // binder wants.
     const auto *own_record = reinterpret_cast<const uint32_t *>(record);
     auto *own_base = reinterpret_cast<uint8_t *>(record + ps2::loader::kRecordSize);
-    (void)ps2::loader::bind(own_base, own_base + own_record[7] + own_record[9]);
+    (void)ps2::loader::bind(own_base, own_base + own_record[7]);
     if (registerVersioned(&loadcore_exports) < 0) {
         for (;;) {                     // nothing after this could bind
         }
@@ -532,8 +535,8 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     // the base (BOOT-8c) the record address is where this module *starts*,
     // not where it ends, so it is not the answer.
     uint32_t running_record =
-        (reinterpret_cast<uint32_t>(own_base) + own_record[7] + own_record[9]
-         + 15) & ~uint32_t{15};
+        (reinterpret_cast<uint32_t>(own_base) + own_record[7] + own_record[8]
+         + own_record[9] + 15) & ~uint32_t{15};
     uint32_t index = 2;
     for (uint32_t k = 2; entries[k] != 0; k++, index++) {
         const uint32_t word = entries[k];
