@@ -294,6 +294,16 @@ cold boot) therefore takes `IOPBTCONF`, and mode `2` — the intermediate stage
 of a reboot that carries an argument (`docs/analysis/45` §2) — takes
 `IOPBTCON2`, whose list can read a disc and cannot talk to the EE.
 
+**BOOT-9f — the order must satisfy the import graph.** Every library a module
+imports has to be exported by a module **earlier in the list**. This is not a
+nicety: the reference loader unloads a module whose import table finds no
+exporter, and everything that imported *that* module follows it, so a single
+forward reference costs the rest of the boot. A loader that merely counts the
+unbound table and carries on hides the mistake until the list is loaded by one
+that does not — which is what happens to a list a title's reboot merges its
+own modules into, since a newer module may import libraries the older one it
+replaces did not.
+
 ## BOOT-10: The two CPUs meet
 
 The IOP boot of BOOT-4 to BOOT-9 does not end at the last module of the boot

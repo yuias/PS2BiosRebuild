@@ -389,7 +389,7 @@ invocation path (e.g. `"rom0:UDNL"`), `argv[1..]` the rest of the RESET_CMD
 argument string, already tokenised by the time `UDNL` sees it (§1).
 
 **Every named source is opened, and rom0 is always one of them, unnamed.**
-For each `argv[i]`, `i ≥ 1`: `ioman.4` opens it, `ioman.6` (`lseek`) measures
+For each `argv[i]`, `i ≥ 1`: `ioman.4` opens it, `ioman.8` (`lseek`) measures
 its size; failure panics `"file '%s' can't open"` and stops. Independently of
 what `argv` names, `UDNL` **always** re-runs the ROM-window self-locating
 scan (`$4=0xBFC00000, $5=0xBFC10000`) exactly like the boot block/`IOPBOOT`
@@ -409,8 +409,8 @@ tokenised:
 | Leading byte | Effect |
 | --- | --- |
 | `@` (hex) | base address, same as `IOPBOOT`'s grammar (`spec/03` BOOT-9) |
-| `"!addr "` | parses hex, stores it into a **different** field than `@` does — not merely an unused synonym, unlike `IOPBOOT`'s parser (`spec/03` BOOT-9b), which never implements it at all |
-| `"!include "` | parses hex, appends it to the target list as a **tagged** (low bit set) entry, distinct from a plain module-name pointer — the consumer of that tag was not traced (Open Questions) |
+| `"!addr "` | parses hex and appends `(hex << 2) \| 1` to the target list — the tagged entry `spec/03` BOOT-8d describes, which tells the new `loadcore` where to put the module after it |
+| `"!include "` | takes a **name**, resolves it across the sources and **recurses** into this same parser over what it finds |
 | anything else | a module name, resolved as below |
 
 **The merge rule: highest `.iopmod` version wins, across every source.** Name
@@ -459,25 +459,14 @@ possibly `MODLOAD`'s `0x12e0` function reaches it before handing off to
 traced past its own address computation), possibly by archive **position**
 rather than by name. Left in Open Questions rather than guessed.
 
-**Staging.** `UDNL` sums every resolved module's size (seeded at a fixed
-`0x420`-byte header allowance) and asks `sysmem` for one contiguous buffer of
-that total; a `0x20`-byte sub-header at its base is zeroed before staging
-begins. The per-module byte-copy loop that actually fills that buffer was
-not reached in this pass (budget ran out disassembling the merge-rule logic
-first) — flagged in Open Questions. The final hand-over into the freshly
-staged kernel (an entry address, a jump or `eret`, and whatever the IOP-side
-counterpart of `spec/03` BOOT-9's boot-parameter table becomes for the new
-kernel core) was likewise not reached.
+**Staging and hand-over are read in `docs/analysis/51`,** which supersedes
+what this section guessed: the buffer is a plain concatenation of the source
+*files*, not of the resolved modules, and the hand-over does not go near
+`IOPBOOT`.
 
-**`0x1F8100` was not located.** Nothing found in this pass — not `IOPBOOT`'s
-own stack/struct setup (which computes a stack top from `RAMsize << 20` and a
-small fixed-offset struct near `0x20000`, neither matching this address), not
-`REBOOT`, not `UDNL`'s partial trace, not the outside lead — pins an argument
-block at IOP address `0x1F8100`. This is left as an open question rather
-than invented; whether the merged kernel core rebuilds the same
-address-`0x3F0`-rooted boot-parameter table BOOT-8 describes, or an entirely
-separate structure, is unresolved.
-
+**`0x1F8100` is not in the reference at all.** It is this project's own boot
+bookkeeping (`src/boot/iopboot.cpp`), which is why nothing in `UDNL`,
+`IOPBOOT` or `MODLOAD` refers to it. Closed in `docs/analysis/51`.
 ### `IGREETING`'s banner pins the console-message sequence
 
 `docs/analysis/12` already found `IGREETING` consults boot record key 4 and
@@ -607,8 +596,9 @@ disc's own ELF load — which this pass did not disassemble.
   an `IOPBTCONF` (rom0's, when the caller's archive has none, as in this
   project's disc-boot scenario).
 - `UDNL`'s own `IOPBTCONF` grammar is a strict superset of `IOPBOOT`'s
-  (`spec/03` BOOT-9): it actually implements `"!addr "`, and adds
-  `"!include "`, neither of which `IOPBOOT` recognises.
+  (`spec/03` BOOT-9): it actually implements `"!addr "` — as the tagged list
+  entry of BOOT-8d — and adds `"!include "`, a nested list by name; `IOPBOOT`
+  recognises neither.
 - `EELOAD`'s and a title's own reboot are the **same mechanism** with a
   different argument string; nothing EE-kernel-specific is implicated.
 - `IGREETING`'s boot-record key 4 selects the exact console banner
@@ -665,7 +655,8 @@ disc's own ELF load — which this pass did not disassemble.
   the new kernel core) — the merge rule and the staging allocation are
   pinned; the actual copy and hand-over were not reached before this pass's
   budget ran out.
-- **`"!include "`'s consumer** — parsed and tagged distinctly from a plain
+- ~~**`"!include "`'s consumer**~~ — closed in `docs/analysis/51`: the two
+  directives were swapped in this reading. Original note: parsed and tagged distinctly from a plain
   module name, but what reads that tag was not traced.
 - **IOP address `0x1F8100`** — not located as an argument block, a stack, or
   anything else in this pass; whether it is load-bearing for a rebuild is
