@@ -243,6 +243,7 @@ add_custom_command(
             --check IOPBOOT ${PS2_IOPBOOT_BASE} "${PS2_IOPBOOT_BASE_RSP}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/mkromdir.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/rom/iopbtconf.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/rom/iopbtcon2.txt"
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf

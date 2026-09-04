@@ -125,7 +125,8 @@ reference and the reason for it.
 | --- | --- |
 | Build system | **CMake + Ninja + LLVM** — no cross-gcc needed; C++26, assembly only where the machine requires it |
 | Boot block (`RESET`), both paths | **built** — EE reaches our kernel; IOP emits BOOT-5a's full POST sequence |
-| `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list, places `SYSMEM` and `LOADCORE`, and hands the rest to `LOADCORE` with BOOT-8c's block; `LOADCORE` loads them and publishes the boot records of BOOT-8 |
+| `IOPBOOT` + `IOPBTCONF` | **built** — parses the boot list, places `SYSMEM` and `LOADCORE`, and hands the rest to `LOADCORE` with BOOT-8c's block; `LOADCORE` loads them and publishes the boot records of BOOT-8. The list's name is built from the boot mode (BOOT-9e), so a reboot picks `IOPBTCON2` |
+| The IOP reboot (`docs/analysis/45`) | **built as far as the merge** — an argument-less `sceSifIopReset` re-enters `IOPBOOT` with mode 1 and reloads the list; the second stage of an update reboot boots `IOPBTCON2` and loads what its command line names. `UDNL` and the version merge are not built |
 | IRX producer + loader | **built** — `tools/mkirx.py`; all three modules pass `irxinfo --check` |
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `SIFMAN` ordinal 5 and the kernel's `sif.S` release each other, and `EESYNC`, last on the list, tells the EE the IOP is listening |

@@ -246,17 +246,36 @@ void buildBootRecords() {
 // Ordinal 20: a module's entry asks to be called back once the boot list has
 // run out. `MODLOAD` registers one when key 4 says this is the second stage
 // of an update reboot, and that callback is what loads `UDNL`
-// (docs/analysis/45 §2). Nothing in this image registers one yet.
+// (docs/analysis/45 §2).
+//
+// **The registrant's `$gp` is captured here**, because a cross-module call
+// arrives through a tail `j` and never touches `$28`: what is in it at this
+// point is still the caller's, put there when the loader entered its module.
+// The end-of-list pass installs it again for the call, since by then the
+// register belongs to whoever ran last.
 constexpr uint32_t kBootupCallbacks = 4;
 
-void (*bootup_callbacks[kBootupCallbacks])();
+struct BootupCallback {
+    void (*function)();
+    uint32_t gp;
+};
+
+BootupCallback bootup_callbacks[kBootupCallbacks];
 uint32_t bootup_callback_count;
+
+[[nodiscard]] uint32_t currentGp() {
+    uint32_t gp;
+    asm volatile("move %0, $gp" : "=r"(gp));
+    return gp;
+}
 
 [[nodiscard]] int addBootupCallback(void (*function)()) {
     if (function == nullptr || bootup_callback_count == kBootupCallbacks) {
         return -1;
     }
-    bootup_callbacks[bootup_callback_count++] = function;
+    bootup_callbacks[bootup_callback_count].function = function;
+    bootup_callbacks[bootup_callback_count].gp = currentGp();
+    bootup_callback_count++;
     return 0;
 }
 
@@ -505,13 +524,14 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
     }
     bootListWord(kBlNext) = running_base;
 
-    // The end-of-list pass: whatever asked to hear that the list is done.
-    // These run with *this* module's $gp, which is wrong for any registrant
-    // that has one of its own -- ordinal 20 will have to capture the caller's
-    // $gp and the call go through a `callEntry`-shaped invoke. Nothing
-    // registers one yet, so nothing has hit it.
+    // The end-of-list pass: whatever asked to hear that the list is done,
+    // each with the `$gp` it registered under. `callEntry` is the invoke that
+    // installs one and puts this module's back; a callback takes no
+    // arguments, so the three it would pass are zero.
     for (uint32_t k = 0; k < bootup_callback_count; k++) {
-        bootup_callbacks[k]();
+        (void)ps2::loader::callEntry(
+            reinterpret_cast<uint32_t>(bootup_callbacks[k].function),
+            bootup_callbacks[k].gp, 0, nullptr, 0);
     }
 
     return 0;                          // resident; `IOPBOOT` sleeps its thread

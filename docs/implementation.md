@@ -1073,6 +1073,20 @@ and both cost a link error each.
 leaves the code two bytes out of alignment, and the instruction stream decodes
 as garbage from that point on (`unknown opcode 0x3f`). `.align 2` after data.
 
+**The second stage of an update reboot runs; the merge at the end of it does
+not.** A reset that names an image is answered by the hand-back above, so the
+only way into this path today is a local change to `REBOOT`'s condition. With
+that, it works end to end: the reboot core copies the argument to `0x480` and
+gives `IOPBOOT` mode `(mode & 0xff00) | 2`; `IOPBOOT` builds `IOPBTCON2` and
+finds it, so a sixteen-name list boots -- everything that reads a disc, and
+nothing that talks to the EE, which is the reference's own rule applied to
+ours; `LOADCORE` tokenises the command line into boot record key 5;
+`MODLOAD`'s entry sees key 4 read `2` and registers a bootup callback; and
+that callback, run after the list, loads `argv[0]` with the rest as its
+arguments. Judged by loading `rom0:SIO2MAN` through it and reading the module
+record back: id 17, the sixteen-name list's count plus one. `rom0:UDNL` is
+what a title names there, and it does not exist yet.
+
 **The registry head is cleared by `IOPBOOT`, not assumed empty.** IRX-4c's
 head is a fixed word of RAM shared with `LOADCORE` rather than part of any
 module's data, so it survives a reboot — with the previous kernel's export

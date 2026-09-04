@@ -10,6 +10,7 @@ ROMVER        @PS2_BINARY_DIR@/romver.bin     -
 RDRAM         @PS2_BINARY_DIR@/rdram.bin      @@PS2_SOURCE_DIR@/src/rom/extinfo/rdram.txt
 KERNEL        @PS2_BINARY_DIR@/kernel.bin     @@PS2_SOURCE_DIR@/src/rom/extinfo/kernel.txt
 IOPBTCONF     @PS2_SOURCE_DIR@/src/rom/iopbtconf.txt  -
+IOPBTCON2     @PS2_SOURCE_DIR@/src/rom/iopbtcon2.txt  -
 IOPBOOT       @PS2_BINARY_DIR@/iopboot.bin    @@PS2_SOURCE_DIR@/src/rom/extinfo/iopboot.txt
 SYSMEM        @PS2_BINARY_DIR@/sysmem.irx     @@PS2_BINARY_DIR@/sysmem.extinfo
 LOADCORE      @PS2_BINARY_DIR@/loadcore.irx   @@PS2_BINARY_DIR@/loadcore.extinfo

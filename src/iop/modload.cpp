@@ -57,12 +57,16 @@ constexpr uint32_t kCommandLineMax = 0x80;
 
 constexpr uint32_t kModeSoftReboot = 1;         // BOOT-8b
 constexpr uint32_t kModeUpdateStage = 2;
+constexpr uint32_t kKeyBootMode = 4;
+constexpr uint32_t kKeyCommandLine = 5;
 
 constexpr uint32_t kRamMiB = 2;                 // BOOT-4 step 5's retail latch
 
 extern "C" {
 uint32_t _import_intrman_invoke_in_kmode(uint32_t function, uint32_t a, uint32_t b,
                                          uint32_t c);
+uint32_t *_import_loadcore_boot_record(uint32_t key);
+int _import_loadcore_add_bootup_callback(void (*function)());
 int _import_ioman_open(const char *path, int flags);
 int _import_ioman_close(int fd);
 int _import_ioman_read(int fd, void *buffer, int size);
@@ -283,6 +287,52 @@ uint32_t rebootCore(uint32_t /* tag */, uint32_t argument, uint32_t mode) {
     __builtin_unreachable();
 }
 
+// The second stage's bootup callback (docs/analysis/45 §2). It runs after the
+// boot list has been loaded, reads the command line out of boot record key 5,
+// and loads its first word as a module with the rest as that module's
+// arguments -- which for a title's reboot is `rom0:UDNL` and the image it
+// wants merged. The reference dispatches on the reboot mode's high byte: `0`
+// is this path, `1` a second one this project has not read.
+//
+// Nothing is loaded here that `LoadStartModule` could not load; what the
+// reference's `UDNL` then does with its arguments is the merge, and that does
+// not exist yet.
+void mode2Bootup() {
+    const uint32_t *record = _import_loadcore_boot_record(kKeyCommandLine);
+    if (record == nullptr) {
+        // The reference panics here: an update reboot with no file name is a
+        // request that cannot be answered.
+        return;
+    }
+    auto **argv = reinterpret_cast<char **>(record[1]);
+    if (argv == nullptr || argv[0] == nullptr) {
+        return;
+    }
+    const uint32_t *mode_record = _import_loadcore_boot_record(kKeyBootMode);
+    if (mode_record == nullptr || ((*mode_record & 0xFFFF) >> 8) != 0) {
+        return;                                 // the path that is not read
+    }
+
+    // IOP-5d: the arguments travel as NUL-separated bytes with a length, not
+    // as an array, so what key 5 tokenised is joined again for the callee --
+    // the same bytes, one copy later.
+    char args[kArgBytesMax];
+    uint32_t length = 0;
+    for (uint32_t k = 1; argv[k] != nullptr && k < kArgvMax; k++) {
+        for (const char *at = argv[k]; *at != '\0'; at++) {
+            if (length + 2 > kArgBytesMax) {
+                break;
+            }
+            args[length++] = *at;
+        }
+        if (length + 1 <= kArgBytesMax) {
+            args[length++] = '\0';
+        }
+    }
+    int result = 0;
+    (void)loadStartModule(argv[0], length, length != 0 ? args : nullptr, &result);
+}
+
 // Ordinal 4, `ReBootStart(argument, mode)`: the trap, and nothing else. An
 // empty argument is a plain soft reboot; anything else names a loader and an
 // image, and starts the intermediate stage of an update reboot. The first
@@ -342,7 +392,9 @@ PS2_IMPORTS_END()
 PS2_IMPORTS_BEGIN("loadcore", 0x0101)
 PS2_IMPORT(_import_loadcore_flush, 4)
 PS2_IMPORT(_import_loadcore_link, 8)
+PS2_IMPORT(_import_loadcore_boot_record, 12)
 PS2_IMPORT(_import_loadcore_register, 16)
+PS2_IMPORT(_import_loadcore_add_bootup_callback, 20)
 PS2_IMPORT(_import_loadcore_probe, 22)
 PS2_IMPORT(_import_loadcore_load, 23)
 PS2_IMPORTS_END()
@@ -350,6 +402,12 @@ PS2_IMPORTS_END()
 extern "C" {
 
 int _module_start(int, char **) {
+    // §2: the registration happens at module-init time and only in the
+    // intermediate stage of an update reboot, which boot record key 4 names.
+    const uint32_t *mode = _import_loadcore_boot_record(kKeyBootMode);
+    if (mode != nullptr && (*mode & 0xFF) == kModeUpdateStage) {
+        (void)_import_loadcore_add_bootup_callback(mode2Bootup);
+    }
     return 0;                           // resident
 }
 
