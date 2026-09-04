@@ -199,10 +199,11 @@ int _import_stdio_printf(const char *format, ...);
 }
 
 // BOOT-9's grammar, plus the two directives `UDNL`'s parser has and
-// `IOPBOOT`'s does not (§"IOPBTCONF is resolved by name"): `!addr ` stores a
-// base of its own and `!include ` appends a tagged entry. Neither retail list
-// carries either, so both are recognised and skipped rather than acted on --
-// acting on them would be inventing a consumer this project has not read.
+// `IOPBOOT`'s does not (docs/analysis/51 §4): `!addr <hex>` appends BOOT-8d's
+// tagged list entry, and `!include <name>` resolves a nested list and recurses
+// into it. Neither retail list carries either, so both are recognised and
+// skipped rather than acted on -- this module resolves the merge and stages
+// nothing yet, and a tagged entry has no list to go into.
 [[nodiscard]] bool directive(const char *text, uint32_t length) {
     return length != 0 && text[0] == '!';
 }
@@ -213,10 +214,10 @@ char names[kNamesMax][kNameLength + 1];
 uint32_t name_count;
 
 // The order comes from the first `IOPBTCONF` found walking the sources newest
-// first, which puts `rom0` last -- and in the retail case makes it the one
-// that answers, a title's image carrying none.
+// first -- the last opened backwards to `rom0` -- which in the retail case
+// makes `rom0` the one that answers, a title's image carrying none.
 [[nodiscard]] const Archive *resolveOrder() {
-    for (uint32_t k = 0; k < source_count; k++) {
+    for (uint32_t k = source_count; k-- > 0;) {
         const Archive &archive = sources[k];
         const Candidate list = lookup(archive, "IOPBTCONF");
         if (!list.found) {
@@ -284,19 +285,22 @@ extern "C" {
 // IRX-12: entry(argc, argv, 0, record). `argv[0]` is this module's own
 // invocation path and `argv[1..]` the rest of the reboot's command line.
 int _module_start(int argc, char **argv) {
+    // `rom0` is index 0 because it is the oldest source, and every walk over
+    // the pool runs from the last index down (docs/analysis/51 §4): the
+    // newest source answers first, and a tie leaves it standing.
     source_count = 0;
-    for (int k = 1; k < argc && argv[k] != nullptr; k++) {
-        if (!openNamedSource(argv[k])) {
-            _import_stdio_printf("udnl: file '%s' can't open\n", argv[k]);
-            return 1;                           // not resident
-        }
-    }
     if (!openArchive(kRomSearchStart, kRomSearchEnd, "rom0",
                      sources[source_count])) {
         _import_stdio_printf("udnl: panic ! 'rom0' not found\n");
         return 1;
     }
     source_count++;
+    for (int k = 1; k < argc && argv[k] != nullptr; k++) {
+        if (!openNamedSource(argv[k])) {
+            _import_stdio_printf("udnl: file '%s' can't open\n", argv[k]);
+            return 1;                           // not resident
+        }
+    }
 
     const Archive *order = resolveOrder();
     if (order == nullptr) {
@@ -309,7 +313,7 @@ int _module_start(int argc, char **argv) {
     for (uint32_t n = 0; n < name_count; n++) {
         const Archive *winner = nullptr;
         Candidate best = {nullptr, 0, 0, false};
-        for (uint32_t k = 0; k < source_count; k++) {
+        for (uint32_t k = source_count; k-- > 0;) {
             const Candidate candidate = lookup(sources[k], names[n]);
             if (!candidate.found) {
                 continue;
