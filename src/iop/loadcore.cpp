@@ -157,6 +157,7 @@ constexpr uintptr_t kBootListCount = kBootList + kBlCount;
 constexpr uint32_t kBootInfoWords = 8;
 constexpr uint32_t kBiRamMiB = 0;
 constexpr uint32_t kBiMode = 1;
+constexpr uint32_t kBiCommandLine = 2;
 constexpr uint32_t kBiListCount = 6;
 constexpr uint32_t kBiList = 7;
 
@@ -169,20 +170,56 @@ constexpr uintptr_t kBootRecordPointer = 0x3F0;
 constexpr uintptr_t kBootRecordPointerAlso = 0x3F4;
 constexpr uint32_t kBootRecordWords = 16;
 constexpr uint32_t kKeyBootMode = 4;           // BOOT-8b
+constexpr uint32_t kKeyCommandLine = 5;
 
 uint32_t boot_records[kBootRecordWords];
 uint32_t boot_records_used;
+
+// BOOT-8b: the command line is tokenised **here**, once, and travels as a
+// boot record rather than as an argument anyone builds again
+// (docs/analysis/45 §2). The array outlives this module's entry because
+// `MODLOAD`'s callback reads it out of the record, so it cannot be a local.
+constexpr uint32_t kArgvMax = 16;
+char *argv[kArgvMax];
 
 [[nodiscard]] uint32_t recordHeader(uint32_t value, uint32_t key, uint32_t extra) {
     return (value & 0xFFFF) | (key << 16) | (extra << 24);
 }
 
+// Split on spaces, in place: the string is the copy `MODLOAD`'s reboot core
+// left at a fixed address for exactly this, so there is nothing to preserve
+// in it. The array is NUL-terminated as `argv` conventionally is, which is
+// what lets a reader walk it without a count.
+[[nodiscard]] uint32_t splitCommandLine(char *text) {
+    uint32_t count = 0;
+    while (*text != '\0' && count + 1 < kArgvMax) {
+        while (*text == ' ') {
+            *text++ = '\0';
+        }
+        if (*text == '\0') {
+            break;
+        }
+        argv[count++] = text;
+        while (*text != '\0' && *text != ' ') {
+            text++;
+        }
+    }
+    argv[count] = nullptr;
+    return count;
+}
+
 // BOOT-8b: the mode `IOPBOOT` was entered with becomes key 4, which is what
-// a banner module reads to tell a cold boot from the stages of a reboot.
+// a banner module reads to tell a cold boot from the stages of a reboot, and
+// the command line becomes key 5 -- one extra word, the argument array.
 void buildBootRecords() {
     boot_records_used = 0;
     boot_records[boot_records_used++] =
         recordHeader(boot_info[kBiMode], kKeyBootMode, 0);
+    if (boot_info[kBiCommandLine] != 0) {
+        (void)splitCommandLine(reinterpret_cast<char *>(boot_info[kBiCommandLine]));
+        boot_records[boot_records_used++] = recordHeader(0, kKeyCommandLine, 1);
+        boot_records[boot_records_used++] = reinterpret_cast<uint32_t>(argv);
+    }
     boot_records[boot_records_used] = 0;       // BOOT-8a: a zero header ends it
     const auto table = reinterpret_cast<uint32_t>(boot_records);
     *reinterpret_cast<volatile uint32_t *>(kBootRecordPointer) = table;
