@@ -151,7 +151,10 @@ applies the fixups of IRX-3 and calls the entry with a module record
 `0x20, 0x28, 0x30, 0x38` and read back as `0x820, 0x828, 0x830, 0x838` once
 loaded, each moved by the base, while the terminator stays zero (IRX-5b).
 
-**Two modules now, and they call each other.** `LOADCORE` imports `sysmem`
+**Two modules now, and they call each other — and the second one is the
+loader.** `IOPBOOT` places `SYSMEM` and `LOADCORE` and stops there, because
+those two are what a loader needs to already exist; `LOADCORE`'s entry takes
+BOOT-8c's block and loads the rest of the list. `LOADCORE` imports `sysmem`
 ordinal 4 and its entry uses it, which is the first cross-module call in the
 image and therefore the first real test of IRX-9's binding:
 
@@ -448,14 +451,25 @@ out-of-order release, arrives with `HEAPLIB`.
 
 **And its heap starts above the whole boot image, not above `SYSMEM`.**
 IRX-15e's low bound is the end of `SYSMEM`'s own image, which works on the
-reference because every module after it is *allocated* out of the heap.
-`IOPBOOT` here places the boot list's modules itself, from the list's base
-upwards, so a heap starting under them would be handed out over modules not
-yet loaded. Ours starts above the image instead, and `tools/imgcheck.py`
-fails the build if the image ever reaches it. The high bound stops below the
-boot list at `0x001F8100` rather than at the RAM size of BOOT-4 step 5, which
-is still not plumbed through. Making `IOPBOOT` allocate its modules like the
-reference does would retire both deviations at once.
+reference because every module after it is *allocated* out of the heap. The
+boot list's modules are placed here, from the list's base upwards, so a heap
+starting under them would be handed out over modules not yet loaded. Ours
+starts above the image instead, and `tools/imgcheck.py` fails the build if
+the image ever reaches it. The high bound stops below the boot list at
+`0x001F8100` rather than at the RAM size of BOOT-4 step 5, which is still not
+plumbed through. Allocating the list's modules the way the reference does
+would retire both deviations at once.
+
+**The boot-info block is inside the heap here, and is read before anything
+allocates.** BOOT-8c puts the block at the absolute address `0x20000`, which
+on the reference is below its heap and here is the heap's first byte — the
+deviation above is what makes it so. `LOADCORE`'s entry therefore copies all
+eight words into its own `.bss` as its *first* action; the allocation a few
+lines later is already enough to take the block's memory. The ordering is
+load-bearing and is stated at the copy. The list of modules `+0x1c` names is
+not copied to `0x20020` the way the reference's is: ours stays in the boot
+block at `0x001F8100`, which is outside the heap, and a cold boot carries no
+command line to make room for.
 
 **A file crosses the bus a window at a time.** The reference serves `rom0:`
 through `ROMDRV` over `SIFCMD`'s RPC; `ROMDRV`'s server does not exist here

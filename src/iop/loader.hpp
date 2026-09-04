@@ -409,11 +409,15 @@ static void registerExports(uint8_t *start, uint8_t *end) {
 }
 
 // entry(argc, argv, 0, record), with the module's own $gp installed for the
-// call and the loader's restored to zero afterwards (IRX-12). This is the one
-// place a plain C++ call will not do: $gp has to hold a value chosen at run
-// time, for a callee that may be hand-written assembly reading it directly,
-// and nothing about a normal call site pins a register that way. Returns
-// what the entry returned, whose low two bits decide residency (IRX-12a).
+// call and the caller's restored afterwards (IRX-12). This is the one place a
+// plain C++ call will not do: $gp has to hold a value chosen at run time, for
+// a callee that may be hand-written assembly reading it directly, and nothing
+// about a normal call site pins a register that way. Returns what the entry
+// returned, whose low two bits decide residency (IRX-12a).
+//
+// The caller's own $gp goes on the stack rather than being replaced with
+// zero: `LOADCORE` is a module and reaches its own data through $gp, and it
+// is the loader for everything after itself.
 [[nodiscard]] static uint32_t callEntry(uint32_t entry, uint32_t gp, uint32_t argc,
                                         char **argv, uint32_t record) {
     uint32_t result;
@@ -422,10 +426,13 @@ static void registerExports(uint8_t *start, uint8_t *end) {
         "move  $a1, %4\n\t"
         "move  $a2, $zero\n\t"
         "move  $a3, %5\n\t"
+        "addiu $sp, $sp, -8\n\t"
+        "sw    $gp, 0($sp)\n\t"
         "move  $gp, %2\n\t"
         "jalr  %1\n\t"
         "nop\n\t"
-        "move  $gp, $zero\n\t"
+        "lw    $gp, 0($sp)\n\t"
+        "addiu $sp, $sp, 8\n\t"
         "move  %0, $v0\n\t"
         : "=r"(result)
         : "r"(entry), "r"(gp), "r"(argc), "r"(argv), "r"(record)
@@ -435,6 +442,55 @@ static void registerExports(uint8_t *start, uint8_t *end) {
         : "$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9", "$10", "$11",
           "$12", "$13", "$14", "$15", "$24", "$25", "$28", "$31", "memory");
     return result;
+}
+
+// One module, placed and joined to the registry but not yet entered: IRX-1,
+// IRX-3, IRX-9, IRX-10. `next_base` is 0 when the file is not a module.
+//
+// The entry is deliberately left to the caller. `IOPBOOT` enters `SYSMEM`
+// with the ordinary IRX signature and `LOADCORE` with the boot-info block
+// (BOOT-8c), and `LOADCORE` enters the rest of the list with the ordinary one
+// again -- three call sites, one placement.
+struct Loaded {
+    uint32_t next_base;
+    uint32_t record;
+    uint32_t entry;
+    uint32_t gp;
+};
+
+[[nodiscard]] static Loaded placeModule(uint32_t rom_address, uint32_t base_address) {
+    Loaded loaded = {0, 0, 0, 0};
+    const auto *rom = reinterpret_cast<const uint8_t *>(rom_address);
+    Segments segments;
+    if (!readHeaders(rom, segments)) {
+        return loaded;                         // IRX-1: not a module
+    }
+    const Placed placed = place(rom, segments, base_address);
+
+    // IRX-12c: the record's +0x10 and +0x14 are the entry and $gp. It is
+    // built just past the module, which is also where the next one starts.
+    const uint32_t record_address = (placed.end + 15) & ~uint32_t{15};
+    auto *record = reinterpret_cast<uint8_t *>(record_address);
+    poke32(record + 0x00, base_address);                   // where it was put
+    poke32(record + 0x04, placed.end - base_address);      // and how much memory
+    poke32(record + 0x10, placed.entry);
+    poke32(record + 0x14, placed.gp);
+
+    // IRX-9 then IRX-10: bind what this module imports, so its entry can call
+    // it, and register what it exports, so the modules after it can bind to
+    // this one. The reference has a module register itself by calling
+    // `loadcore` ordinal 6 from its entry; doing it in the loader instead
+    // means the first module needs no loader to already exist.
+    auto *segment_start = reinterpret_cast<uint8_t *>(base_address);
+    auto *segment_end = reinterpret_cast<uint8_t *>(placed.end);
+    (void)bind(segment_start, segment_end);
+    registerExports(segment_start, segment_end);
+
+    loaded.record = record_address;
+    loaded.entry = placed.entry;
+    loaded.gp = placed.gp;
+    loaded.next_base = record_address + 0x20;  // past the record: the next base
+    return loaded;
 }
 
 }  // namespace ps2::loader

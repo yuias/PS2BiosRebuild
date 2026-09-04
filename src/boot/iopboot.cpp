@@ -14,9 +14,10 @@
 // component's.
 //
 // The loading itself -- placing, fixing up, binding, registering, entering --
-// is `src/iop/loader.hpp`, which `LOADCORE` carries its own copy of for the
-// modules loaded on request later. What is here is the boot list: reading
-// it, and walking it.
+// is `src/iop/loader.hpp`, which `LOADCORE` carries its own copy of. What is
+// here is the boot list: reading it, placing the two modules a loader cannot
+// load itself, and handing the rest to `LOADCORE` (BOOT-8c). `LOADCORE` *is*
+// the loader; this is only what has to run before one exists.
 //
 // This is an R3000A, so `ps2AddComponent`'s per-source flags pin it to
 // MIPS I, the same as the compiled IOP modules.
@@ -46,6 +47,22 @@ using namespace ps2::loader;
 // The address is ABI: `src/iop/eesync.cpp` reads +0x008 and `tools/imgcheck.py`
 // reads +0x000, +0x004 and +0x400, so the layout is fixed even though nothing
 // in `docs/spec/` names it.
+// BOOT-8c: the eight-word block `LOADCORE`'s entry is passed. On this image
+// it is also `SYSMEM`'s first heap byte, which the reference's is not --
+// its heap starts above its own placed image. `LOADCORE` copies the block
+// before it allocates anything, and nothing else may run in between.
+constexpr uintptr_t kBootInfo = 0x00020000;
+constexpr uintptr_t kBiRamMiB = 0x00;
+constexpr uintptr_t kBiMode = 0x04;
+constexpr uintptr_t kBiCommandLine = 0x08;
+constexpr uintptr_t kBiSysmemRecord = 0x0C;
+constexpr uintptr_t kBiReservedBase = 0x10;
+constexpr uintptr_t kBiReservedSize = 0x14;
+constexpr uintptr_t kBiListCount = 0x18;
+constexpr uintptr_t kBiList = 0x1C;
+
+constexpr uint32_t kModeColdBoot = 0;          // BOOT-8b
+
 constexpr uintptr_t kBootList = 0x001F8100;
 constexpr uint32_t kBootListMax = 64;
 constexpr uintptr_t kBlCount = 0x000;
@@ -94,40 +111,8 @@ void writeBootEntry(uint32_t index, uint32_t rom_address, uint32_t size) {
     return bootListWord(kBlEntries + index * 8);
 }
 
-// Place the module at `base`, bind, register and enter it (IRX-1, IRX-3,
-// IRX-9, IRX-10, IRX-12). Returns the next base, or 0 on failure.
-[[nodiscard]] uint32_t loadModule(uint32_t rom_address, uint32_t base_address) {
-    const auto *rom = reinterpret_cast<const uint8_t *>(rom_address);
-    Segments segments;
-    if (!readHeaders(rom, segments)) {
-        return 0;                              // IRX-1: not a module
-    }
-    const Placed placed = place(rom, segments, base_address);
-
-    // IRX-12c: the record's +0x10 and +0x14 are the entry and $gp. It is
-    // built just past the module, which is also where the next one starts.
-    const uint32_t record_address = align16(placed.end);
-    auto *record = reinterpret_cast<uint8_t *>(record_address);
-    poke32(record + 0x00, base_address);                   // where it was put
-    poke32(record + 0x04, placed.end - base_address);      // and how much memory
-    poke32(record + 0x10, placed.entry);
-    poke32(record + 0x14, placed.gp);
-
-    // IRX-9 then IRX-10: bind what this module imports, so its entry can call
-    // it, and register what it exports, so the modules after it can bind to
-    // this one. The reference has a module register itself by calling
-    // `loadcore` ordinal 6 from its entry; doing it in the loader instead
-    // means the first module needs no loader to already exist.
-    auto *segment_start = reinterpret_cast<uint8_t *>(base_address);
-    auto *segment_end = reinterpret_cast<uint8_t *>(placed.end);
-    (void)bind(segment_start, segment_end);
-    registerExports(segment_start, segment_end);
-
-    // `return & 3` decides residency; with no allocator there is nothing to
-    // give back yet, so a module asking to go simply is not there.
-    (void)callEntry(placed.entry, placed.gp, 0, nullptr, record_address);
-
-    return record_address + 0x20;              // past the record: the next base
+void bootInfoWord(uintptr_t offset, uint32_t value) {
+    *reinterpret_cast<volatile uint32_t *>(kBootInfo + offset) = value;
 }
 
 }  // namespace
@@ -136,10 +121,9 @@ extern "C" {
 
 // BOOT-6c: the boot block enters this with the latched RAM-size byte in $a0.
 // The reference sizes its own stack from it (BOOT-7); this rebuild is called
-// from `reset_iop.cpp` with a stack already sized the same way, so there is
-// nothing left for the argument to do here. It stays in the signature so the
-// call site keeps placing it where BOOT-6c says it must.
-[[noreturn]] void iopboot([[maybe_unused]] uint32_t ram_size_byte) {
+// from `reset_iop.cpp` with a stack already sized the same way, so the
+// argument's only remaining use is BOOT-8c's first word.
+[[noreturn]] void iopboot(uint32_t ram_size_byte) {
     // Resolve IOPBTCONF with the archive scan (BOOT-6a).
     const Found list = find(kRomSearchStart, kRomSearchEnd, packName("IOPBTCONF"));
     if (list.address == 0) {
@@ -207,21 +191,50 @@ extern "C" {
     const Found romdir = find(kRomSearchStart, kRomSearchEnd, packName("ROMDIR"));
     bootListWord(kBlTable) = static_cast<uint32_t>(romdir.address);
 
-    // Load each module in turn, in the order the list gave them (BOOT-9c). The
-    // base advances past each one, so a module's address depends on every
-    // module before it -- which is why the order is ABI and not a preference.
-    uint32_t running_base = base_address;
-    for (uint32_t index = 0; index < module_count; index++) {
-        const uint32_t rom_address = bootEntryAddress(index);
-        bootListWord(kBlLoaded + index * 4) = running_base;  // where this one goes
-        bootListWord(kBlNext) = running_base;   // and, so far, where the next goes
-        const uint32_t next_base = loadModule(rom_address, running_base);
-        if (next_base == 0) {
-            stop();                            // a module that will not load
-        }
-        running_base = next_base;
+    // BOOT-8c: only `SYSMEM` and `LOADCORE` are loaded here, in the order the
+    // list gave them (BOOT-9c) -- the list's first two names, because a
+    // loader that allocates needs a memory manager and a registry before it
+    // can exist. Everything after them is `LOADCORE`'s to load.
+    if (module_count < 2) {
+        stop();                                 // no memory manager, no loader
     }
-    bootListWord(kBlNext) = running_base;       // where the next module would go
+    uint32_t running_base = base_address;
+    uint32_t sysmem_record = 0;
+    for (uint32_t index = 0; index < 2; index++) {
+        bootListWord(kBlLoaded + index * 4) = running_base;
+        bootListWord(kBlNext) = running_base;
+        const Loaded loaded = placeModule(bootEntryAddress(index), running_base);
+        if (loaded.next_base == 0) {
+            stop();                             // a module that will not load
+        }
+        if (index == 0) {
+            // `SYSMEM` takes the ordinary IRX entry; `return & 3` decides
+            // residency, and with nothing to give memory back to, a module
+            // asking to go simply is not there.
+            (void)callEntry(loaded.entry, loaded.gp, 0, nullptr, loaded.record);
+            sysmem_record = loaded.record;
+        }
+        running_base = loaded.next_base;
+        bootListWord(kBlNext) = running_base;
+        if (index == 1) {
+            // BOOT-8c: `LOADCORE`'s entry takes the block, not `argc`. It
+            // loads the rest of the list and comes back, and the boot's own
+            // thread goes to sleep below.
+            bootInfoWord(kBiRamMiB, ram_size_byte);
+            bootInfoWord(kBiMode, kModeColdBoot);
+            bootInfoWord(kBiCommandLine, 0);
+            bootInfoWord(kBiSysmemRecord, sysmem_record);
+            bootInfoWord(kBiReservedBase, 0);
+            bootInfoWord(kBiReservedSize, 0);
+            bootInfoWord(kBiListCount, module_count - 2);
+            // Our list stays where it is rather than being copied above the
+            // command line the way the reference's is: there is no command
+            // line on a cold boot, and this table is outside the heap.
+            bootInfoWord(kBiList, kBootList + kBlEntries + 2 * 8);
+            (void)callEntry(loaded.entry, loaded.gp, kBootInfo, nullptr,
+                            loaded.record);
+        }
+    }
 
     // spec/06 IOP-3i: the boot has been running on a thread since THREADMAN
     // made it one, and with the list done that thread has nothing left to

@@ -1,9 +1,16 @@
-// LOADCORE: the module registry, and the services modules call to join it.
+// LOADCORE: the boot list's loader, the module registry, and the services
+// modules call to join it.
 //
 // docs/spec/02-module-abi.md IRX-10: two entry points register an export
 // table, and they are not interchangeable -- ordinal 6 compares tag and major
 // version and accepts only a strictly greater minor, ordinal 10 pins a table
 // at the head with no comparison at all.
+//
+// docs/spec/03-boot-chain.md BOOT-8c: `IOPBOOT` places `SYSMEM` and this
+// module and then calls this module's entry with the eight-word block at
+// `0x20000`; the rest of the boot list is loaded from here. The reason the
+// division falls there is that a loader which allocates needs a memory
+// manager and a registry to already exist, and nothing else does.
 //
 // The registry itself is a single word of RAM, and `src/boot/iopboot.cpp`'s
 // loader already keeps it: the first module loaded still has to be
@@ -133,7 +140,88 @@ static_assert(sizeof(LibraryTable) == 0x14);
 // last one the list named, which is where the reference's count lands too
 // (docs/analysis/34 §6: SIO2MAN is 25 after a 24-entry list).
 
-constexpr uintptr_t kBootListCount = 0x001F8100;
+constexpr uintptr_t kBootList = 0x001F8100;
+constexpr uintptr_t kBlCount = 0x000;
+constexpr uintptr_t kBlNext = 0x00C;
+constexpr uintptr_t kBlLoaded = 0x400;
+constexpr uintptr_t kBootListCount = kBootList + kBlCount;
+
+[[nodiscard]] volatile uint32_t &bootListWord(uintptr_t offset) {
+    return *reinterpret_cast<volatile uint32_t *>(kBootList + offset);
+}
+
+// BOOT-8c: the block the entry is handed, read once into memory of our own.
+// **This copy is the entry's first action and must stay so**: on this image
+// `0x20000` is `SYSMEM`'s first heap byte, so the first allocation anyone
+// makes -- including this module's own, below -- lands on the block.
+constexpr uint32_t kBootInfoWords = 8;
+constexpr uint32_t kBiRamMiB = 0;
+constexpr uint32_t kBiMode = 1;
+constexpr uint32_t kBiListCount = 6;
+constexpr uint32_t kBiList = 7;
+
+uint32_t boot_info[kBootInfoWords];
+
+// BOOT-8: the boot records, and the two addresses that point at them. A
+// record is a header word -- a 16-bit value, the key, the count of extra
+// words -- and the list ends at a zero header.
+constexpr uintptr_t kBootRecordPointer = 0x3F0;
+constexpr uintptr_t kBootRecordPointerAlso = 0x3F4;
+constexpr uint32_t kBootRecordWords = 16;
+constexpr uint32_t kKeyBootMode = 4;           // BOOT-8b
+
+uint32_t boot_records[kBootRecordWords];
+uint32_t boot_records_used;
+
+[[nodiscard]] uint32_t recordHeader(uint32_t value, uint32_t key, uint32_t extra) {
+    return (value & 0xFFFF) | (key << 16) | (extra << 24);
+}
+
+// BOOT-8b: the mode `IOPBOOT` was entered with becomes key 4, which is what
+// a banner module reads to tell a cold boot from the stages of a reboot.
+void buildBootRecords() {
+    boot_records_used = 0;
+    boot_records[boot_records_used++] =
+        recordHeader(boot_info[kBiMode], kKeyBootMode, 0);
+    boot_records[boot_records_used] = 0;       // BOOT-8a: a zero header ends it
+    const auto table = reinterpret_cast<uint32_t>(boot_records);
+    *reinterpret_cast<volatile uint32_t *>(kBootRecordPointer) = table;
+    *reinterpret_cast<volatile uint32_t *>(kBootRecordPointerAlso) = table;
+}
+
+// Ordinal 12, `QueryBootMode(key)`: the *address* of the record with that
+// key, or 0 (BOOT-8a). A caller that wants the 16-bit value reads it from
+// what comes back.
+[[nodiscard]] int queryBootMode(uint32_t key) {
+    const auto *record = *reinterpret_cast<uint32_t *const volatile *>(
+        kBootRecordPointer);
+    if (record == nullptr) {
+        return 0;
+    }
+    for (; *record != 0; record += ((*record >> 24) & 0xFF) + 1) {
+        if (((*record >> 16) & 0xFF) == key) {
+            return static_cast<int>(reinterpret_cast<uintptr_t>(record));
+        }
+    }
+    return 0;
+}
+
+// Ordinal 20: a module's entry asks to be called back once the boot list has
+// run out. `MODLOAD` registers one when key 4 says this is the second stage
+// of an update reboot, and that callback is what loads `UDNL`
+// (docs/analysis/45 §2). Nothing in this image registers one yet.
+constexpr uint32_t kBootupCallbacks = 4;
+
+void (*bootup_callbacks[kBootupCallbacks])();
+uint32_t bootup_callback_count;
+
+[[nodiscard]] int addBootupCallback(void (*function)()) {
+    if (function == nullptr || bootup_callback_count == kBootupCallbacks) {
+        return -1;
+    }
+    bootup_callbacks[bootup_callback_count++] = function;
+    return 0;
+}
 
 ps2::loader::ModuleRecord *module_list;
 uint16_t next_module_id;
@@ -269,7 +357,7 @@ template <typename F>
         unimplemented,                  // 9  UnLinkLibraryEntries
         registerPinned,                 // 10 register, pinned
         unimplemented,                  // 11
-        unimplemented,                  // 12 QueryBootMode
+        asSlot(queryBootMode),          // 12 QueryBootMode
         unimplemented,                  // 13
         unimplemented,                  // 14
         unimplemented,                  // 15
@@ -277,7 +365,7 @@ template <typename F>
         unimplemented,                  // 17 ReleaseModule
         unimplemented,                  // 18
         unimplemented,                  // 19
-        unimplemented,                  // 20 AddRebootNotifyHandler
+        asSlot(addBootupCallback),      // 20 bootup callbacks
         unimplemented,                  // 21 SetCacheCtrl
         asSlot(probeExecutable),        // 22 ProbeExecutableObject
         asSlot(loadExecutable),         // 23 LoadExecutableObject
@@ -334,14 +422,58 @@ extern "C" {
 int _import_sysmem_allocate(int mode, int size, int address);
 int _import_sysmem_release(int address);
 
-// IRX-12: entry(argc, argv, 0, module_record), with the module's own $gp
-// installed. Calling the bound import proves the binding worked -- the same
-// use a reference module would make of its own imports from its entry.
-int _module_start(int, char **) {
+// BOOT-8c: this entry is not the ordinary IRX one. `IOPBOOT` calls it with
+// the boot-info block's address where `argc` would be, and its own record
+// where IRX-12 puts it -- which is all this module needs to know where the
+// next module goes, the record's `+0x20` being the base past it.
+int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
+    // **First, before anything allocates.** `0x20000` is `SYSMEM`'s first
+    // heap byte on this image (it is not on the reference, whose heap starts
+    // above its own placed image), so the block survives exactly as long as
+    // it takes to read it -- the allocation five lines down is enough to
+    // take it.
+    const auto *block = reinterpret_cast<const volatile uint32_t *>(boot_info_address);
+    for (uint32_t k = 0; k < kBootInfoWords; k++) {
+        boot_info[k] = block[k];
+    }
+    buildBootRecords();
+
+    // IRX-9: calling the bound import proves the binding worked -- the same
+    // use a reference module would make of its own imports from its entry --
+    // and it is what `tools/imgcheck.py` reads back.
     const int address = _import_sysmem_allocate(0, 64, 0);
     *reinterpret_cast<volatile uint32_t *>(kRanMarker) =
         static_cast<uint32_t>(address);
-    return 0;                          // resident
+
+    // BOOT-9c: the rest of the list, in order, each module placed past the
+    // last. The list is (ROM address, size) pairs and `IOPBOOT` has already
+    // taken the two it loaded off the front, so the index into the boot
+    // block's "where it was loaded" array counts from the difference.
+    const uint32_t count = boot_info[kBiListCount];
+    const auto *entries = reinterpret_cast<const uint32_t *>(boot_info[kBiList]);
+    uint32_t index = bootListWord(kBlCount) - count;
+    uint32_t running_base = record + 0x20;
+    for (uint32_t k = 0; k < count; k++, index++) {
+        bootListWord(kBlLoaded + index * 4) = running_base;
+        bootListWord(kBlNext) = running_base;
+        const ps2::loader::Loaded loaded =
+            ps2::loader::placeModule(entries[k * 2], running_base);
+        if (loaded.next_base == 0) {
+            for (;;) {                 // BOOT-9a: a module that will not load
+            }
+        }
+        (void)ps2::loader::callEntry(loaded.entry, loaded.gp, 0, nullptr,
+                                     loaded.record);
+        running_base = loaded.next_base;
+    }
+    bootListWord(kBlNext) = running_base;
+
+    // The end-of-list pass: whatever asked to hear that the list is done.
+    for (uint32_t k = 0; k < bootup_callback_count; k++) {
+        bootup_callbacks[k]();
+    }
+
+    return 0;                          // resident; `IOPBOOT` sleeps its thread
 }
 
 }  // extern "C"
