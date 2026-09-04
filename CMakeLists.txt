@@ -146,6 +146,9 @@ ps2AddModule(romdrv MODULE ROM_File_Driver VERSION 1.00
     SOURCES src/iop/romdrv.cpp)
 ps2AddModule(stdio MODULE Standard_IO VERSION 1.00
     SOURCES src/iop/stdio.cpp)
+# Ours, on neither reference boot list: see src/iop/ioptty.cpp.
+ps2AddModule(ioptty MODULE IOP_tty_console VERSION 1.00
+    SOURCES src/iop/ioptty.cpp)
 ps2AddModule(loadfile MODULE Load_Module_By_EE VERSION 1.00
     SOURCES src/iop/loadfile.cpp)
 ps2AddModule(cdvdman MODULE cdvd_driver VERSION 1.00
@@ -253,7 +256,7 @@ add_custom_command(
             reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
             loadcore.elf excepman.elf intrman.elf timrman.elf threadman.elf sysclib.elf
             dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
-            sifman.elf sifcmd.elf eesync.elf loadfile.elf
+            ioptty.elf sifman.elf sifcmd.elf eesync.elf loadfile.elf
             cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf udnl.elf
             osdsys.elf eeload.elf
     COMMENT "Assembling the ROM archive")

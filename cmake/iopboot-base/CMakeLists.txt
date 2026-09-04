@@ -34,7 +34,7 @@ add_custom_command(
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
             sysmem.elf loadcore.elf excepman.elf intrman.elf timrman.elf
             threadman.elf sysclib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf
-            stdio.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf
+            stdio.elf ioptty.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf
             secrman.elf sio2man.elf
     COMMENT "Computing IOPBOOT's archive-relative link address")
 

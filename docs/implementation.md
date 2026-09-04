@@ -739,6 +739,17 @@ to find something the module had been announcing all along. It should become
 a build option before the image is presented as a faithful replacement --
 the deviation is small and one-way, but it is real.
 
+**`IOPTTY` keeps that console across a title's reboot -- the same deviation,
+one module further.** A title's reboot merges its own modules over ours
+(`docs/analysis/45`), and both `STDIO` and `IOMAN` come from the disc: the
+printf above is replaced by the reference chain, `printf` through `IOMAN`'s
+own `tty:` device to `sysmem` ordinal 14, which forwards to a hook nothing
+installs. `IOPTTY` is a `rom0` module of ours that installs one, formatting
+through the same `SYSCLIB` ordinal 18 and storing at the same address. It
+carries no library and no name any source the merge opens uses, so `rom0`'s
+copy is always the candidate that wins. It is on both boot lists, and at a
+cold boot it changes nothing, because no module of ours calls ordinal 14.
+
 **`SYSMEM`'s `Kprintf` forwards nowhere yet.** IRX-6c. Ordinal 14 answers `0`
 until ordinal 15 installs a hook, which is the state the reference ships in
 -- nothing in its archive installs one either. Ordinal 15 is a plain swap;
