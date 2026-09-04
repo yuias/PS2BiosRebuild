@@ -306,4 +306,15 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/SCPH-50000.bin" AND
                 --check
         USES_TERMINAL
         COMMENT "Judging the offline IOP module merge model")
+    # BOOT-9f over the merge our own image would produce: our loader tolerates
+    # a forward reference and the merged kernel's does not, so this is the only
+    # place it can be seen.
+    add_custom_command(TARGET check POST_BUILD
+        COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/iopmerge.py"
+                --rom0 "${PS2_IMAGE}"
+                --iso "${CMAKE_CURRENT_SOURCE_DIR}/assets/SLPS-25918.iso"
+                iso:IOPRP310.IMG --assert-order
+        USES_TERMINAL
+        COMMENT "Judging the merged kernel's load order")
 endif()

@@ -59,6 +59,7 @@ import pathlib
 import struct
 import sys
 
+import irxinfo  # and IRX-4/IRX-8 table parsing, for the load-order check
 import romdir  # reuse ARC-1..9 parsing rather than re-deriving it
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -239,10 +240,46 @@ def formatVersion(version: int) -> str:
     return f"{version >> 8:x}.{version & 0xFF:02x}"
 
 
-def printMerge(order_source: Source, resolutions: list[Resolution]) -> None:
+def printMerge(order_source: Source, resolutions: list[Resolution],
+                sources: dict[str, Source]) -> None:
     print(f"order from {order_source.label} ({len(resolutions)} names)")
     for r in resolutions:
         print(f"  {r.name:<10} {formatVersion(r.version):>6}  <- {r.source}")
+    for problem in checkLoadOrder(resolutions, sources):
+        print(f"  BOOT-9f: {problem}")
+
+
+def checkLoadOrder(resolutions: list[Resolution],
+                    sources: dict[str, Source]) -> list[str]:
+    """BOOT-9f: every imported library exported by an earlier module.
+
+    The reference loader unloads a module whose import table finds no
+    exporter, and everything that imported *that* module follows it, so one
+    forward reference costs the rest of the boot. Our own loader counts the
+    unbound table and carries on, which means a forward reference in our list
+    is invisible until a merge hands the list to a loader that does not --
+    exactly the case this tool models, since a title's newer module may import
+    libraries the older one it replaces did not.
+    """
+    exported: dict[str, int] = {}
+    problems: list[str] = []
+    for index, resolution in enumerate(resolutions):
+        source = sources[resolution.source]
+        entry = romdir.entryMap(source.entries).get(resolution.name)
+        if entry is None:
+            continue
+        module = irxinfo.Irx.fromBytes(
+            source.data[entry.offset:entry.offset + entry.size], resolution.name)
+        tables = module.tables()
+        for table in tables:
+            if table["kind"] == "import" and table["tag"] not in exported:
+                problems.append(
+                    f"{resolution.name} (#{index}) imports {table['tag']}, "
+                    f"which no earlier module exports")
+        for table in tables:
+            if table["kind"] == "export":
+                exported.setdefault(table["tag"], index)
+    return problems
 
 
 def runCheck(rom0_path: pathlib.Path, iso_path: pathlib.Path) -> int:
@@ -275,6 +312,9 @@ def runCheck(rom0_path: pathlib.Path, iso_path: pathlib.Path) -> int:
             got = f"{r.source} {formatVersion(r.version)}" if r else "missing"
             problems.append(f"{name}: got {got}, want IOPRP310.IMG "
                              f"{formatVersion(version)}")
+
+    problems += [f"BOOT-9f: {p}" for p in checkLoadOrder(
+        resolutions, {"rom0": rom0, "IOPRP310.IMG": ioprp})]
 
     print(f"IOPRP310.IMG over rom0: {len(from_disc)} disc, {len(from_rom0)} "
           f"rom0, {len(resolutions)} total")
@@ -312,6 +352,10 @@ def main() -> int:
                          help="named source archives, oldest-first / "
                               "newest-last: a file path, or 'rom0:NAME' / "
                               "'iso:NAME'")
+    parser.add_argument("--assert-order", action="store_true",
+                         help="merge the given sources and exit non-zero on "
+                              "any BOOT-9f forward reference, instead of "
+                              "printing the table")
     parser.add_argument("--check", action="store_true",
                          help="assert the known IOPRP310.IMG-over-rom0 "
                               "answer, report EELOADCNF unasserted; defaults "
@@ -335,7 +379,17 @@ def main() -> int:
     rom0 = loadArchive("rom0", args.rom0.read_bytes())
     sources = [resolveSource(token, rom0, args.iso) for token in args.sources]
     order_source, resolutions = merge(sources, rom0)
-    printMerge(order_source, resolutions)
+    by_label = {s.label: s for s in sources}
+    by_label[rom0.label] = rom0
+    if args.assert_order:
+        problems = checkLoadOrder(resolutions, by_label)
+        for problem in problems:
+            print(f"iopmerge: FAIL BOOT-9f: {problem}", file=sys.stderr)
+        if problems:
+            return 1
+        print(f"iopmerge: load order ok ({len(resolutions)} names)")
+        return 0
+    printMerge(order_source, resolutions, by_label)
     return 0
 
 
