@@ -523,6 +523,24 @@ simulator, in this order:
   `docs/analysis/45` describes, and the question that section left open —
   whether the merge is needed at all — is now answered yes.
 
+  **The merge is built and the title runs on the merged kernel** (`UDNL`,
+  `docs/analysis/51`): a reset that names an image reboots the IOP with the
+  disc's own `SYSMEM`, `LOADCORE`, `THREADMAN`, `CDVDFSV` and the rest, and
+  the post-reset SIF traffic matches the reference's line for line. What
+  stopped the title after that was on the EE, twice, and neither was on the
+  bus: a thread created by the main thread read a heap end of 0 (the
+  reference's `CreateThread` copies the creator's, `spec/05` SYS-10d), so the
+  SDK's `malloc` off the main thread returned null and the title copied a
+  file over the exception vector; and `Deci2Call`'s open answered the caller's
+  own register where the reference answers `-3` -- because its OSD leaves the
+  EE TTY protocol open -- so the title took the socket for real and polled
+  for a write-done for ever (`docs/analysis/52`). Both were found by the same
+  instrument: the reference BIOS on PS2e with the same disc, the PS2e EE
+  debugger on the instruction after the `syscall`, and the answers compared
+  per call. The command stream is now identical to the reference's through
+  the memory-card polling; where it stops next is the EE again, a copy loop
+  whose registers go wrong mid-copy, still being read.
+
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
   against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
