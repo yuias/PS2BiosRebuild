@@ -170,7 +170,7 @@ void interruptDispatch(uint32_t *frame) {
     uint32_t cause;
     uint32_t status;
     asm volatile("mfc0 %0, $13" : "=r"(cause));
-    status = frame[26 * 4];
+    status = frame[1];                          // beside EPC; syscall.S's SLOT_STATUS
     const uint32_t pending = cause & status;
 
     if (pending & kIpIntc) {

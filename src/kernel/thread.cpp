@@ -28,6 +28,7 @@ constexpr uint16_t kNone = 0xFFFF;
 constexpr uint32_t kFrameBytes = 0x2A0;
 constexpr uint32_t kFramePush = 0x280;          // frame = saved $sp - this
 constexpr uint32_t kBlockWords = 32 * 4;
+constexpr uint32_t kWordStatus = 1;              // an interrupt frame's Status, beside EPC
 constexpr uint32_t kSlotV0 = 2 * 16;
 constexpr uint32_t kSlotV1 = 3 * 16;
 constexpr uint32_t kSlotA0 = 4 * 16;
@@ -441,13 +442,14 @@ bool interruptReschedule(uint32_t *frame) {
     ThreadRecord &thread = thread_table[next];
     current_thread = next;
     thread.state = Run;
-    // The frame's slot 26 is Status, which the exit restores; a thread's block
+    // The frame's word 1 is Status, which the exit restores; a thread's block
     // has nothing meaningful there. The interrupted thread's Status -- with
     // interrupts enabled, since one was just taken -- is what the picked
-    // thread resumes under.
-    const uint32_t status = frame[26 * 4];
+    // thread resumes under. HI/LO and SA travel in the block (slots 26, 27
+    // and word 2) and are the picked thread's own.
+    const uint32_t status = frame[kWordStatus];
     copyWords(frame, reinterpret_cast<const uint32_t *>(thread.context), kBlockWords);
-    frame[26 * 4] = status;
+    frame[kWordStatus] = status;
     frame[0] = thread.resume_pc;
     return true;
 }

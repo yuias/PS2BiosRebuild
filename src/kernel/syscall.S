@@ -30,6 +30,42 @@
     .word (0x1E << 26) | ((\base) << 21) | ((\rt) << 16) | ((\offset) & 0xFFFF)
 .endm
 
+// The multiply/divide results and the shift amount live outside the GPR file.
+// LLVM's MIPS has no `mfhi1`/`mflo1`/`mfsa` family, so those are `.word`s.
+// In the block they take the reference's slots (`docs/analysis/33` §2): HI
+// and HI1 in slot 26, LO and LO1 in slot 27; SA sits in slot 0 at +8, beside
+// EPC (+0) and Status (+4).
+    .set SLOT_STATUS, 4
+    .set SLOT_SA,     8
+    .set SLOT_HI,     26 * 16
+    .set SLOT_HI1,    26 * 16 + 8
+    .set SLOT_LO,     27 * 16
+    .set SLOT_LO1,    27 * 16 + 8
+.macro save_hilosa_k1               // through $k1, from $k0
+    mfhi  $k1
+    sd    $k1, SLOT_HI($k0)
+    .word 0x7000D810                // mfhi1 $k1
+    sd    $k1, SLOT_HI1($k0)
+    mflo  $k1
+    sd    $k1, SLOT_LO($k0)
+    .word 0x7000D812                // mflo1 $k1
+    sd    $k1, SLOT_LO1($k0)
+    .word 0x0000D828                // mfsa  $k1
+    sw    $k1, SLOT_SA($k0)
+.endm
+.macro restore_hilosa_at            // through $at, from $k0
+    ld    $at, SLOT_HI($k0)
+    mthi  $at
+    ld    $at, SLOT_HI1($k0)
+    .word 0x70200011                // mthi1 $at
+    ld    $at, SLOT_LO($k0)
+    mtlo  $at
+    ld    $at, SLOT_LO1($k0)
+    .word 0x70200013                // mtlo1 $at
+    lw    $at, SLOT_SA($k0)
+    .word 0x00200029                // mtsa  $at
+.endm
+
     .set SYSCALL_TABLE, 0x4F40          // 0x80014F40, from a 0x8001 base
     .set SYSCALL_COUNT, 0x100          // SYS-11: reachable, not filled
 
@@ -117,13 +153,16 @@ _syscall_positive:
 // The exception is a thread that was parked by an interrupt and is resumed
 // from a syscall's pick (SYS-12c): it continues an instruction stream in
 // which $v0 and $v1 are ordinary live registers -- a copy loop's data and
-// destination, say -- so both come back from its frame, whole.
+// destination, say -- so both come back from its frame, whole, and so do
+// HI/LO and SA, which a `mult` two instructions before the interrupt had
+// filled.
 _syscall_return:
     la    $k0, _syscall_context
     la    $k1, _syscall_restore_full
     lw    $at, 0($k1)
     beq   $at, $zero, _syscall_return_scaled
     sw    $zero, 0($k1)
+    restore_hilosa_at                   // live too, for the same reason
     lq_   2, 2 * 16, CONTEXT_BASE
     b     _syscall_return_rest
     lq_   3, 3 * 16, CONTEXT_BASE
@@ -196,9 +235,9 @@ _newline:
 // The interrupt entry: interrupt_table's INTC, DMAC and timer entries point
 // here (EE-6d, docs/spec/05 SYS-12b). Every register goes into a frame of the
 // syscall block's shape -- 32 slots of 16 bytes -- pushed on the interrupt
-// stack, with EPC in slot 0 ($zero's, which nothing needs) and Status in slot
-// 26 ($k0's); the frame is what interrupt.cpp reads and what the exit restores
-// from. Handlers run with EXL clear, so the syscalls they make (the direct
+// stack, with EPC, Status and SA in slot 0 ($zero's, which nothing needs) and
+// HI/LO in slots 26 and 27 ($k0's and $k1's); the frame is what interrupt.cpp
+// reads and what the exit restores from. Handlers run with EXL clear, so the syscalls they make (the direct
 // forms) get an EPC of their own, and with EIE clear, so nothing nests unless
 // a handler asks with `ei` -- and if one does, the push makes that safe. A
 // reschedule on the way out (SYS-12c) is done by rewriting this frame with the
@@ -232,7 +271,8 @@ _interrupt_save:
     mfc0  $k1, $14                      // EPC: the interrupted instruction
     sw    $k1, 0($k0)
     mfc0  $k1, $12                      // Status, to hand back as it was
-    sw    $k1, 26 * 16($k0)
+    sw    $k1, SLOT_STATUS($k0)
+    save_hilosa_k1                      // the handlers are compiled code
     lui   $at, (STATUS_EIE >> 16) & 0xFFFF
     ori   $at, $at, STATUS_EXL
     nor   $at, $at, $zero
@@ -250,12 +290,13 @@ _interrupt_save:
     lw    $at, 0($k1)
     addiu $at, $at, -1
     sw    $at, 0($k1)
-    lw    $at, 26 * 16($k0)
+    lw    $at, SLOT_STATUS($k0)
     ori   $at, $at, STATUS_EXL
     mtc0  $at, $12
     lw    $at, 0($k0)
     mtc0  $at, $14
     sync_p
+    restore_hilosa_at
     .irp reg, 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
     lq_   \reg, \reg * 16, CONTEXT_BASE
     .endr
