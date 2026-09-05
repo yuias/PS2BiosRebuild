@@ -803,9 +803,11 @@ cold boot it changes nothing, because no module of ours calls ordinal 14.
 **`EnableIntr`'s bank-1 path writes DICR2 as the reference does.** IOP-2c2:
 the reference writes that register in *both* DMA paths -- in bank 1 it puts
 DICR2's own bits 0..23 back, plus the channel's low bit when `0x200` is
-passed. The write was left out for a while because it alone appeared to
-cost the title an interrupt on PS2e. It did not: it moves the timing by a
-few instructions, and what that exposed was the bank handler below.
+passed. The write was left out for a while because, on the pre-merge image
+with our own `CDVDMAN`, it alone appeared to cost the title an interrupt on
+PS2e; that observation was never explained and is superseded. On the merged
+kernel it moves the timing by a few instructions, and what that exposed
+was the bank handler below.
 
 **The DMA bank handler serves every flagged channel, enabled or not.**
 IOP-2h reads the reference's handler as walking DICR's *flag* bits; ours
