@@ -270,9 +270,9 @@ _interrupt_save:
     .endr
     mfc0  $k1, $14                      // EPC: the interrupted instruction
     sw    $k1, 0($k0)
+    save_hilosa_k1                      // the handlers are compiled code
     mfc0  $k1, $12                      // Status, to hand back as it was
     sw    $k1, SLOT_STATUS($k0)
-    save_hilosa_k1                      // the handlers are compiled code
     lui   $at, (STATUS_EIE >> 16) & 0xFFFF
     ori   $at, $at, STATUS_EXL
     nor   $at, $at, $zero
