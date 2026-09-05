@@ -159,7 +159,14 @@ extern uint32_t _interrupt_depth;
 // slot 0 and Status in slot 26; the entry restores from it afterwards.
 void interruptDispatch(uint32_t *frame) {
     prepareLists();
-    clearRescheduleRequest();
+    // A handler that enables interrupts -- the SDK's SIF command handler
+    // does, first thing -- lets another interrupt nest inside it, and only
+    // the outermost exit may switch threads (SYS-12c). So only the outermost
+    // entry starts a fresh request: a nested one clearing it would drop a
+    // wakeup the outer handler had already asked for.
+    if (_interrupt_depth == 1) {
+        clearRescheduleRequest();
+    }
     uint32_t cause;
     uint32_t status;
     asm volatile("mfc0 %0, $13" : "=r"(cause));

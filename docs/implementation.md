@@ -926,6 +926,17 @@ reference does, and is picked only when no program thread can be. Where the
 reference keeps its boot thread, and what it runs there, was not read; the
 observable behaviour (`docs/analysis/34` §6) is what is matched.
 
+One guard goes with that queue. The SDK's SIF command handler enables
+interrupts as its first act (`docs/analysis/35` §1), so an interrupt can nest
+inside it; only the outermost exit may switch threads here (SYS-12c), and so
+only the outermost *entry* starts a fresh reschedule request -- a nested
+entry clearing it would drop a wakeup the outer handler had already asked
+for, which on the reference costs a little latency and here, with nothing
+but the boot thread left to run, cost the rest of the run. A second guard
+that switched away from the boot thread whenever a program thread was ready,
+request or not, was tried and withdrawn as redundant: with the request kept,
+the boot thread is never found running over a ready one.
+
 **`MODLOAD` loads, and little else.** Of its sixteen ordinals,
 `LoadStartModule` and `IsIllegalBootDevice` are real — the latter accepts
 every path, its rule being unread (IOP-5g) — and the rest answer -1; the
