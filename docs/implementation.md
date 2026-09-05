@@ -863,6 +863,14 @@ arguments and treats both as "the top of memory"; a caller relying on the wrap
 would be relying on a stack at the top of a 4 GiB space the machine does not
 have.
 
+**A thread created by the boot thread gets the kernel's own root.** SYS-10d:
+the reference copies the creator's root into a new record and primes the
+frame's `$ra` with it, and ours does the same. The boot thread has no root --
+nothing called `0x3C` for it -- so a thread it creates would return to
+address zero. Ours substitutes a kernel trampoline that exits the thread
+(SYS-10i) when the creator's root is zero; a program's threads inherit their
+runtime's root exactly as on the reference.
+
 **`RDRAM` returns 32 MiB without asking.** EE-2b: the reference's `RDRAM`
 negotiates with the memory controller and reports what it found. An emulator
 presents its RAM ready, so ours answers with the size the reference finds on

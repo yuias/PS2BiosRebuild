@@ -199,7 +199,9 @@ the stack `0x3C` recorded. The value is stored and returned.
 ## Slot 0x3E: read it back
 
 `0x800052D0` is the load of `T[+0x40]` for the current thread — the value the
-last `0x3D` stored, and 0 before any.
+last `0x3D` stored, and 0 before any. `CreateThread` copies the creator's
+`+0x40` into a new record (`docs/analysis/33` §5), so a thread created after
+`0x3D` reads the same value; the SDK's `sbrk` relies on that.
 
 ## Slot 0x07: how a program's arguments reach it
 

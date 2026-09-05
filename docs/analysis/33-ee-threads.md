@@ -35,8 +35,8 @@ python3 tools/romdis.py <outdir>/KERNEL --cpu ee --vma 0x80000000 --range 0x8000
 | `+0x28` | 32 | saved original entry point (restored to `+0x04` on reset-to-dormant) |
 | `+0x2C`/`+0x30` | 32/32 | argc / argv-arg-list ptr (StartThread also stashes its raw `arg` here) |
 | `+0x34`/`+0x38` | 32/32 | stack base / stack size |
-| `+0x3C` | 32 | root — return address for a returning thread function (§5, unresolved) |
-| `+0x40` | 32 | heap end |
+| `+0x3C` | 32 | root — return address for a returning thread function; `CreateThread` copies the creator's, `0x3bb8` re-primes the frame's `$ra` from it |
+| `+0x40` | 32 | heap end — `CreateThread` copies the creator's (§5) |
 
 Confirmed field-for-field by decoding `ReferThreadStatus` (copies `T[id]`
 into PS2SDK's 12-field `ee_thread_status_t` offset for offset), cross-
@@ -265,12 +265,18 @@ Returns `id`. `0→-1` (boot never suspended).
   relying on the pick loop to re-select the caller. The flag's reader
   wasn't found; likely the interrupt-return path for `i`-forms that can't
   switch immediately — worth checking spec/04's interrupt-return code.
-- **`CreateThread`'s `root`(`+0x3C`)/primed `$ra` are not the entry point**
-  (`+0x04`/`+0x28`) — both come from arithmetic adding the *raw*, unscaled
-  current-thread-index to a base near `+0x3C`/`+0x40`, not the `id*0x4C`
-  pattern used elsewhere here. Parallels slot `0x3C`'s "`$ra`=root, returns
-  there" — plausibly a "thread returned → ExitThread" trampoline, not
-  pinned. Follow-up: watch `$ra` after a real CreateThread+StartThread.
+- **`CreateThread` copies the creator's `root` (`+0x3C`) and heap end
+  (`+0x40`) into the new record** (resolved 2026-09-05). The word at
+  `0x80003d48` that `romdis` cannot decode is `0x00e93818`, the R5900
+  three-operand `mult $7, $7, $9` scaling the current-thread index by
+  `0x4C`; `0x80003d9c`/`0x80003da4` then move `T[cur]+0x40` to
+  `T[new]+0x40`, and `0x80003dac`/`0x80003dbc`/`0x80003dc4` move
+  `T[cur]+0x3C` to the frame's `$ra` slot and `T[new]+0x3C`. The
+  reset-to-dormant helper `0x80003bb8` re-primes `$ra` from `T[id]+0x3C`
+  (`0x80003c10`/`0x80003c24`), so the root survives exit and restart. For a
+  program's threads the root is therefore what its runtime passed to slot
+  `0x3C`. Observed on the title: a thread created by the main thread reads
+  the main thread's `0x1fc0000` back from `0x3E`.
 - `SleepThread`'s reschedule decision is inside its own operation (the
   wakeup-count check), not its wrapper — unlike Terminate/ChangePriority/
   Rotate, where the wrapper's `bltz` is purely an id/range check.

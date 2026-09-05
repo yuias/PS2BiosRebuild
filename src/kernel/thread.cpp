@@ -382,7 +382,8 @@ void resetToDormant(ThreadRecord &thread) {
     thread.current_priority = thread.initial_priority;
     thread.wait_type = NotWaiting;
     thread.wakeup_count = 0;
-    thread.root = reinterpret_cast<uintptr_t>(threadRoot);
+    // The root stays what creation gave it: the reference re-primes the
+    // frame's $ra from the record's own +0x3C.
     primeFrame(thread);
 }
 
@@ -604,7 +605,15 @@ int32_t sysCreateThread(const uint32_t *block) {
     thread.argc = 0;
     thread.args = nullptr;
     thread.start_arg = 0;
-    thread.heap_end = 0;
+    // The reference copies the creator's heap end and root into the new
+    // record, so a child thread's sbrk sees the limit 0x3D set on the main
+    // one. Zeroing it here made 0x3E answer 0 off the main thread, and the
+    // SDK's malloc then failed silently. The root falls back to the kernel's
+    // own when the creator has none (the boot thread).
+    const ThreadRecord &creator = current();
+    thread.heap_end = creator.heap_end;
+    thread.root = creator.root != 0 ? creator.root
+                                    : reinterpret_cast<uintptr_t>(threadRoot);
     thread.next = kNone;
     thread.prev = kNone;
     resetToDormant(thread);

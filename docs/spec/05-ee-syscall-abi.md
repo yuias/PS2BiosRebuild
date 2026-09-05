@@ -276,8 +276,12 @@ pointers before `argc`, hands it garbage.
 
 **SYS-8c — slots `0x3D` and `0x3E`.** `0x3D(start, size)` stores and returns
 `start + size`, or the current thread's stack base (SYS-8a) when `size` is
-negative — "the heap runs up to the stack". `0x3E()` returns what was stored,
-0 before any `0x3D`.
+negative — "the heap runs up to the stack". `0x3E()` returns what was stored
+for the current thread: `0x3D`'s value on the thread that called it, the
+creator's value on a thread `0x20` created afterwards (SYS-10d), and 0 only
+when neither happened. The SDK's `sbrk` calls `0x3E` from whichever thread
+allocates, so a kernel that keeps the value on the calling thread alone makes
+`malloc` fail on every other thread — silently, with a null pointer.
 
 **SYS-8d — how a program receives its arguments.** A launcher — slot `0x07`,
 and the ROM's own boot through EE-9c — packs the argument strings, NUL
@@ -385,9 +389,10 @@ not specified further.
 **SYS-10d — creating and starting.** `0x20(block) -> id | -1`: pops the free
 list (`-1` when empty); reads `func` (`+0x04`), `stack` (`+0x08`),
 `stack_size` (`+0x0C`), `gp` (`+0x10`), `initial_priority` (`+0x14`,
-halfword); state dormant; primes a frame at `top - 0x2A0` with `$gp`,
-`$sp = $fp = top - 0x20`, and `$ra` = a kernel address a returning thread
-function lands on (SYS-10i). No priority check. `0x22(id, arg) -> id | -1`:
+halfword); state dormant; **copies the caller's root and heap end** (SYS-8a,
+SYS-8c) into the new record, so a thread inherits the heap limit its creator
+set; primes a frame at `top - 0x2A0` with `$gp`, `$sp = $fp = top - 0x20`,
+and `$ra` = that root (SYS-10i). No priority check. `0x22(id, arg) -> id | -1`:
 `id` in `1..255`, not the caller, dormant, else `-1`; writes `arg` into the
 frame's `$a0` slot and the record, appends the thread to the tail of its
 priority's queue, and switches. A thread started at the caller's own priority
@@ -433,8 +438,10 @@ are a no-op returning `id`; free `-1`.
 
 **SYS-10i — the root of a thread.** A thread function that returns lands, via
 the `$ra` its frame was primed with, in kernel code that exits it as `0x23`
-does. The reference computes that address from a kernel table; what matters
-is the effect: a returning thread function does not fall off into memory.
+does. The reference takes it from the creator's record (SYS-10d) — for a
+program's threads, the root its runtime passed to `0x3C` — and re-primes it
+from the record on every reset to dormant; what matters is the effect: a
+returning thread function does not fall off into memory.
 
 **SYS-10j — status.** `0x30`/`0x31 (id, out) -> state | -1`: id 0 is the
 caller; `id` below 256 else `-1`; with `out` null only the state is returned;
