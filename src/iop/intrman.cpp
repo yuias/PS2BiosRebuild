@@ -372,14 +372,15 @@ int enableDispatchIntr(uint32_t irq) {
 // written 0 so they stay -- then call its handler through the same table as
 // every other line.
 void serveBank(uintptr_t dicr, uint32_t first_irq) {
-    const uint32_t value = readWord(dicr);
-    const uint32_t flags = (value >> 24) & 0x7F;
+    const uint32_t flags = (readWord(dicr) >> 24) & 0x7F;
     for (uint32_t channel = 0; channel < 7; channel++) {
         const uint32_t bit = 1u << channel;
         if ((flags & bit) == 0) {
             continue;
         }
-        writeWord(dicr, (value & ~kDicrFlags) | (bit << 24));
+        // Read again for the ack: a handler served earlier in this walk may
+        // have changed the enables, and a stale copy would put them back.
+        writeWord(dicr, (readWord(dicr) & ~kDicrFlags) | (bit << 24));
         (void)callRegistered(first_irq + channel);
     }
 }
