@@ -979,9 +979,21 @@ the whole frame anyway, needs no such distinction. Found on the disc: a
 1.4 MB copy resumed with `$3` holding the kernel's own frame pointer, and
 wrote the file over the copying thread's stack.
 
+**`HI`, `LO` and `SA` cross an interrupt with the thread.** The same
+argument, one register file over: a thread is interrupted between a `mult`
+and its `mflo` as readily as between two loads, and the handlers are
+compiled code that multiplies. The interrupt entry saves all four halves
+and the shift amount into the frame, in the reference's own slots
+(`docs/analysis/33` §2: `HI`/`HI1` in slot 26, `LO`/`LO1` in slot 27), and
+both exits that can resume an interrupt-parked thread put them back -- the
+interrupt's own, and the syscall's full-restore path above. Status moved
+beside EPC in slot 0 to make room. Not found on the disc; the same class as
+the `$v0`/`$v1` bug, fixed before it was.
+
 LLVM has no R5900 target, so `lq` and `sq` are assembled the way `sync.p`
 already was — as `.word`s from a macro. They take the two opcodes MIPS III
-leaves unused, `0x1E` and `0x1F`.
+leaves unused, `0x1E` and `0x1F`; `mfhi1`, `mflo1`, `mfsa` and their `mt`
+forms are `.word`s for the same reason.
 
 **Syscall `0x60` zeroes `Config`, on purpose.** `spec/05` SYS-4a: the reference
 ANDs where it plainly meant to OR, so its cache-mode call writes zero whatever
