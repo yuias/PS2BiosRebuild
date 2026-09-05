@@ -575,8 +575,8 @@ simulator, in this order:
   writes DICR2 again -- on the merged kernel the command stream has the same
   shape with and without it.
 
-  **The story starts on the committed image, and the wall past the menu
-  was the DMA bank handler.** Selecting the first menu entry made the
+  **The game proper is reached on the committed image, and the wall past
+  the menu was the DMA bank handler.** Selecting the first menu entry made the
   disc's `CDVDMAN` time out on a read: it disables channel 3's interrupt
   and then kicks a read's last chunk anyway, relying on the next DMA
   interrupt from any channel to deliver the completion -- which the
@@ -586,7 +586,9 @@ simulator, in this order:
   which hardware cannot produce) is what puts the driver on that path; the
   reference survives it, and now so do we. The title's own log, visible
   since PS2e prints `Deci2Call`'s TTY writes, is identical to the
-  reference's through the start of the story.
+  reference's, and with the same presses -- Start, then Circle at the menu
+  -- the two images show the same frame every 10e9 cycles from the main
+  menu through the name-entry screen the game opens with.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
