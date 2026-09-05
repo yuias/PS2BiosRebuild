@@ -871,6 +871,23 @@ address zero. Ours substitutes a kernel trampoline that exits the thread
 (SYS-10i) when the creator's root is zero; a program's threads inherit their
 runtime's root exactly as on the reference.
 
+**The kernel's four DECI2 protocols have no handlers.** SYS-3c: the
+reference's manager registers `0x0001`, `0x0201`, `0x021F` and `0x0230` at
+boot with handlers of its own, and ours registers the same four so that a
+program's open lands on socket 5 as it does there -- but with nothing to
+serve a request (no queue, no poll, no link), the handlers are null. A send
+request for a local destination is accepted with `1`, as the reference
+accepts it, and is then never served; on a console with no debug station the
+reference's manager never delivers one either, but it does hold the request.
+
+**`OSDSYS` opens the EE TTY protocol and leaves it open.** The reference's
+OSD opens DECI2 protocol `0x0210` and never closes it, so a title launched
+from the OSD is refused its own open (`-3`) and gives up on its TTY
+(`docs/analysis/52` §2-3). Ours does the same with a handler that is never
+called. It is done for the title's sake, not for anything the OSD prints:
+`SLPS-25918` with a *successful* open sends one packet and then polls
+`fno 4` for ever, waiting for a write-done that no link delivers.
+
 **`RDRAM` returns 32 MiB without asking.** EE-2b: the reference's `RDRAM`
 negotiates with the memory controller and reports what it found. An emulator
 presents its RAM ready, so ours answers with the size the reference finds on
@@ -966,6 +983,7 @@ because nothing compares them. Read the run, not this paragraph.
 - Preemption: threads switch on syscalls (SYS-10c) and on the SIF's interrupt (SYS-12c), but no timer interrupt preempts a running one yet
 - The modules a title loads on request: SIO2MAN is the one the archive holds; PADMAN, MCMAN and the rest are not built
 - EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); the reference's own switches and its KELF path (docs/analysis/41 §3) are not parsed
+- DECI2 (spec/05 SYS-3c): the socket table and every answer are served; the manager behind them -- the request queue, the poll and the host link -- is not built
 
 The fault that used to sit beside this list — SIF0 delivering nothing under
 PCSX2 — is closed: `docs/analysis/29-sif0-on-pcsx2.md` found the bit, and

@@ -190,6 +190,15 @@ alignas(16) uint32_t osd_args[(4 + 16 * 4 + 256) / 4];
     }
 }
 
+// The socket the reference's OSD leaves open on the kernel's DECI2 manager:
+// the EE TTY protocol, never closed before a title is launched, so the
+// title's own open of it answers -3 and the title gives up on its TTY
+// (docs/analysis/52). The handler is never called on an image with no host.
+int deci2Handler(int, int, void *) {
+    return 0;
+}
+uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
+
 [[noreturn]] void osdMain(int argc, const char *const *argv) {
     print("# OSDSYS: loaded from the archive and running. Argument: ");
     // Say which argument arrived, since that is what selects what an OSD would
@@ -198,6 +207,10 @@ alignas(16) uint32_t osd_args[(4 + 16 * 4 + 256) / 4];
         print(argv[0]);
         print("\n");
     }
+
+    deci2_ettyp[2] = reinterpret_cast<uintptr_t>(deci2Handler);
+    (void)syscall<int32_t>(kSysDeci2Call, 1,
+                           reinterpret_cast<uintptr_t>(deci2_ettyp));
 
     initRpc();
     if (!bindRpc(kFileioServer)) {

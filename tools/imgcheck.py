@@ -107,6 +107,9 @@ NOT_YET = (
     "EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); "
     "the reference's own switches and its KELF path (docs/analysis/41 §3) "
     "are not parsed",
+    "DECI2 (spec/05 SYS-3c): the socket table and every answer are served; "
+    "the manager behind them -- the request queue, the poll and the host "
+    "link -- is not built",
 )
 
 # The interface the kernel publishes, exercised through eesim's harness. Every
@@ -142,6 +145,8 @@ CRT_PAL_SYNCH1 = 0x0007f5c21fc83030
 # SYS-15's blocks: the caller-side scratch these are called with, the second
 # block's size, and a pattern no zeroed block could be mistaken for.
 OSD_BLOCK, OSD_PARAM2_SIZE, OSD_PATTERN = 0x330000, 0x80, 0xABCD1234
+DECI2_BLOCK, DECI2_PROTOCOL, DECI2_HANDLER = 0x340000, 0x0999, 0x100000
+DECI2_MARKER = 0x5A5A1234
 
 
 def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
@@ -459,6 +464,56 @@ def checkOsdConfigSyscalls(machine: eesim.Machine) -> list[str]:
     return problems
 
 
+def checkDeci2Syscalls(machine: eesim.Machine) -> list[str]:
+    """Slot 0x7C's sub-functions (SYS-3c): the socket table and the two
+    answering shapes, one written to the frame and one left alone."""
+    problems: list[str] = []
+
+    def require(ok: bool, requirement: str, detail: str) -> None:
+        if not ok:
+            problems.append(f"{requirement}: {detail}")
+
+    def block(*words: int) -> int:
+        for index, word in enumerate(words):
+            machine.bus.write(DECI2_BLOCK + 4 * index, 4, word)
+        return DECI2_BLOCK
+
+    def deci2(fno: int, *words: int) -> int | None:
+        return machine.syscall(0x7C, fno, block(*words))
+
+    # The kernel's manager holds sockets 1-4, so the first open lands on 5.
+    first = deci2(1, DECI2_PROTOCOL, 0, DECI2_HANDLER, 0)
+    require(first == 5, "SYS-3c",
+            f"open of a new protocol answered {first}, not socket 5")
+    require(deci2(1, DECI2_PROTOCOL, 0, DECI2_HANDLER, 0) == -3, "SYS-3c",
+            "a second open of the same protocol did not answer -3")
+    require(deci2(1, 0x0001, 0, DECI2_HANDLER, 0) == -3, "SYS-3c",
+            "opening the kernel's own DCMP did not answer -3")
+    require(deci2(3, 5, ord("H")) == -10, "SYS-3c",
+            "a send request for the host did not answer -10 with no link")
+    require(deci2(3, 5, ord("E")) == 1, "SYS-3c",
+            "a send request for a local destination did not answer 1")
+    require(deci2(2, 5) == 1, "SYS-3c", "close did not answer 1")
+    require(deci2(2, 5) == -2, "SYS-3c",
+            "closing a closed socket did not answer -2")
+    require(deci2(3, 5, ord("E")) == -2, "SYS-3c",
+            "a send request on a closed socket did not answer -2")
+    for fno in (0x0A, 0x10, 0x11):
+        require(deci2(fno, 0) == -1, "SYS-3c",
+                f"fno {fno:#x} did not answer -1")
+    # A sub-function that writes nothing leaves the caller's own $v0, and
+    # $v1 comes back as the number rather than the dispatcher's index.
+    machine.bus.write(DECI2_BLOCK, 4, 5)
+    machine.cpu.set(2, DECI2_MARKER)
+    polled = machine.syscall(0x7C, 4, DECI2_BLOCK)
+    require(polled == DECI2_MARKER, "SYS-3c",
+            f"poll answered {polled:#x} instead of the caller's own "
+            f"{DECI2_MARKER:#x}")
+    require(machine.cpu.get(3) == 0x7C, "SYS-3c",
+            f"$v1 came back as {machine.cpu.get(3):#x}, not 0x7C")
+    return problems
+
+
 def checkSyscalls(machine: eesim.Machine) -> list[str]:
     """The syscall interface, called rather than read.
 
@@ -576,6 +631,7 @@ def checkSyscalls(machine: eesim.Machine) -> list[str]:
 
     problems += checkDisplaySyscalls(machine)
     problems += checkOsdConfigSyscalls(machine)
+    problems += checkDeci2Syscalls(machine)
 
     # SYS-16, and EE-8c doubling it: the flush terminates for every operation
     # it names and for one it does not, and 0x68 is the same handler.

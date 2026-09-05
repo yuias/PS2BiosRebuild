@@ -117,21 +117,38 @@ un-scales it earlier must adjust the reporter to match.
 protocol, sixteen sub-functions selected by `fno`, dispatched on a frame of its
 own rather than through the syscall table (`spec/04` EE-7f). Every register is
 restored from that frame on the way out, which makes the ABI unusual in two
-ways a rebuild must reproduce:
+ways a rebuild must reproduce (`docs/analysis/52`):
 
-- **`$v0` comes back as the caller's own**, not as anything the kernel
-  computed. A sub-function delivers a result by writing one slot of the frame;
-  one that writes nothing is invisible.
+- **`$v0` comes back from the frame**: a sub-function answers by writing the
+  frame's `$v0` slot, and one that writes nothing is invisible — the caller
+  sees its own register back.
 - **`$v1` comes back as `0x7C`**, the number the caller passed, not the
   dispatcher's scaled index SYS-3a describes for every other slot.
 
-An `fno` outside `1`–`0x10` is the one case with an answer of its own: `-1`.
+`param` is the caller's block of words. The sub-functions that answer:
 
-Every sub-function is gated on state that only `fno 1`, which opens a channel,
-establishes, so on an image that never opens one they all do nothing. That is
-not an excuse to answer `0`: a title polling `fno 4` compares what came back
-against what it passed in, and a kernel that returns `0` instead of the
-caller's own register leaves it polling forever. This was found that way.
+| `fno` | block | answer |
+| --- | --- | --- |
+| `1` open | `{protocol halfword, option, handler, gp}` | the socket index, or `-3` when the protocol is already open, `-4` when the table is full |
+| `2` close | `{socket}` | `1`, or `-2` for a socket that is not open |
+| `3` request a send | `{socket, destination byte}` | `-2` for a socket that is not open; `-10` for destination `'H'` (host) or `'I'` (IOP) while that link is down, which on a console with no debug station is always; otherwise `1`, and the request is queued for the manager |
+| `4`..`9` | — | nothing: the caller's own `$v0` |
+| `0xA`..`0x10`, and anything outside `1`..`0x10` | — | `-1` |
+
+The socket table has sixteen entries, 1 to 16. The kernel's own manager holds
+1 to 4 (protocols `0x0001`, `0x0201`, `0x021F`, `0x0230`) from boot, and an
+open takes the first free entry **from 2 upward**, so the first open on a bare
+kernel answers `5`. A protocol is "already open" when any entry holds it —
+including one left open by an earlier program: the reference's OSD opens the
+EE TTY protocol `0x0210` and never closes it, so a title launched from the OSD
+gets `-3` for its own `ETTYP` open and gives up on its TTY. A rebuild's OSD
+must leave that socket behind too, or every such title takes the other path
+and polls `fno 4` for a write-done that no link will deliver.
+
+The invisible ones are not an excuse to answer `0`: a title polling `fno 4`
+compares what came back against what it passed in, and a kernel that returns
+`0` instead of the caller's own register leaves it polling forever. This was
+found that way.
 
 **SYS-3b:** Slot `0x75` is **not** one of them. It is an empty handler that
 returns immediately, taking nothing and reporting nothing. A rebuild must keep

@@ -29,6 +29,7 @@ inline constexpr int kSysSifSetDma = 0x77;
 inline constexpr int kSysSifSetDChain = 0x78;
 inline constexpr int kSysSifSetReg = 0x79;
 inline constexpr int kSysSifGetReg = 0x7A;
+inline constexpr int kSysDeci2Call = 0x7C;
 
 // A syscall with the arguments the caller gives it. The clobber list is every
 // caller-saved register, because a handler is ordinary compiled code on the

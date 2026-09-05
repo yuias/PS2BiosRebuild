@@ -120,26 +120,16 @@ _syscall_return:
     eret
 
 // SYS-3c: `Deci2Call(fno, param)`. The reference gives this number its own
-// frame and restores every register from it afterwards, so a sub-function that
-// answers nothing is invisible to its caller: `$v0` comes back as the caller's
-// own value and `$v1` as `0x7C`, not the dispatcher's scaled index. Only an
-// out-of-range `fno` has an answer of its own, `-1`.
-//
-// The sixteen sub-functions are the DECI2 host-debugger protocol, and every one
-// of them is gated on state that only `fno 1` (open a channel) establishes.
-// Nothing in this image opens one, so on the path that matters they all do
-// nothing and return nothing -- which is exactly what is reproduced here. A
-// title polling `fno 4` sees its own register back, the way it does on the
-// reference; a rebuild that answered `0` instead leaves it polling forever.
+// frame and restores every register from it afterwards, so a sub-function
+// answers by writing the frame's $v0 slot and one that writes nothing is
+// invisible: `$v0` comes back as the caller's own value and `$v1` as `0x7C`,
+// not the dispatcher's scaled index. deci2.cpp decides which do which; the
+// caller's arguments are still in $a0/$a1 (SYS-2a).
 _syscall_deci2:
-    la    $k0, _syscall_context
-    lw    $v0, 2 * 16($k0)              // the caller's own $v0, untouched
-    addiu $k0, $a0, -1
-    sltiu $k1, $k0, 0x10
-    bne   $k1, $zero, _syscall_deci2_answered
+    jal   _sys_deci2_call
     nop
-    addiu $v0, $zero, -1
-_syscall_deci2_answered:
+    la    $k0, _syscall_context
+    ld    $v0, 2 * 16($k0)
     b     _syscall_return
     addiu $v1, $zero, 0x7C
 
