@@ -538,8 +538,23 @@ simulator, in this order:
   instrument: the reference BIOS on PS2e with the same disc, the PS2e EE
   debugger on the instruction after the `syscall`, and the answers compared
   per call. The command stream is now identical to the reference's through
-  the memory-card polling; where it stops next is the EE again, a copy loop
-  whose registers go wrong mid-copy, still being read.
+  the memory-card polling.
+
+  **The copy loop that then went wrong was the EE kernel's third wall**, and
+  a scheduler one: a thread parked by an interrupt and picked again by
+  another thread's syscall came back with the syscall exit's `$v0`/`$v1` --
+  a result and a byte index (`spec/04` EE-7e2) -- where it needed its own
+  two registers, and the SDK's `memcpy` keeps its destination in `$3`. Found
+  by bisecting save states over the copy with no debugger attached, since
+  the debugger's timing hid it. With that restored, the run went idle
+  instead: a wakeup the SIF handler had requested was cleared by an
+  interrupt nesting inside it, and nothing but the boot thread was left to
+  run. The kernel now keeps the request across nesting. The 602 copies of
+  `GRAPH0.PAC` complete; where it stops next is on the IOP, which at some
+  point -- after 454 RPC calls in one build of the kernel and 2319 in
+  another, so the moment is timing-dependent -- jumps into the sound
+  driver's data, and a `sceCdSearchFile`-shaped request goes unanswered
+  after that.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
