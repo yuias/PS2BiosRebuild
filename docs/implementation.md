@@ -1246,9 +1246,8 @@ the merge picks the disc's copy, which is the behaviour that matters. The
 cold boot, where no disc module is involved.
 
 **A title's update reboot runs end to end, and the kernel it stages boots.**
-The only way into this path today is still a local change to `REBOOT`'s
-condition -- a reset that names an image is answered by the hand-back
-above -- but with it the whole chain works: the reboot core copies the
+`REBOOT` hands every reset to the reboot core, the empty argument and the one
+that names an image alike, and the whole chain works: the reboot core copies the
 argument to `0x480` and gives `IOPBOOT` mode `(mode & 0xff00) | 2`; `IOPBOOT`
 builds `IOPBTCON2` and finds it, so an eighteen-name list boots -- everything
 that reads a disc and nothing that talks to the EE, which is the reference's
