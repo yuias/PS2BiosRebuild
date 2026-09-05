@@ -256,11 +256,11 @@ int enableIntr(uint32_t line_and_flags) {
             bits |= 1u << channel;
         }
         writeWord(kDicr, (readWord(kDicr) & keep) | bits);
-        // The reference writes DICR2 here too -- its own bits 0..23 back, plus
-        // the channel's low bit when `0x200` is passed. That one write is left
-        // out: on PS2e it costs an interrupt, and the title's MIDI and ADX
-        // drivers stall with `cid=0x8000000a` down from 97 to 49. Bisected to
-        // this line alone; docs/implementation.md records it.
+        // The reference writes DICR2 here too: its own bits 0..23 back, plus
+        // the channel's low bit when `0x200` is passed.
+        const uint32_t keep2 = kDicrWritable & ~(1u << channel);
+        const uint32_t bits2 = (flags & kFlagDicr2) != 0 ? (1u << channel) : 0;
+        writeWord(kDicr2, (readWord(kDicr2) & keep2) | bits2);
         writeWord(kIntMask, readWord(kIntMask) | (1u << kDmaLine));
     } else if (line >= kDmaSecondBank && line < kLines) {
         const uint32_t channel = line - kDmaSecondBank;
