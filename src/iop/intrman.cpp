@@ -363,16 +363,20 @@ int enableDispatchIntr(uint32_t irq) {
     return registration.handler(registration.arg);
 }
 
-// For each channel whose flag and enable are both set: clear the flag --
-// writing 1 to a flag bit clears it, and the others are written 0 so they
-// stay -- then call its handler through the same table as every other line.
+// For each channel whose flag is set -- the flag alone, as IOP-2h reads the
+// reference: a channel whose enable is off still gets its handler when some
+// other channel's interrupt brings the dispatcher here. The disc's CDVDMAN
+// depends on exactly that, having disabled channel 3 and then kicked the
+// last chunk of a read; SPU2's channel 4 completing is what delivers it.
+// Clear the flag -- writing 1 to a flag bit clears it, and the others are
+// written 0 so they stay -- then call its handler through the same table as
+// every other line.
 void serveBank(uintptr_t dicr, uint32_t first_irq) {
     const uint32_t value = readWord(dicr);
-    const uint32_t enables = (value >> 16) & 0x7F;
     const uint32_t flags = (value >> 24) & 0x7F;
     for (uint32_t channel = 0; channel < 7; channel++) {
         const uint32_t bit = 1u << channel;
-        if ((flags & enables & bit) == 0) {
+        if ((flags & bit) == 0) {
             continue;
         }
         writeWord(dicr, (value & ~kDicrFlags) | (bit << 24));
