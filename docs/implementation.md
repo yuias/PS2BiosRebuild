@@ -803,13 +803,25 @@ cold boot it changes nothing, because no module of ours calls ordinal 14.
 **`EnableIntr`'s bank-1 path writes DICR2 as the reference does.** IOP-2c2:
 the reference writes that register in *both* DMA paths -- in bank 1 it puts
 DICR2's own bits 0..23 back, plus the channel's low bit when `0x200` is
-passed. The write was left out for a while because, on the image before the
-merge was built, it alone cost the title an interrupt on PS2e (`cid
-=0x8000000a` fell from 97 to 49, bisected to the line). The emulator's model
-takes bits 0..23 from a write and treats 24..30 as write-1-to-clear, so the
-write is inert there by construction; with the title running on the merged
-kernel it is inert in practice too -- the post-reset command stream is the
-same shape with and without it -- and the reference's line is back.
+passed. The write was left out for a while because it alone appeared to
+cost the title an interrupt on PS2e. It did not: it moves the timing by a
+few instructions, and what that exposed was the bank handler below.
+
+**The DMA bank handler serves every flagged channel, enabled or not.**
+IOP-2h reads the reference's handler as walking DICR's *flag* bits; ours
+walked flag-and-enable, which looks like the safer reading and is wrong in
+a way only a driver can show. The disc's `CDVDMAN` 2.26, on what it takes
+for the end of a read, disables channel 3's interrupt and then kicks the
+remaining chunk anyway; the chunk completes with its flag set and its enable
+off, and what delivers it is the *next* DMA interrupt from any channel --
+`SPU2`'s channel 4, every few milliseconds -- whose bank walk finds the flag
+and calls channel 3's handler. With flag-and-enable that flag sat there for
+fifteen seconds and the title logged `Read Time Out 15000(msec)` and a drive
+error. Found by a save state, an interpreted replay and a log of every DICR
+store with its pc; the emulator's own ordering (its drive completion comes
+before the last chunk is transferred, which hardware cannot do) is what puts
+the driver on that path in the first place, and the reference kernel
+survives it for this reason.
 
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
