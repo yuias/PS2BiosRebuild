@@ -1213,7 +1213,7 @@ and both cost a link error each.
 leaves the code two bytes out of alignment, and the instruction stream decodes
 as garbage from that point on (`unknown opcode 0x3f`). `.align 2` after data.
 
-**`UDNL` resolves the merge and stages nothing.** `docs/analysis/45`
+**`UDNL` resolves the merge by the reference's rule.** `docs/analysis/45`
 §"UDNL: the merge core". `src/iop/udnl.cpp` opens every source the reboot's
 command line names, adds `rom0` by the same self-locating scan the boot block
 runs, resolves `IOPBTCONF` across that pool newest-source-first for the load
@@ -1229,11 +1229,9 @@ case that punishes the other choice: a module's own version and the version
 of a library it *exports* are independent fields (`spec/02` IRX-2b), and the
 reference's `ROMDRV` is `1.03` exporting `romdrv` `2.01`.
 
-**What it does not do is stage or hand over**, which are also the two steps
-the reference reading did not reach — so they are a reconstruction rather
-than a transcription, and they are worth building against a merge already
-known to be right. Until they exist, a reboot that names an image comes back
-with the modules `rom0` holds, which is what it already did.
+**Staging and the hand-over came later**, built against that merge once it
+was known to be right; `docs/analysis/51` reads the reference's, and the
+paragraphs below on the title's update reboot say what ours does.
 
 **Our boot list names `TIMEMANI` alone where the reference's names
 `TIMEMANP` and `TIMEMANI`.** The entry name is what a merge matches on, so
