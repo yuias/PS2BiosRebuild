@@ -588,7 +588,11 @@ simulator, in this order:
   since PS2e prints `Deci2Call`'s TTY writes, is identical to the
   reference's, and with the same presses -- Start, then Circle at the menu
   -- the two images show the same frame every 10e9 cycles from the main
-  menu through the name-entry screen the game opens with.
+  menu through the name-entry screen the game opens with, its confirmation
+  dialog, the prologue's day screen, and the first line of dialogue. The
+  disc's `SIO2MAN` and `PADMAN` read the pad through our `INTRMAN` and
+  `DMACMAN`; the reference's SIO2 traffic has memory-card and multitap
+  probes ours does not make yet, which is the first difference left.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
