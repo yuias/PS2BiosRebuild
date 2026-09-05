@@ -10,24 +10,23 @@
 // resident module down and lets UDNL merge the named image over rom0's
 // archive by highest module version (§2).
 //
-// **An empty argument is served for real, and anything else is not.** The
-// packet is parsed as the reference parses it either way, and the
-// dispatch-context handler does nothing but record and wake (§1's split, and
-// a requirement rather than a style choice -- the handler runs in the SIF
-// interrupt). Then the worker branches:
+// **Both shapes of argument go to the reboot core.** The packet is parsed
+// as the reference parses it either way, and the dispatch-context handler
+// does nothing but record and wake (§1's split, and a requirement rather
+// than a style choice -- the handler runs in the SIF interrupt). Then the
+// worker hands the string to `modload` ordinal 4, which traps into the
+// reboot core:
 //
-// - **No argument**: `modload` ordinal 4, which traps into the reboot core
-//   and re-enters `IOPBOOT` with mode 1. Every module on the list is placed
-//   and entered again, so this is a reboot in the sense the caller means.
-// - **An argument**: the hand-back. The image the argument names is never
-//   opened and no module is torn down, so the modules running after this
-//   "reboot" are the ones that were running before it. It is visible to a
-//   client in one way: a title rebooting to get a *newer* CDVDMAN/CDVDFSV
-//   than `rom0:` holds gets this image's own instead. It is deliberate --
-//   the merge is the large half of analysis 45 -- and the hand-back is what
-//   unblocks that boot, since a title spins in `sceSifIopSync` until
-//   `SMFLG`'s `SIF_STAT_BOOTEND` comes back and nothing else it does can
-//   proceed first.
+// - **No argument**: `IOPBOOT` is re-entered with mode 1. Every module on
+//   the list is placed and entered again.
+// - **An argument**: `IOPBOOT` is re-entered with mode 2, boots the
+//   disc-reading half of the list, and `MODLOAD`'s bootup callback loads the
+//   loader the argument names with the rest of the line -- `UDNL` merges the
+//   image over rom0's archive and stages the result (`docs/analysis/51`).
+//
+// Neither returns: the booted kernel's `EESYNC` is what raises `SMFLG` for
+// the EE. The announcement below stays as the fallback for a core that ever
+// hands back.
 //
 // Why the flags and not just the one bit: the EE's own reset zeroes the
 // software registers its RPC layer keeps its addresses in, so the client
@@ -135,12 +134,10 @@ void rebootThread(void *) {
         }
         request.pending = 0;
         _import_thbase_delay(kSettleMicroseconds);
-        if (request.arg[0] == '\0') {
-            // §2: mode 1, and it does not come back.
-            (void)_import_modload_reboot(request.arg, request.mode);
-        }
-        // A reboot discards whatever was in flight on the receiving channel,
-        // so it is armed again before anything is announced.
+        (void)_import_modload_reboot(request.arg, request.mode);
+        // Not reached today. A reboot discards whatever was in flight on
+        // the receiving channel, so it is armed again before anything is
+        // announced.
         _import_sifman_set_dchain();
         _import_sifman_set_smflag(kStatSifInit);
         _import_sifman_set_smflag(kStatCmdInit);

@@ -53,13 +53,11 @@ int main(void) {
     put_num("# reset: SifLoadModule rom0:SIO2MAN -> ",
             SifLoadModule("rom0:SIO2MAN", 0, NULL));
 
-    // A second reset, this one naming an image. Unpatched, `REBOOT` answers
-    // it with the hand-back and this returns at once; with its condition
-    // flipped locally it takes the second stage of an update reboot, boots
-    // `IOPBTCON2`, and never raises `SIF_STAT_BOOTEND` -- so the spin below
-    // does not end, and the evidence is a `--dump` of the IOP rather than
-    // anything printed here. Having both in one program is what keeps that
-    // scouting to a one-line change in the kernel.
+    // A second reset, this one naming a loader and no image: the second
+    // stage of an update reboot, `IOPBTCON2`, then `UDNL` merging rom0 with
+    // itself and staging the result. The staged kernel's `EESYNC` is what
+    // ends the spin below, so reaching the next line is the evidence that
+    // the whole chain hands over.
     sio_puts("# reset: SifIopReset(\"rom0:UDNL\")\n");
     SifIopReset("rom0:UDNL", 0);
     while (!SifIopSync()) {
