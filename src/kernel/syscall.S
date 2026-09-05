@@ -108,11 +108,33 @@ _syscall_positive:
 // decides the address. Restoring from memory rather than from registers we
 // happened to keep is what makes that possible at all.
 //
-// $v0 carries the result and $v1 is left as the dispatcher's scaled index:
-// SYS-3a's byte offset is what the reference's caller gets back too, measured
-// rather than assumed, so putting the number back would be our invention.
+// $v0 carries the result and $v1 the dispatcher's scaled index: SYS-3a's
+// byte offset is what the reference's caller gets back too (EE-7e2), measured
+// rather than assumed, so putting the number back would be our invention. It
+// is rebuilt from the block here because a compiled handler treats $v1 as
+// scratch and leaves anything in it.
+//
+// The exception is a thread that was parked by an interrupt and is resumed
+// from a syscall's pick (SYS-12c): it continues an instruction stream in
+// which $v0 and $v1 are ordinary live registers -- a copy loop's data and
+// destination, say -- so both come back from its frame, whole.
 _syscall_return:
     la    $k0, _syscall_context
+    la    $k1, _syscall_restore_full
+    lw    $at, 0($k1)
+    beq   $at, $zero, _syscall_return_scaled
+    sw    $zero, 0($k1)
+    lq_   2, 2 * 16, CONTEXT_BASE
+    b     _syscall_return_rest
+    lq_   3, 3 * 16, CONTEXT_BASE
+_syscall_return_scaled:
+    lw    $v1, 3 * 16($k0)
+    bgez  $v1, _syscall_return_scale
+    nop
+    subu  $v1, $zero, $v1
+_syscall_return_scale:
+    sll   $v1, $v1, 2
+_syscall_return_rest:
     .irp reg, 1,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,28,29,30,31
     lq_   \reg, \reg * 16, CONTEXT_BASE
     .endr
@@ -130,7 +152,7 @@ _syscall_deci2:
     nop
     la    $k0, _syscall_context
     ld    $v0, 2 * 16($k0)
-    b     _syscall_return
+    b     _syscall_return_rest
     addiu $v1, $zero, 0x7C
 
 _syscall_out_of_range:
@@ -258,6 +280,9 @@ _interrupt_stack_top:
     .globl _interrupt_depth
 _interrupt_depth:
     .word 0                             // how many interrupts are being handled
+    .globl _syscall_restore_full
+_syscall_restore_full:
+    .word 0                             // thread.cpp: the picked thread was parked by an interrupt
     .align 4
     .globl _syscall_context
 _syscall_context:

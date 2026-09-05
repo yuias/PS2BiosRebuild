@@ -949,8 +949,22 @@ happened to keep — which is what lets a scheduling handler redirect the return
 by writing that block (EE-7g). Two registers the reference does *not* bring
 back, `$at` and `$sp`, come back here. Being a superset costs two `lq`s and
 removes a class of surprise; it is recorded because it is a difference, not
-because it is a problem. `$v1` is left scaled, which is not a superset but the
-reference's own behaviour (EE-7e2).
+because it is a problem. `$v1` comes back scaled -- rebuilt from the saved
+number on the way out, since a compiled handler treats it as scratch -- which
+is not a superset but the reference's own behaviour (EE-7e2).
+
+**A thread taken by an interrupt gets `$v0` and `$v1` back whole.** EE-7e2
+is a statement about a *caller*: the thread that executed the `syscall` gets
+a result and a byte index. A thread the interrupt exit parked (SYS-12c) never
+called anything; it is mid-instruction-stream, and there `$2` and `$3` are
+ordinary live registers -- the SDK's `memcpy` keeps its running destination
+in `$3`. When such a thread is next picked by a *syscall's* reschedule, the
+exit restores those two from its frame as well, 128 bits each, instead of
+writing a result and an index over them. The kernel remembers which kind of
+park each thread is in (`thread.cpp`); the interrupt exit, which restores
+the whole frame anyway, needs no such distinction. Found on the disc: a
+1.4 MB copy resumed with `$3` holding the kernel's own frame pointer, and
+wrote the file over the copying thread's stack.
 
 LLVM has no R5900 target, so `lq` and `sq` are assembled the way `sync.p`
 already was — as `.word`s from a macro. They take the two opcodes MIPS III

@@ -29,6 +29,7 @@ constexpr uint32_t kFrameBytes = 0x2A0;
 constexpr uint32_t kFramePush = 0x280;          // frame = saved $sp - this
 constexpr uint32_t kBlockWords = 32 * 4;
 constexpr uint32_t kSlotV0 = 2 * 16;
+constexpr uint32_t kSlotV1 = 3 * 16;
 constexpr uint32_t kSlotA0 = 4 * 16;
 constexpr uint32_t kSlotGp = 28 * 16;
 constexpr uint32_t kSlotSp = 29 * 16;
@@ -111,6 +112,11 @@ bool tables_ready = false;
 // from an interrupt handler's direct-form call, typically -- and read by the
 // interrupt exit, which switches if it finds it set.
 bool reschedule_requested = false;
+// Which parked threads were taken by an interrupt rather than by a syscall:
+// those resume mid-instruction-stream, where $v0 and $v1 are live data and
+// not a result slot and a byte index (EE-7e2), so the dispatcher has to
+// bring both back from the frame instead of writing its own.
+bool parked_by_interrupt[kThreads];
 
 [[nodiscard]] ThreadRecord &current() {
     return thread_table[current_thread];
@@ -244,8 +250,10 @@ void leaveWaitList(uint16_t id) {
 
 // --- the switch (EE-7g, SYS-10c) ---------------------------------------------
 
-// syscall.S: the block the dispatcher saved the caller into and restores from.
+// syscall.S: the block the dispatcher saved the caller into and restores from,
+// and the word that tells its exit to restore $v0/$v1 from the block as well.
 extern "C" uint32_t _syscall_context[kBlockWords];
+extern "C" uint32_t _syscall_restore_full;
 extern "C" void print(const char *text) asm("_print");
 
 [[nodiscard]] uint32_t readEpc() {
@@ -269,16 +277,17 @@ void copyWords(uint32_t *to, const uint32_t *from, uint32_t count) {
 // interrupt frame -- into a frame pushed on its own stack, and its resume
 // address: from a syscall the EPC the dispatcher advanced (EE-7c), from an
 // interrupt the interrupted instruction.
-void parkCurrent(const uint32_t *block, uint32_t resume_pc) {
+void parkCurrent(const uint32_t *block, uint32_t resume_pc, bool by_interrupt) {
     ThreadRecord &thread = current();
     thread.resume_pc = resume_pc;
     const uint32_t frame = block[kSlotSp / 4] - kFramePush;
     copyWords(reinterpret_cast<uint32_t *>(frame), block, kBlockWords);
     thread.context = frame;
+    parked_by_interrupt[current_thread] = by_interrupt;
 }
 
 void saveCaller() {
-    parkCurrent(_syscall_context, readEpc());
+    parkCurrent(_syscall_context, readEpc(), false);
 }
 
 // SYS-10b: the head of the lowest-numbered non-empty queue -- read, not
@@ -307,6 +316,7 @@ void saveCaller() {
     const auto *frame = reinterpret_cast<const uint32_t *>(thread.context);
     copyWords(_syscall_context, frame, kBlockWords);
     setEpc(thread.resume_pc);
+    _syscall_restore_full = parked_by_interrupt[id] ? 1 : 0;
     return frame[kSlotV0 / 4];
 }
 
@@ -425,7 +435,7 @@ bool interruptReschedule(uint32_t *frame) {
         return false;
     }
     reschedule_requested = false;
-    parkCurrent(frame, frame[0]);
+    parkCurrent(frame, frame[0], true);
     current().state = Ready;
     const uint16_t next = pickNext();
     ThreadRecord &thread = thread_table[next];
