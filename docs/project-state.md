@@ -549,12 +549,20 @@ simulator, in this order:
   the debugger's timing hid it. With that restored, the run went idle
   instead: a wakeup the SIF handler had requested was cleared by an
   interrupt nesting inside it, and nothing but the boot thread was left to
-  run. The kernel now keeps the request across nesting. The 602 copies of
-  `GRAPH0.PAC` complete; where it stops next is on the IOP, which at some
-  point -- after 454 RPC calls in one build of the kernel and 2319 in
-  another, so the moment is timing-dependent -- jumps into the sound
-  driver's data, and a `sceCdSearchFile`-shaped request goes unanswered
-  after that.
+  run. The kernel now keeps the request across nesting.
+
+  **The IOP wall after that was a layout one.** `UDNL` staged the title's
+  image right above our resident kernel, which is smaller than the
+  reference's, so the merged kernel's later modules were placed *above* the
+  reserved images and a 0x44000-byte hole opened below them when the reserve
+  was released. A title buffer in that hole, overrun by a 0x11a0-byte RPC
+  payload into 0x800 bytes -- harmless on the reference, where the overrun
+  lands in free memory -- overwrote `CDVDMAN`'s code with a sound bank, and
+  the next `sceCdSearchFile` jumped into it. The buffer now comes from the
+  top of RAM, the module map has the reference's shape, and **the disc run
+  now issues every RPC the reference issues in 12e9 cycles**, and a few
+  more: the title is running ahead of the reference's own pace on the same
+  emulator, with no console line, panic or exception in the log.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
