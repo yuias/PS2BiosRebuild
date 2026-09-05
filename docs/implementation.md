@@ -1267,11 +1267,20 @@ and register every library they export -- `SYSMEM` 2.03, `LOADCORE` 2.06,
 It reaches the last name on the list. `IOPTTY` is what makes any of that
 visible: the console it installs is the merged kernel's only voice.
 
-**Where it stops** is inside the disc's `EESYNC` 2.02, whose entry opens a
-file and waits on a flag its I/O never sets, so it polls once a second for
-ever. That is a working merged kernel waiting on an I/O path, not a fault in
-the staging -- the boot list is complete behind it -- and it is where the next
-work is.
+**The staging buffer is taken from the top of RAM, not from above `UDNL`.**
+`docs/analysis/51` §2 has the reference allocating it at the first free block
+above its own image. What that placement guarantees is that the staged
+kernel's own modules all fit *below* the reserved region: the reference's
+resident kernel is large enough that "above `UDNL`" is above where the new
+`SYSMEM`'s first-fit allocations run. Ours is smaller, and a buffer right
+above it left the new boot list straddling the reserve -- `CDVDMAN` and the
+modules after it above, a 0x44000-byte hole below once the reserve was
+released. A title's buffer placed in that hole and overrun by an RPC payload
+(`0x11a0` bytes into `0x800`, which the reference's layout absorbs in free
+memory) landed on `CDVDMAN`'s code, and the IOP jumped into a sound bank.
+Mode 1 puts the buffer where the hole it leaves is above everything, which is
+the reference's property by another route; the module map now matches the
+reference's shape, kernel low and contiguous, the title's modules above.
 
 **The registry head is cleared by `IOPBOOT`, not assumed empty.** IRX-4c's
 head is a fixed word of RAM shared with `LOADCORE` rather than part of any

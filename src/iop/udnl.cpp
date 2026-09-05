@@ -380,9 +380,17 @@ int _module_start(int argc, char **argv) {
 
     // §2: one allocation. The reference walks the block records with `sysmem`
     // 9 and 10 and takes the first free block above its own image with mode
-    // 2; ours has neither ordinal, and mode 0 grows upward from the last
-    // thing allocated, which is the same place.
-    const int block_address = _import_sysmem_allocate(0, static_cast<int>(total), 0);
+    // 2. What that placement buys is that the staged kernel's own modules
+    // all fit *below* the reserved region: the reference's resident kernel
+    // is large enough that "above UDNL" is above where the new SYSMEM's
+    // first-fit allocations will run. Ours is smaller, and a buffer right
+    // above it left the new boot list straddling the reserve -- CDVDMAN and
+    // the modules after it above, a 0x44000-byte hole below once the reserve
+    // was released -- so a title's later buffer, placed in that hole and
+    // overrun by an RPC payload, landed on CDVDMAN's code. The top of RAM is
+    // the place with the reference's property: the hole it leaves is above
+    // everything.
+    const int block_address = _import_sysmem_allocate(1, static_cast<int>(total), 0);
     if (block_address == 0) {
         _import_stdio_printf("udnl: pannic ! can not alloc memory\n");
         return 1;
