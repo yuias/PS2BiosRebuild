@@ -603,6 +603,7 @@ int32_t sysCreateThread(const uint32_t *block) {
     const uint16_t id = free_thread;
     ThreadRecord &thread = thread_table[id];
     free_thread = thread.next;
+    parked_by_interrupt[id] = false;        // a reused slot's flag is a past life's
     thread.entry = block[1];
     thread.stack = block[2];
     thread.stack_size = block[3];

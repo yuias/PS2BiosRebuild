@@ -949,9 +949,11 @@ happened to keep — which is what lets a scheduling handler redirect the return
 by writing that block (EE-7g). Two registers the reference does *not* bring
 back, `$at` and `$sp`, come back here. Being a superset costs two `lq`s and
 removes a class of surprise; it is recorded because it is a difference, not
-because it is a problem. `$v1` comes back scaled -- rebuilt from the saved
-number on the way out, since a compiled handler treats it as scratch -- which
-is not a superset but the reference's own behaviour (EE-7e2).
+because it is a problem. `$v1` comes back scaled on the syscall exit --
+rebuilt from the saved number on the way out, since a compiled handler treats
+it as scratch -- which is not a superset but the reference's own behaviour
+(EE-7e2); a caller the interrupt exit resumes instead gets its frame's `$v1`,
+the number as passed.
 
 **A thread taken by an interrupt gets `$v0` and `$v1` back whole.** EE-7e2
 is a statement about a *caller*: the thread that executed the `syscall` gets
