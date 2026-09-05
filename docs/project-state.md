@@ -563,6 +563,18 @@ simulator, in this order:
   more: the title is running ahead of the reference's own pace on the same
   emulator, with no console line, panic or exception in the log.
 
+  **The merge is the committed default, and the title reaches its main
+  menu.** `REBOOT` hands every reset to the reboot core now, so the image in
+  `build/rom.bin` boots the title as it is; `tests/iopreset`'s named reset
+  goes through `UDNL` and comes back through the staged kernel's `EESYNC`.
+  With Start held for a while on the title screen the game shows its main
+  menu, the same frame the reference shows on the same emulator; the pad is
+  read through the disc's own `SIO2MAN` and `PADMAN` on our IOP. Two more
+  reference-shaped fixes went in alongside: the EE interrupt frame carries
+  `HI`/`LO`/`SA` in the reference's slots, and `EnableIntr`'s bank-1 path
+  writes DICR2 again -- on the merged kernel the command stream has the same
+  shape with and without it.
+
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
   against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
