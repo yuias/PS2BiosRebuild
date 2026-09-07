@@ -602,6 +602,19 @@ simulator, in this order:
   for count, on both images. The memory-card and multitap probes only the
   reference issues at boot are its OSD's, not the title's.
 
+  **The title saves.** With a card the reference's OSD had formatted, and
+  an emulator fix for how a card announces itself (a card powers up with
+  terminator 0x66, which is what a freshly loaded `MCMAN` needs to see
+  before it will identify one; PS2e started at 0x55), the title's load
+  screen reads the card and its save -- from the school map's menu,
+  about 2360e9 cycles in -- writes a slot: the same 11984 page writes and
+  182 block erases on both images, and the two card images are
+  byte-identical afterwards. The one reference-only traffic left in that
+  stream is `SecrAuthCard`'s MagicGate exchange (`0xF3`, `0xF7`, twenty-one
+  `0xF0` steps through the mechacon) before the card is identified; our
+  `SECRMAN` answers 1 without running it, as the spec allows (IOP-11c), and
+  the card behaves the same either way on the emulator.
+
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
   against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
