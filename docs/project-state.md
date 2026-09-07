@@ -589,10 +589,18 @@ simulator, in this order:
   reference's, and with the same presses -- Start, then Circle at the menu
   -- the two images show the same frame every 10e9 cycles from the main
   menu through the name-entry screen the game opens with, its confirmation
-  dialog, the prologue's day screen, and the first line of dialogue. The
-  disc's `SIO2MAN` and `PADMAN` read the pad through our `INTRMAN` and
-  `DMACMAN`; the reference's SIO2 traffic has memory-card and multitap
-  probes ours does not make yet, which is the first difference left.
+  dialog, the prologue's day screen, and on through the prologue: its first
+  choice (which needs a cursor move before Circle), the first voiced lines
+  (the disc's `VOICE.AFS`, streamed by its CRI ADX driver over our
+  `DMACMAN`, with the same SPU2 output on both), the system menu, and its
+  load screen, which reads the memory card through the disc's `MCMAN` --
+  about 1000e9 cycles of play, identical every 10e9 when the presses are
+  short taps (a held Circle advances a variable number of lines, on both
+  images alike, so held presses scatter the sampled lines). The disc's `SIO2MAN`
+  and `PADMAN` read the pad through our `INTRMAN` and `DMACMAN`, and the
+  card probe the load screen makes is the same transfer sequence, count
+  for count, on both images. The memory-card and multitap probes only the
+  reference issues at boot are its OSD's, not the title's.
 
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
