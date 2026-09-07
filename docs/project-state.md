@@ -594,7 +594,8 @@ simulator, in this order:
   (the disc's `VOICE.AFS`, streamed by its CRI ADX driver over our
   `DMACMAN`, with the same SPU2 output on both), the system menu, and its
   load screen, which reads the memory card through the disc's `MCMAN` --
-  about 1000e9 cycles of play, identical every 10e9 when the presses are
+  and then the game's day loop through its third in-game day, about
+  2900e9 cycles of play, identical every 10e9 when the presses are
   short taps (a held Circle advances a variable number of lines, on both
   images alike, so held presses scatter the sampled lines). The disc's `SIO2MAN`
   and `PADMAN` read the pad through our `INTRMAN` and `DMACMAN`, and the
