@@ -795,6 +795,13 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
   inferred returns of `spec/05` SYS-1c (settled as M1 reaches each slot).
 - *Dropped as an ordering:* filling syscall slots by band, building modules by
   boot-list position.
+- *Dropped:* `SecrAuthCard`'s MagicGate exchange. It is the one thing the
+  reference's card traffic has that ours does not, and it stays that way:
+  the clean-room policy keeps the mechanism out of scope, the card
+  identifies and saves the same with the stub (IOP-11c), and the emulator
+  answers the exchange's mechacon side with zeroed shapes, so a rebuilt
+  ladder would be a protocol played against stubs with nothing observable
+  to gain. Revisit only if a title refuses a card on the stub's answer.
 
 ## 7. Known problems, in one place
 
