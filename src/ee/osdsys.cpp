@@ -34,6 +34,17 @@ using namespace ps2::console;
 // --- FILEIO's RPC (docs/analysis/43 §3, §4; spec/06 IOP-9) ------------------
 
 constexpr uint32_t kFileioServer = 0x80000001;
+
+// CDVDFSV's init service (docs/analysis/42 §5a): `sceCdInit(mode)`, mode 0
+// being "initialise and wait for the drive". The retail OSDSYS calls it
+// before it touches the disc (`27` finds the call's own banner string in
+// the payload), and the wait is what carries it across a drive still
+// spinning up: the driver's own open path never polls for readiness (`42`
+// §5c), and PCSX2 reports the drive busy for several seconds after a boot
+// while it detects the disc. Without this the open runs out of retries
+// before the drive is ready and a present disc reads as none.
+constexpr uint32_t kCdvdInitServer = 0x80000592;
+constexpr uint32_t kCdInitModeWait = 0;
 constexpr uint32_t kFnoOpen = 0;
 constexpr uint32_t kFnoClose = 1;
 constexpr uint32_t kFnoRead = 2;
@@ -213,6 +224,11 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
                            reinterpret_cast<uintptr_t>(deci2_ettyp));
 
     initRpc();
+    if (bindRpc(kCdvdInitServer)) {
+        auto *mode = reinterpret_cast<uint32_t *>(request);
+        mode[0] = kCdInitModeWait;
+        callRpc(0, request, sizeof(uint32_t), reply, sizeof reply);
+    }
     if (!bindRpc(kFileioServer)) {
         print("# OSDSYS: the IOP has no FILEIO to ask; nothing to boot from.\n");
         osdHalt();
