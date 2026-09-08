@@ -629,6 +629,23 @@ simulator, in this order:
   `SECRMAN` answers 1 without running it, as the spec allows (IOP-11c), and
   the card behaves the same either way on the emulator.
 
+  **A lost wakeup on the third in-game day, and the play chain rebuilt.**
+  Replaying the story from a cold boot on the rebuilt emulator, the title
+  stopped in a scene on its third day: the IOP idle with every RPC answered,
+  the EE in the kernel's idle loop -- with two threads *ready* in their
+  queues and the reschedule request clear. The interrupt exit's check ran
+  with interrupts enabled whenever a handler had left them so (the SDK's SIF
+  command handler does), and a second interrupt nesting between the check
+  and the `eret` woke a thread whose request the next outermost entry then
+  cleared. The exit now disables interrupts before it reads the request
+  (`spec/05` SYS-12c says the read and the exit are one unit). The stall was
+  timing-sensitive -- a replay from a save state a few billion cycles
+  earlier did not show it -- which is what a race looks like from outside.
+  With the fix the chain plays from the title screen through the third
+  day's afternoon, about 2900e9 cycles, to the day's choice box, and the
+  reference chain rebuilt the same way on the same emulator shows the same
+  scenes at the same 60e9-cycle offset it has had since the boot.
+
   **The instrument that made both of these findable** is the reference BIOS
   run on the same emulator with the same disc, and its command stream diffed
   against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
