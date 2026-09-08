@@ -636,21 +636,31 @@ simulator, in this order:
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
 
   **And the title boots on the acceptance target.** Every disc observation
-  above was made on PS2e; on PCSX2 the same image refused `SYSTEM.CNF` with
-  "no disc", because PCSX2 models the drive's spin-up -- the CDVD reports
-  itself busy for about five seconds of emulated time after a boot while it
-  detects the disc -- and `OSDSYS` went to `FILEIO` without waiting for the
-  drive, so the driver's open ran out of retries. The retail `OSDSYS` calls
-  `sceCdInit` first (`docs/analysis/27` finds its banner in the payload),
-  and that call's mode 0 is the wait (`42` §1); ours now makes the same call
-  over `CDVDFSV`'s init service before it opens the file. With that, a
-  `-slowboot` run of the disc on PCSX2 (§5) goes through our `OSDSYS`, the
-  reboot into the disc's `IOPRP310.IMG` merged over `rom0`, all twelve of the
-  title's module loads and the title's own start-up, and prints the same
-  fifteen lines of the title's DECI2 console that PS2e shows, then runs on
-  with no error, panic or unimplemented-syscall report. Headless PCSX2 has no
-  pad and no screenshot, so that console is where the gate stops; the play
-  beyond it is PS2e's.
+  above was made on PS2e; the same image on PCSX2 stopped three times, each
+  time on something PCSX2 models exactly and PS2e does not, and each fix is a
+  reading of the reference rather than an accommodation. First, PCSX2 models
+  the drive's spin-up -- the CDVD reports itself busy for about five seconds
+  of emulated time after a boot while it detects the disc -- and `OSDSYS`
+  went to `FILEIO` without waiting, so the driver's open ran out of retries
+  and a present disc read as none. The retail `OSDSYS` calls `sceCdInit`
+  first (`docs/analysis/27` finds its banner in the payload) and that call's
+  mode 0 is the wait (`42` §1); ours now makes the same call over `CDVDFSV`'s
+  init service. Second, the title's pad never configured: PCSX2 runs the
+  SIO2 out channel only when its CHCR is exactly `0x41000200`, and our
+  `sceSetSliceDMA` wrote `0x200`; the reference's sets bit 30 for a transfer
+  into memory, and now so does ours. Third, after the title's `SetGsCrt`
+  no vblank interrupt reached either CPU: PCSX2 raises none while SMODE1's
+  SINT bit is set, and our sequence stopped at SRFSH with it set. The
+  reference closes the sequence with a second SMODE1 write that clears it
+  (`46` §1e, an open question there until now), and so does ours; the gate
+  and `spec/05` SYS-14a now say seven writes. With those, a `-slowboot` run
+  of the disc on PCSX2 (§5) goes through our `OSDSYS`, the reboot into the
+  disc's `IOPRP310.IMG` merged over `rom0`, all twelve of the title's module
+  loads, the pad's configuration and the title's own start-up, printing the
+  same fifteen lines of the title's DECI2 console that PS2e shows, and runs
+  on with no error, panic or unimplemented-syscall report. Headless PCSX2 has
+  no pad input and no screenshot, so that console is where the gate stops;
+  the play beyond it is PS2e's.
 
 **M3 — an OSD that draws** (GS initialisation, a freely-licensed font, and the
 configuration field map of `26`–`28`) is real work but comes *after* M2, since a
