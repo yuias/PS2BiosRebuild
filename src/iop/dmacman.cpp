@@ -34,6 +34,7 @@ constexpr uintptr_t kUnnamed4_9_a = 0xBF801450; // dmac_set_4_9_a [header]
 constexpr uint32_t kChannels = 14;
 constexpr uint32_t kChcrStart = 0x01000000;
 constexpr uint32_t kChcrSlice = 0x00000200;
+constexpr uint32_t kChcrToMemory = 0x40000000;   // bit 30, set by the reference for direction 0
 
 [[nodiscard]] uint32_t readWord(uintptr_t address) {
     return *reinterpret_cast<volatile uint32_t *>(address);
@@ -86,15 +87,22 @@ uint32_t get157C() { return readWord(kUnnamed157C); }
 void set1578(uint32_t value) { writeWord(kUnnamed1578, value); }
 uint32_t get1578() { return readWord(kUnnamed1578); }
 
+
 // sceSetSliceDMA(channel, address, size, count, direction) [header]: a
-// block transfer of `count` slices of `size` words, not yet started.
+// block transfer of `count` slices of `size` words, not yet started. The
+// reference refuses channel 13 and channel 6 (OTC), and for a transfer into
+// memory (direction 0) it sets CHCR bit 30 alongside the slice bit. That bit
+// is not decoration: PCSX2 acts on the SIO2 out channel only when its CHCR
+// is exactly 0x41000200 once started, so without it the pad's reply never
+// reaches memory and no pad is ever configured there.
 int setSliceDma(uint32_t channel, uint32_t address, uint32_t size, uint32_t count, uint32_t direction) {
-    if (channel >= kChannels) {
+    if (channel >= kChannels - 1 || channel == 6) {
         return 0;
     }
     setMadr(channel, address & 0x00FFFFFF);
     setBcr(channel, (count << 16) | (size & 0xFFFF));
-    setChcr(channel, kChcrSlice | (direction & 1));
+    const uint32_t to_memory = direction == 0 ? kChcrToMemory : 0;
+    setChcr(channel, kChcrSlice | to_memory | (direction & 1));
     return 1;
 }
 
