@@ -397,6 +397,19 @@ ISO and the last console line becomes the `BOOT2=` path read off it rather than
 the "no disc" one. Any 2048-byte-sector ISO with a `SYSTEM.CNF` will do; the
 image itself is not part of this repository.
 
+```sh
+timeout 120 ~/tools/squashfs-root/AppRun -batch -nogui -slowboot <abs path to the iso>
+```
+
+`-slowboot` is what makes the run go through the BIOS: given a disc without
+it, PCSX2 fast-boots the disc's ELF itself and `OSDSYS` never runs. The IOP
+console is off by default and prints only what the disc's own modules say
+(`[Logging] EnableIOPConsole = true`, subject to the same rewrite as the EE
+line above). PCSX2 models the drive's spin-up: for about five seconds of
+emulated time after a boot the CDVD reports itself busy while it detects the
+disc, and a read issued before that is refused -- the reason `OSDSYS` waits
+in `sceCdInit` before it opens `SYSTEM.CNF`.
+
 Two things about the harness will otherwise cost an hour each:
 
 - **PCSX2 rewrites its ini on startup.** `[Logging] EnableEEConsole = true` set
@@ -621,6 +634,23 @@ simulator, in this order:
   against ours. Reasoning forward from our own log found neither. `EELOAD` at the address PCSX2's fast boot hooks is
   done: its `-elf` launch of the M1 program on our image is a gate now
   (`AppRun -batch -nogui -elf <path to m1.elf>` prints M1's last line).
+
+  **And the title boots on the acceptance target.** Every disc observation
+  above was made on PS2e; on PCSX2 the same image refused `SYSTEM.CNF` with
+  "no disc", because PCSX2 models the drive's spin-up -- the CDVD reports
+  itself busy for about five seconds of emulated time after a boot while it
+  detects the disc -- and `OSDSYS` went to `FILEIO` without waiting for the
+  drive, so the driver's open ran out of retries. The retail `OSDSYS` calls
+  `sceCdInit` first (`docs/analysis/27` finds its banner in the payload),
+  and that call's mode 0 is the wait (`42` §1); ours now makes the same call
+  over `CDVDFSV`'s init service before it opens the file. With that, a
+  `-slowboot` run of the disc on PCSX2 (§5) goes through our `OSDSYS`, the
+  reboot into the disc's `IOPRP310.IMG` merged over `rom0`, all twelve of the
+  title's module loads and the title's own start-up, and prints the same
+  fifteen lines of the title's DECI2 console that PS2e shows, then runs on
+  with no error, panic or unimplemented-syscall report. Headless PCSX2 has no
+  pad and no screenshot, so that console is where the gate stops; the play
+  beyond it is PS2e's.
 
 **M3 — an OSD that draws** (GS initialisation, a freely-licensed font, and the
 configuration field map of `26`–`28`) is real work but comes *after* M2, since a

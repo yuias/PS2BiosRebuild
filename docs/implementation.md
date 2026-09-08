@@ -112,8 +112,14 @@ EE-8e's KSEG1 cache trio all pass already.
 **The `OSDSYS` slot reads the disc's own boot target.** The retail `OSDSYS` is
 a menu behind a compressed payload, and `docs/clean-room-policy.md` puts its
 artwork out of bounds; what stands in that slot here is the one job the rest of
-the boot depends on (`docs/analysis/41` §4, `43` §10): bind `FILEIO`, open
+the boot depends on (`docs/analysis/41` §4, `43` §10): wait for the drive
+through `CDVDFSV`'s `sceCdInit` service in its mode 0, bind `FILEIO`, open
 `cdrom0:\SYSTEM.CNF;1`, take `BOOT2=`, and hand the path to syscall `0x06`.
+The wait is the retail `OSDSYS`'s own first call (`27` finds its banner
+string in the payload) and it carries the boot across a drive still
+spinning up: the driver's open never polls for readiness (`42` §5c), and
+PCSX2 reports the drive busy for several seconds after a boot while it
+detects the disc, so without the wait a present disc read as none there.
 The `SYSTEM.CNF` parse is deliberately tolerant -- the retail file spaces its
 `=` out and ends its lines with CRLF -- and every failure along the way names
 itself on the console and stops, which is what a run with no disc attached
