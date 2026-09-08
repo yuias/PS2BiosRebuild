@@ -202,7 +202,15 @@ void interruptDispatch(uint32_t *frame) {
     // that a program has asked for.
 
     // SYS-12c: only the outermost interrupt may switch threads; a nested one
-    // returns to the handler it interrupted.
+    // returns to the handler it interrupted. A handler may have left
+    // interrupts enabled (the SDK's SIF command handler does), so close them
+    // here, before the request is read: an interrupt nesting between this
+    // check and the `eret` would wake a thread that nothing then switches
+    // to, and the next outermost entry would clear its request -- the
+    // machine idles with runnable threads. The exit restores the interrupted
+    // context's Status, so the interrupted code is not affected.
+    // `di` and `sync.p`, which the assembler does not know for this target.
+    asm volatile(".word 0x42000039\n\t.word 0x0000040f" ::: "memory");
     if (_interrupt_depth == 1) {
         interruptReschedule(frame);
     }

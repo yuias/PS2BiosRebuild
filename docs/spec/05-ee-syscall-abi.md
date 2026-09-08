@@ -534,7 +534,13 @@ kernel clears before calling handlers and reads after; if it is set on the
 way out, the interrupted thread is parked as SYS-10c parks a caller (its
 resume address the interrupted instruction) and the pick runs. This is how
 an interrupt wakes a higher-priority thread; without it, a woken thread waits
-for the interrupted one to yield.
+for the interrupted one to yield. The read of the flag and the exit are one
+unit: interrupts are disabled before the flag is read and stay so until the
+`eret`, so a handler that enabled them (the SDK's SIF command handler does)
+cannot let a second interrupt nest between the check and the return. A
+wakeup made in that window would set a flag nothing acts on, and the next
+outermost entry would clear it -- the kernel would idle with runnable
+threads.
 
 **SYS-12d — `EIE`.** The R5900's `ei`/`di` set and clear `Status` bit 16,
 the master enable the SDK's `EIntr`/`DIntr` use; a program enables
