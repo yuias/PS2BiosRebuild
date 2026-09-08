@@ -535,11 +535,14 @@ way out, the interrupted thread is parked as SYS-10c parks a caller (its
 resume address the interrupted instruction) and the pick runs. This is how
 an interrupt wakes a higher-priority thread; without it, a woken thread waits
 for the interrupted one to yield. The read of the flag and the exit are one
-unit: interrupts are disabled before the flag is read and stay so until the
-`eret`, so a handler that enabled them (the SDK's SIF command handler does)
-cannot let a second interrupt nest between the check and the return. A
-wakeup made in that window would set a flag nothing acts on, and the next
-outermost entry would clear it -- the kernel would idle with runnable
+unit: no interrupt may be taken between them. The reference gets this from
+`EXL`: a handler returns to the kernel through a syscall, and the exit path
+never clears `EXL` again before its `eret` (analysis 35 §1). A rebuild
+whose exit runs with `EXL` clear must mask another way before the read (a
+`di` does), because a handler may have enabled interrupts (the SDK's SIF
+command handler does) and a second interrupt nesting between the check and
+the return would wake a thread that nothing switches to; the next outermost
+entry would clear its request, and the kernel would idle with runnable
 threads.
 
 **SYS-12d — `EIE`.** The R5900's `ei`/`di` set and clear `Status` bit 16,

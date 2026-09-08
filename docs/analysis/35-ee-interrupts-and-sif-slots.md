@@ -51,6 +51,23 @@ layer); `jal 0x800013c0` (restore, pair of `0x1300`); restore EPC;
 address — 0x44 bytes earlier) instead of returning, clearing the flag first;
 if clear, `Status |= 0x13`, `eret`.
 
+**How the handler is entered, and why the tail cannot be interrupted.** The
+trampoline does not `jalr` the installed handler. It calls `0x80002840`
+with `$a0` = the word at `0x800154A4` (a stub the program registers; the
+SDK's is four instructions: set `$sp`, `jalr` the handler, then
+`syscall` with `$v0 = -5`), `$a1..$a3` = handler, argument, cause, and the
+interrupted EPC in `$t0`. That routine stashes `$ra`/`$sp` in kernel cells,
+writes the stub's address to EPC, sets `Status |= 0x12` and `eret`s -- so
+the handler runs with `EXL` clear and `IE`/`EIE` exactly as the interrupted
+code left them; the dispatcher masks nothing itself (the `~0x1c` above
+clears `ERL` and `KSU` only). The stub's syscall brings control back to
+`0x80002880`, which clears the same `0x1c` and returns to the trampoline
+with `EXL` still set from the syscall entry. Nothing clears `EXL` between
+that return and the `eret` at `0x80000488`, so the re-read of `0x800155B4`
+and the exit are one uninterruptible unit -- by `EXL`, not by any `di`;
+the exit path contains none (the words at `0x80000448..50` are the `lq`s
+restoring `$sp`/`$ra`/`$at`).
+
 **This answers `docs/analysis/33`'s open question**: the reschedule flag's
 reader is exactly here, in the interrupt-return path, read right after the
 per-cause handler returns and before `eret`. A handler that makes a thread

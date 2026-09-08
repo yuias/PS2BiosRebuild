@@ -207,8 +207,10 @@ void interruptDispatch(uint32_t *frame) {
     // here, before the request is read: an interrupt nesting between this
     // check and the `eret` would wake a thread that nothing then switches
     // to, and the next outermost entry would clear its request -- the
-    // machine idles with runnable threads. The exit restores the interrupted
-    // context's Status, so the interrupted code is not affected.
+    // machine idles with runnable threads. The reference has no window to
+    // close: its handlers return by syscall and EXL stays set to the eret.
+    // This exit runs with EXL clear and restores the interrupted context's
+    // Status, so masking here does not affect the interrupted code.
     // `di` and `sync.p`, which the assembler does not know for this target.
     asm volatile(".word 0x42000039\n\t.word 0x0000040f" ::: "memory");
     if (_interrupt_depth == 1) {
