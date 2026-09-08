@@ -256,6 +256,7 @@ shape to `mode == 2`'s `interlace == 1` block, different constants:
 | `0x8000c5d4` | SYNCHV | `0x00a9000502101401` |
 | `0x8000c5e0` | SMODE2 | `? \| 0x0000000000000001` |
 | `0x8000c604` | SRFSH | `0x0000000000000008` |
+| `0x8000c610` | SMODE1 | `? \| 0x0000000740816504` (7th write, SINT cleared, in the delay slot of the branch to the shared tail at `0x8000c75c`) |
 
 **`mode == 3`, `interlace == 0`** (`0x8000c610`–`0x8000c774`ish) — identical
 shape to `mode == 2`'s `interlace == 0` block:
@@ -268,6 +269,7 @@ shape to `mode == 2`'s `interlace == 0` block:
 | `0x8000c6f4` | SYNCHV | `0x00a9000502101401` or `...1404` per the same bit test as NTSC |
 | `0x8000c708` | SMODE2 | `0x0000000000000000` (literal zero) |
 | `0x8000c710` | SRFSH | `0x0000000000000008` |
+| `0x8000c758` | SMODE1 | `? \| ? \| 0x0000000740816504` (7th write, the same two terms as NTSC's `0x8000c4b4`, built at `0x8000c72c`–`0x8000c754`) |
 | `0x8000c758` | SMODE1 | `? \| ? \| 0x0000000740816504` |
 
 `mode == 0x72` and `mode == 0x73` (`0x8000c7d4` and `0x8000ca0c`) repeat this
