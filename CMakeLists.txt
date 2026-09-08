@@ -183,9 +183,25 @@ ps2AddModule(sifcmd MODULE IOP_SIF_rpc_interface VERSION 1.01
 ps2AddModule(eesync MODULE EE_Synchroniser VERSION 1.00
     SOURCES src/iop/eesync.cpp)
 
+# The commit the image is built from, stamped on every build rather than at
+# configure time, since OSDSYS prints it and a configure-time value goes stale
+# the first time the tree moves on. The script rewrites the header only when
+# the value changes, so an unchanged commit costs no rebuild.
+set(PS2_BUILD_STAMP "${CMAKE_CURRENT_BINARY_DIR}/build_stamp.h")
+add_custom_target(build_stamp ALL
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/makestamp.py"
+            "${PS2_BUILD_STAMP}" "${CMAKE_CURRENT_SOURCE_DIR}"
+    BYPRODUCTS "${PS2_BUILD_STAMP}"
+    COMMENT "Stamping the build with its commit")
+
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
 add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp src/ee/sifclient.cpp)
+add_dependencies(osdsys.elf build_stamp)
+target_include_directories(osdsys.elf PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_definitions(osdsys.elf PRIVATE
+    PS2_BUILD_VERSION="${PROJECT_VERSION}")
 # Without a small page size the linker aligns the segment's file offset to
 # 64 KiB, which would store sixty-odd kilobytes of padding in the archive for
 # a program of a few hundred bytes.

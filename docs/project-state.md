@@ -336,13 +336,16 @@ ninja -C build && ninja -C build check      # build the image and judge it
 Configuring without a build type gives `MinSizeRel`; `-DCMAKE_BUILD_TYPE=Debug`
 builds the same sources unoptimised and both boot.
 
-**What a good run looks like.** Our own image produces exactly these four lines
-on PCSX2. Anything shorter is a regression, and the line it stops at says where:
+**What a good run looks like.** Our own image produces exactly these five lines
+on PCSX2 (the commit in the fourth is the build's own, with a `+` when the tree
+was not clean). Anything shorter is a regression, and the line it stops at says
+where:
 
 ```
 # PS2BiosRebuild EE kernel: entered at 0x80001000.
 # The IOP answered; the SIF handshake is complete.
 # ROMVER, fetched from the archive across the SIF: 0100XP20260810
+# OSDSYS: PS2BiosRebuild 0.1.0 (5747e7f)
 # OSDSYS: loaded from the archive and running. Argument: BootBrowser
 ```
 

@@ -267,6 +267,7 @@ one argument `spec/04` EE-9c specifies:
    IOP sent         16 bytes      the size
    EE sent          16 bytes      the name, and "send it"
    IOP sent       1288 bytes      the program
+# OSDSYS: PS2BiosRebuild 0.1.0 (5747e7f)
 # OSDSYS: loaded from the archive and running. Argument: BootBrowser
 ```
 

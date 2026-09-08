@@ -23,6 +23,7 @@
 
 #include <stdint.h>
 
+#include "build_stamp.h"
 #include "console.hpp"
 #include "sifclient.hpp"
 
@@ -211,6 +212,12 @@ int deci2Handler(int, int, void *) {
 uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
 
 [[noreturn]] void osdMain(int argc, const char *const *argv) {
+    // Which build this is, first: the one line a disc-less boot ends on that
+    // identifies the image, and the line a drawing OSD would put up first.
+    // The version is the project's, not ROMVER's (that field is the archive's
+    // own, spec/01 ARC-7a); the commit comes from the build-time stamp, with
+    // a trailing `+` when the tree was not the commit it names.
+    print("# OSDSYS: PS2BiosRebuild " PS2_BUILD_VERSION " (" PS2_BUILD_STAMP ")\n");
     print("# OSDSYS: loaded from the archive and running. Argument: ");
     // Say which argument arrived, since that is what selects what an OSD would
     // show; EE-9c passes exactly one.
