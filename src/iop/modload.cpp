@@ -253,9 +253,19 @@ int loadStartModule(const char *path, uint32_t arglen, const char *args, int *re
     return startRecord(record, record->name, arglen, args, result);
 }
 
-// A record loaded but not started is held until ordinal 8 asks for it. Out
-// of slots, the module is loaded and registered but cannot be started later;
-// the id is still answered, as the reference's list has no such limit.
+// A record loaded but not started is held until ordinal 8 asks for it. The
+// reference's list has no limit; ours refuses the load before it starts
+// when the hold list is full, rather than answer an id that ordinal 8 would
+// later call unknown.
+[[nodiscard]] bool canHold() {
+    for (uint32_t k = 0; k < kLoadedMax; k++) {
+        if (loaded[k] == nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void holdLoaded(ModuleRecord *record) {
     for (uint32_t k = 0; k < kLoadedMax; k++) {
         if (loaded[k] == nullptr) {
@@ -267,6 +277,9 @@ void holdLoaded(ModuleRecord *record) {
 
 // Ordinal 6: LoadModule(path) -> id | error.
 int loadModule(const char *path) {
+    if (!canHold()) {
+        return kNoMemory;
+    }
     ModuleRecord *record;
     const int loaded_result = loadFromPath(path, &record);
     if (loaded_result < 0) {
@@ -283,6 +296,9 @@ int loadModuleBuffer(const uint8_t *buffer) {
     ps2::loader::Segments segments;
     if (!ps2::loader::readHeaders(buffer, segments)) {
         return kIllegalObject;
+    }
+    if (!canHold()) {
+        return kNoMemory;
     }
     const auto *name = reinterpret_cast<const char *>(buffer + segments.iopmod_offset + 26);
     ModuleRecord *record;
