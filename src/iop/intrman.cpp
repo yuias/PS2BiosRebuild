@@ -85,7 +85,11 @@ struct Registration {
 
 Registration table[kLines];
 Registration software[2];
-uint32_t dispatch_mask;                         // IOP-2f: ordinals 15/16
+uint32_t dispatch_mask;                         // IOP-2f: ordinals 15/16, irq < 0x20
+// IOP-2f/2h: the same software gate for the two DMA banks, as the reference
+// keeps it -- a word ANDed into the DICR/DICR2 read, a channel's flag at bit
+// 24 + channel, all ones until DisableDispatchIntr clears one.
+uint32_t bank_dispatch_mask[2];
 NewContext new_context;
 ShouldPreempt should_preempt;
 
@@ -339,16 +343,27 @@ int disableIntr(uint32_t line_and_flags, uint32_t *previous) {
     return result;
 }
 
+// The reference answers nothing readable for an irq past the second bank
+// (the spec leaves it open); this keeps the earlier behaviour of doing
+// nothing and reporting success.
 int disableDispatchIntr(uint32_t irq) {
-    if (irq < 32) {
+    if (irq < kDmaFirst) {
         dispatch_mask |= 1u << irq;
+    } else if (irq < kDmaSecondBank) {
+        bank_dispatch_mask[0] &= ~(1u << (24 + (irq - kDmaFirst)));
+    } else if (irq < kLines) {
+        bank_dispatch_mask[1] &= ~(1u << (24 + (irq - kDmaSecondBank)));
     }
     return kOk;
 }
 
 int enableDispatchIntr(uint32_t irq) {
-    if (irq < 32) {
+    if (irq < kDmaFirst) {
         dispatch_mask &= ~(1u << irq);
+    } else if (irq < kDmaSecondBank) {
+        bank_dispatch_mask[0] |= 1u << (24 + (irq - kDmaFirst));
+    } else if (irq < kLines) {
+        bank_dispatch_mask[1] |= 1u << (24 + (irq - kDmaSecondBank));
     }
     return kOk;
 }
@@ -371,9 +386,13 @@ int enableDispatchIntr(uint32_t irq) {
 // Clear the flag -- writing 1 to a flag bit clears it, and the others are
 // written 0 so they stay -- then call its handler through the same table as
 // every other line.
-void serveBank(uintptr_t dicr, uint32_t first_irq) {
-    const uint32_t flags = (readWord(dicr) >> 24) & 0x7F;
-    for (uint32_t channel = 0; channel < 7; channel++) {
+// The bank's software gate (ordinals 15/16) is applied to the flags read,
+// not to the hardware: a gated channel's flag stays set and is served once
+// the gate opens again, which is what the reference's AND-then-shift does.
+// Bank 1 has seven channels, bank 2 six (IOP-2i).
+void serveBank(uintptr_t dicr, uint32_t first_irq, uint32_t channels, uint32_t gate) {
+    const uint32_t flags = ((readWord(dicr) & gate) >> 24) & 0x7F;
+    for (uint32_t channel = 0; channel < channels; channel++) {
         const uint32_t bit = 1u << channel;
         if ((flags & bit) == 0) {
             continue;
@@ -386,8 +405,8 @@ void serveBank(uintptr_t dicr, uint32_t first_irq) {
 }
 
 int dmaDispatch(void *) {
-    serveBank(kDicr, kDmaFirst);
-    serveBank(kDicr2, kDmaSecondBank);
+    serveBank(kDicr, kDmaFirst, 7, bank_dispatch_mask[0]);
+    serveBank(kDicr2, kDmaSecondBank, 6, bank_dispatch_mask[1]);
     return 1;                                   // IOP-2h: the line stays open
 }
 
@@ -596,6 +615,7 @@ int _module_start(int, char **) {
     software[0].handler = nullptr;
     software[1].handler = nullptr;
     dispatch_mask = 0;
+    bank_dispatch_mask[0] = bank_dispatch_mask[1] = ~0u;
     new_context = nullptr;
     should_preempt = nullptr;
 
