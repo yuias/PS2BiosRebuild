@@ -113,6 +113,7 @@ per-file, and the eventual build will assemble the image the same way.
 | SIF packet framing | **specified and gated** — `docs/spec/03-boot-chain.md` BOOT-11 |
 | DMAC addressing (BOOT-11k) | **specified and gated** — `tools/ps2sim.py`, tested in both directions |
 | First run on PCSX2 | analysed — `docs/analysis/25-first-run-on-pcsx2.md` |
+| The IOP kernel, the reboot, and the title's own start-up | analysed as the pull demanded it — `docs/analysis/31`–`52`, each written for a fault M1 or M2 hit, in the order the faults came |
 | SIF0 on PCSX2, and why it delivered nothing | analysed — `docs/analysis/29-sif0-on-pcsx2.md` |
 | PCSX2 as a target | **boots there end to end** — accepted as a BIOS, both CPUs, both directions of the bus, `rom0:OSDSYS` entered |
 
@@ -131,20 +132,22 @@ reference and the reason for it.
 | Binding + registration (IRX-9, IRX-10) | **built** — `LOADCORE` calls `SYSMEM` across a bound stub |
 | EE handshake (BOOT-10) | **built** — `SIFMAN` ordinal 5 and the kernel's `sif.S` release each other, and `EESYNC`, last on the list, tells the EE the IOP is listening |
 | SIF data path | **built and gated** — BOOT-11's framing both ways and BOOT-11k's addressing; the EE fetches an archive file |
-| The disc and the EE's file service (IOP-8, IOP-9) | **built and exercised against a retail disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC, and `CDVDFSV`'s five RPC services, of which `sceCdInit`, `sceCdSearchFile` and `sceCdDiskReady` are served in full and the two `fno` tables only as deep as `CDVDMAN` goes (`docs/implementation.md`) |
-| IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMRMAN` on the boot list; `DelayThread`, `SetAlarm` and the clock on timer 5 |
+| The disc and the EE's file service (IOP-8, IOP-9) | **built and exercised against a retail disc** — `CDVDMAN`'s `cdrom0:` device and 2048-byte sector reads, `FILEIO`'s RPC, and `CDVDFSV`'s five RPC services, of which `sceCdInit`, `sceCdSearchFile` and `sceCdDiskReady` are served in full and the two `fno` tables only as deep as `CDVDMAN` goes (`docs/implementation.md`). After a title's reboot the disc's own `CDVDMAN`/`CDVDFSV` replace these (see the reboot row) |
+| IOP timers and alarms (IOP-3j, IOP-3k, IOP-7) | **built** — `TIMEMANI` on the boot list; `DelayThread`, `SetAlarm`, the clock on timer 5, and an interrupt handler per timer (IOP-7f) |
 | Boot tail (EE-9) | **built** — `EELOAD` is staged and asks the IOP's `LOADFILE` for `rom0:OSDSYS`, which is placed and entered through `ExecPS2`; PCSX2's fast-boot hook and its `-elf` launch work on it |
-| The disc's own boot target | **read from the disc** — the program in the `OSDSYS` slot binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`. With a retail disc attached the console prints that path; with none, it says so and stops |
+| The disc's own boot target | **booted from the disc** — the program in the `OSDSYS` slot waits in `sceCdInit(0)` for the drive, binds `FILEIO` over the SIF, opens `cdrom0:\SYSTEM.CNF;1` through `CDVDMAN`, and hands its `BOOT2=` path back to syscall `0x06`, which stages `EELOAD` and enters the title. With no disc it says which step refused and stops |
 | `RDRAM`, `ROMVER` | **built** — minimal, spec-derived |
-| EE kernel: vector page, dispatch, syscall table | **built** — 79 slots served, the rest report themselves |
+| EE kernel: vector page, dispatch, syscall table | **built** — the slots a title's runtime and the disc-boot pull have asked for are served, the rest report themselves; the gate prints the count |
 | EE interrupt delivery (SYS-12) | **built and driving a client** — handler lists, the interrupt entry and the reschedule on exit; a retail title's own SIF handler runs on our channel-5 interrupt and its `SifInitRpc` completes, which is what the `$gp` and quadword-alignment requirements of SYS-12b exist for |
 | EE main-thread setup (SYS-8) | **built and gated** — `0x3C`/`0x3D`/`0x3E`, the argument block, entry with the launcher's registers |
 | EE threads and semaphores (SYS-9, SYS-10, SYS-11) | **built and gated** — records, ready queues, the switch through the dispatcher's block; 256-slot table |
-| M1 test program (`tests/m1/`) | **stages 1–2 pass on both emulators** — main, arguments, a semaphore, a second thread; stops in `SifInitRpc` polling `0x7A` for an IOP RPC service |
+| M1 test program (`tests/m1/`) | **met on both emulators** — main, arguments, a semaphore, a second thread, `SifInitRpc` over the interrupt-driven SIF, and `SifLoadModule` of `rom0:SIO2MAN` through `LOADFILE`/`MODLOAD`; PCSX2's `-elf` launch of it is a gate |
+| EE-facing IOP services (IOP-5, IOP-9, IOP-10, IOP-11) | **built** — `LOADFILE` with the version query a title gates on, `FILEIO`, `VBLANK`, a `SECRMAN` interface that answers without the MagicGate exchange, and an `IOPTTY` console the drivers print through |
+| The title on the merged kernel (`docs/analysis/45`, `51`) | **plays** — after the title's reboot eight of our modules stay in the merged kernel (`EXCEPMAN`, `INTRMAN`, `DMACMAN`, `HEAPLIB`, `VBLANK`, `IOPTTY`, `SECRMAN`, `REBOOT`); the rest of what the title runs on is the disc's. Where the play stands is in §6 |
 | EE syscall entry: 128-bit context (EE-7e) | **built and gated** — `imgcheck` plants a marker in every register |
 | EE cache and CP0 band (EE-8e, EE-6f, SYS-4) | **built and gated** — the three KSEG1 slots and the CP0 reader, called and read back |
 | Source language | **C++26 where the machine allows it** — assembly only for the reset path, entry stubs, the vector page, the syscall context save, and the exact instruction words IRX-8 specifies for an import stub; `EESYNC`, `RDRAM` and the loader entries are compiled, since 2026-08-17 `mkirx` accepts what the compiler emits, `IOPBOOT` is compiled since the same day, once its archive offset was knowable before it is built, and `SYSMEM`/`LOADCORE` followed once IRX-8's stub words could be kept as a small top-level `asm` block (`docs/implementation.md`) |
-| Everything else in the image | not started — `docs/implementation.md` lists what and why |
+| Everything else in the image | not started — `ninja -C build check` prints the list at the end of every run, and `docs/implementation.md` says why each item waits |
 
 Notable observations to keep in mind (details and repro commands in the analysis
 document each cites):
@@ -444,6 +447,33 @@ went to the OSD's configuration bits and a language rewrite — depth with no
 program waiting on it. The corrective is the one that carried a smaller project
 of the same shape to its end: **the image is done when it boots software**, and
 from here work is *pulled* by a program that needs it, not pushed by a table.
+
+### Where it stands, and what comes next (2026-09-09)
+
+M1 is met and M2 holds on both targets: the title boots on PCSX2 and plays
+through its third in-game day on PS2e (the narrative below, newest entries
+last, is the record of how). Nothing found so far blocks the play from going
+on, and the play itself has become an endurance run rather than a source of
+new faults, so it is parked and picked up when there is time. The work in
+front of the project, in order:
+
+1. **Documentation.** Keep this file and `docs/implementation.md` true to the
+   image; the gate's list is the authority on what is missing.
+2. **`OSDSYS`, the minimal version.** The program a disc-less boot ends in
+   says which build it is (version and commit) on the console, and the same
+   line is what a drawing OSD would put on screen first. The drawing OSD
+   itself (M3 below) starts from a written list of what it needs, not from
+   code.
+3. **The IOP modules whose analysis is complete.** Ordinals that have a spec
+   line and no implementation are built on the spec, whether or not a title
+   exercises them; the boot before a reboot and `tools/iopsim.py` are their
+   gates. After a title's reboot only eight of our modules stay resident (§4),
+   so most of this is not on the play path, and that is understood.
+4. **The reference's unread corners.** The open questions each analysis
+   document ends with, worked when one is pulled by 2 or 3.
+5. **The play.** The next leg from the third day's choice box, and the two
+   observations that are not divergences but are not explained either (a
+   different RPC count in the boot window, one day-map frame).
 
 ### The finish line
 
@@ -844,8 +874,9 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 
 ### Carried, dropped, deferred
 
-- The busy-bit workaround (§7, first row) stays until M1's SIF work reaches the
-  IOP's DMA interrupt, which is where it will be understood or made moot.
+- The busy bit (§7, first row) is no longer worked around: the IOP takes the
+  channel's interrupt instead. Why the bit never clears on PCSX2 is still not
+  understood, and nothing waits for it to be.
 - The lead recorded from PS2e in §4 — block 1 byte +2 bit 7 as the OSD's
   "configured" flag — belongs to M3 and is verified then, by calling the
   decoder under `eesim` the way `28` did with the other fields.
@@ -866,8 +897,8 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 | Problem | Where it is written up | State |
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2 | `spec/03` BOOT-11h, `docs/analysis/25` | no longer waited on anywhere: the IOP takes the channel's interrupt instead; cause still unknown |
-| 57 of 125 syscall slots report themselves rather than working | §6, pulled by M2 | deliberate |
-| Twelve of twenty-nine boot-list modules exist, and one loadable on request | §6, pulled by M2 | deliberate |
+| Some syscall slots report themselves rather than working | the gate's "not required of the image yet" list, `docs/implementation.md` | deliberate — the count is the gate's, not this table's |
+| Not every boot-list module exists, and only `SIO2MAN` is loadable on request | the gate's list, `docs/implementation.md` | deliberate — `SSBUSC` and `EECONF` are the two the list still lacks; the title brings its own drivers |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
 

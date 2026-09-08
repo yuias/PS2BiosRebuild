@@ -724,19 +724,22 @@ six encrypted-module entries answer `-1`. Ours therefore imports neither
 `cdvdman` nor `ioman`, where the reference imports both, and does not hand
 `MODLOAD` the callbacks of a path it does not have.
 
-**`VBLANK`'s lists are indices, and nothing is known to raise its lines
-yet.** IOP-10. The module is the reference's shape -- two `INTRMAN`
+**`VBLANK`'s lists are indices, and its two lines are known to fire.**
+IOP-10. The module is the reference's shape -- two `INTRMAN`
 registrations on `I_STAT` bits 0 and `0xB`, one pool of sixteen records
 shared by both callback lists, its own two callbacks registered through its
 own ordinal 8 at priority `0x80` -- but the lists are singly-anchored arrays
 of indices rather than the reference's self-sentinelled circular lists
 through the records' own first words. The observable behaviour is the same:
 ordering, the (list, handler) identity, the return codes, and unregistering
-a callback that answers 0. What is **not** yet demonstrated is the
-interrupt itself: nothing in this project has confirmed that its targets
-raise those two lines, so the library binds and registers but its callbacks
-may never run. A client that only needs the bind -- which is why this was
-built -- is served either way.
+a callback that answers 0. The interrupt itself was in doubt when the module
+was built, and is not any more: on PCSX2 the IOP's `I_STAT` shows bits 0 and
+`0xB` once the EE's `SetGsCrt` closes its `SMODE1` sequence (`spec/05`
+SYS-14a), and the title's pad configures only after they do -- its `PADMAN`
+waits on vertical blank, and on the merged kernel the `VBLANK` it waits
+through is this one, since the disc's image carries none. What has not been
+watched separately is a callback of ours running from that interrupt; the
+pad's configuration is the only evidence, and it is indirect.
 
 **The RPC server record is the SDK's 68 bytes, and two of its slots are
 reused.** BOOT-12d. A title's module allocates the record, so its length is
