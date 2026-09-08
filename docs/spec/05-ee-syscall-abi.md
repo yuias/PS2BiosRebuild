@@ -585,26 +585,35 @@ would accept a caller the reference does not. `mode` is `2` for NTSC and `3`
 for PAL — the kernel-level numbering, which is not the SDK's separate display
 mode enumeration.
 
-For each of those two modes the kernel writes **six GS privileged registers, in
-this order**: SMODE1 (`0x12000010`), SYNCH1 (`0x12000040`), SYNCH2
+For each of those two modes the kernel makes **seven GS privileged register
+writes, in this order**: SMODE1 (`0x12000010`), SYNCH1 (`0x12000040`), SYNCH2
 (`0x12000050`), SYNCHV (`0x12000060`), SMODE2 (`0x12000020`), SRFSH
-(`0x12000030`). Every one is a **64-bit `sd`**; a pair of word stores is a
-different transaction on this bus and not an equivalent. The values:
+(`0x12000030`), and SMODE1 again. Every one is a **64-bit `sd`**; a pair of
+word stores is a different transaction on this bus and not an equivalent. The
+values:
 
 | Register | `mode == 2` (NTSC) | `mode == 3` (PAL) |
 | --- | --- | --- |
-| SMODE1 | `0x0000000740834504` | `0x0000000740836504` |
+| SMODE1, opening | `0x0000000740834504` | `0x0000000740836504` |
 | SYNCH1 | `0x0007f5b61f06f040` | `0x0007f5c21fc83030` |
 | SYNCH2 | `0x000000000033a4d8` | `0x00000000003484bc` |
 | SYNCHV | `0x00c7800601a01801` | `0x00a9000502101401` |
 | SRFSH | `0x0000000000000008` | `0x0000000000000008` |
+| SMODE1, closing | `0x0000000740814504` | `0x0000000740816504` |
 
-SMODE1 additionally carries **bit 0 of the kernel's display-configuration
-doubleword at bit 25**. SYNCHV takes an alternate value — `...1802` for NTSC,
-`...1404` for PAL — when that same word's bits `8..6` are non-zero **and** its
-bit 40 is set. That word is kernel-resident and no caller names its address: it
-is reached only through the syscalls that read it, so its **layout** is part of
-the interface and its **address is not**.
+The closing SMODE1 is the opening one with **SINT (bit 17) cleared**, and it
+is the value the register is left holding; a sequence that stops at SRFSH
+leaves the sync interrupt off, and an emulator that honours SINT (PCSX2 does)
+then raises no vblank on either CPU (analysis 46 §1e).
+
+Both SMODE1 writes additionally carry **bit 0 of the kernel's
+display-configuration doubleword at bit 25**, and on the progressive path
+(`interlace == 0`) **bit 1 of that word at bit 36** as well. SYNCHV takes an
+alternate value — `...1802` for NTSC, `...1404` for PAL — when that same
+word's bits `8..6` are non-zero **and** its bit 40 is set. That word is
+kernel-resident and no caller names its address: it is reached only through
+the syscalls that read it, so its **layout** is part of the interface and its
+**address is not**.
 
 SMODE2 is the only register the caller's own arguments reach: interlaced
 (`interlace != 0`) writes `(field & 1) << 1 | 1` — INT set, FFMD carrying

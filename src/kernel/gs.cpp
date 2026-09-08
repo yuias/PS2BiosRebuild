@@ -73,6 +73,19 @@ constexpr unsigned kModeSelectShift = 6;
 constexpr uint64_t kModeSelectMask = 7;
 constexpr unsigned kSynchvAlternateBit = 40;
 
+// SMODE1's SINT (bit 17): set in the first write of the sequence and cleared
+// by the last, which is the same value with this bit off (analysis 46 §1e:
+// `0x...40834504` first, `0x...40814504` last, on both interlace paths).
+// The clear is not optional: PCSX2 raises no vblank interrupt on either CPU
+// while SINT is set, so leaving it up stops every vsync-driven wait a title
+// has -- on the IOP, the pad driver's polling among them.
+constexpr uint64_t kSmode1Sint = 1ull << 17;
+
+// The progressive path also carries bit 1 of the configuration word at bit
+// 36 (VHP) in both SMODE1 writes (`0x8000c490..0x8000c4b0`); the interlaced
+// path carries bit 0 at bit 25 only.
+constexpr unsigned kSmode1VhpShift = 36;
+
 void writeRegister(uintptr_t address, uint64_t value) {
     *reinterpret_cast<volatile uint64_t *>(address) = value;
 }
@@ -90,13 +103,16 @@ void writeRegister(uintptr_t address, uint64_t value) {
     return selected && alternate ? timing.synchv_alternate : timing.synchv;
 }
 
-// The six writes the dispatcher makes, in the order it makes them. Their order
-// is part of the contract: SMODE1 goes out before the sync timings and SRFSH
-// after them, and the GS is being told to change its own raster while this
-// runs.
+// The seven writes the dispatcher makes, in the order it makes them. Their
+// order is part of the contract: SMODE1 goes out with SINT set before the sync
+// timings, SRFSH after them, and SMODE1 again with SINT cleared to close the
+// sequence -- the GS is being told to change its own raster while this runs.
 void program(const CrtTiming &timing, int32_t interlace, int32_t field,
              uint64_t config) {
-    const uint64_t smode1 = timing.smode1 | ((config & 1) << kSmode1BitShift);
+    uint64_t smode1 = timing.smode1 | ((config & 1) << kSmode1BitShift);
+    if (interlace == 0) {
+        smode1 |= ((config >> 1) & 1) << kSmode1VhpShift;
+    }
     // Interlaced: INT set, FFMD carrying the caller's `field`. Progressive
     // writes a literal zero, which the reference does with `sd $zero`.
     const uint64_t smode2 =
@@ -108,6 +124,7 @@ void program(const CrtTiming &timing, int32_t interlace, int32_t field,
     writeRegister(kSynchv, synchvFor(timing, config));
     writeRegister(kSmode2, smode2);
     writeRegister(kSrfsh, kSrfshValue);
+    writeRegister(kSmode1, smode1 & ~kSmode1Sint);
 }
 
 }  // namespace

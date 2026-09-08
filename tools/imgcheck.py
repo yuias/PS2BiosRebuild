@@ -140,7 +140,9 @@ GS_IMR_VALUE = 0x0123456789ABCDEF
 # SYS-14a's two modes, and one the reference's dispatcher carries past NTSC and
 # PAL into code this image does not serve.
 CRT_NTSC, CRT_PAL, CRT_UNSERVED = 2, 3, 0x52
-CRT_NTSC_SMODE1, CRT_NTSC_SYNCH1 = 0x0000000740834504, 0x0007f5b61f06f040
+# SMODE1 as the sequence leaves it: the opening write's value with SINT
+# (bit 17) cleared by the closing write.
+CRT_NTSC_SMODE1, CRT_NTSC_SYNCH1 = 0x0000000740814504, 0x0007f5b61f06f040
 CRT_PAL_SYNCH1 = 0x0007f5c21fc83030
 # SYS-15's blocks: the caller-side scratch these are called with, the second
 # block's size, and a pattern no zeroed block could be mistaken for.
@@ -381,7 +383,8 @@ def checkDisplaySyscalls(machine: eesim.Machine) -> list[str]:
             "slot 0x02 did not return")
     require(io(GS_SMODE1) == CRT_NTSC_SMODE1, "SYS-14a",
             f"NTSC left SMODE1 {io(GS_SMODE1):#018x}, "
-            f"want {CRT_NTSC_SMODE1:#018x}")
+            f"want {CRT_NTSC_SMODE1:#018x}: the sequence must close with a "
+            f"second SMODE1 write that clears SINT")
     require(io(GS_SYNCH1) == CRT_NTSC_SYNCH1, "SYS-14a",
             f"NTSC left SYNCH1 {io(GS_SYNCH1):#018x}, "
             f"want {CRT_NTSC_SYNCH1:#018x}")

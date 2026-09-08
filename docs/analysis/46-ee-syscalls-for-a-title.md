@@ -219,23 +219,31 @@ between two SYNCHV constants.
 | `0x8000c33c` | SMODE2 | `(field_bit0 << 1) \| 1` | see §1b's worked example |
 | `0x8000c360` | SRFSH | `0x0000000000000008` | fixed |
 
-(A second SMODE1-shaped value is computed at `0x8000c364`
-`or $a2, $a2, $a0` = `(*0x80015960 bit0 << 25) \| 0x0000000740814504` and
-handed, unstored, to a shared tail at `0x8000c4b8` that `jal`s
-`0x80007580` — a routine outside the range this pass disassembled. **Open
-question**: what that helper does with it.)
+| `0x8000c36c` | SMODE1 | `? \| 0x0000000740814504` | 7th write, in the delay slot of the branch to the shared tail; same `?` as the 1st write, and the constant differs from the 1st only in bit 17 (SINT) |
+
+(The value is built at `0x8000c364` `or $a2, $a2, $a0` and stored by the
+`sd $a2, 0($t0)` in the delay slot of `b 0x8000c4b8` — an earlier reading of
+this block took it for unstored. The shared tail's `jal 0x80007580` is a
+machine-configuration routine — it compares a kernel word against `0x40`,
+`0x60`, `0x61`, pulses a byte at `0xBF803218` or a halfword at `0xBA00000A`,
+and reads two configuration values through `0x80007840` — and touches no GS
+register; the earlier open question about it is closed. So the sequence
+**closes with SMODE1 written a second time with SINT cleared**, on both
+interlace paths, which is what leaves the sync interrupt running; the
+`REV == 1` fast path of §1c reaches the same end through its own 3rd and 4th
+SMODE1 writes.)
 
 **`mode == 2`, `interlace == 0`** (`0x8000c36c`–`0x8000c4b8`):
 
 | Address | Register | Value | Note |
 | --- | --- | --- | --- |
-| `0x8000c3bc` | SMODE1 | `? \| ? \| 0x0000000740834504` | two runtime terms folded in (bits of `$a3 = *0x80015960` at two different shifts) |
+| `0x8000c3bc` | SMODE1 | `? \| ? \| 0x0000000740834504` | two runtime terms folded in: bit 0 of `*0x80015960` at bit 25 (as the interlaced block), and **bit 1 of the same doubleword at bit 36** (`ld; dsll 0x1f; dsra32 0; andi 1; dsll32 0x4` at `0x8000c488`–`0x8000c4a4`, decoded from the identical construction before the 7th write) |
 | `0x8000c3d8` | SYNCH1 | `0x0007f5b61f06f040` | fixed |
 | `0x8000c3f4` | SYNCH2 | `0x000000000033a4d8` | fixed |
 | `0x8000c450` | SYNCHV | `0x00c7800601a01801` unless **both** bits `8..6` of `*0x80015960` are nonzero (`0x8000c3fc`) **and** its bit 40 is set (`0x8000c40c`), in which case `0x00c7800601a01802` | two chained tests, both against the persisted word |
 | `0x8000c464` | SMODE2 | `0x0000000000000000` | literal zero, `sd $zero` |
 | `0x8000c46c` | SRFSH | `0x0000000000000008` | fixed |
-| `0x8000c4b4` | SMODE1 | `? \| ? \| 0x0000000740814504` | same two-term shape as `0x8000c3bc`, different base constant |
+| `0x8000c4b4` | SMODE1 | `? \| ? \| 0x0000000740814504` | 7th write: same two terms as `0x8000c3bc`, base constant differs only in bit 17 (SINT cleared) |
 
 **`mode == 3`, `interlace == 1`** (`0x8000c538`–`0x8000c60c`) — identical
 shape to `mode == 2`'s `interlace == 1` block, different constants:
