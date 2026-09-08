@@ -25,6 +25,7 @@ using ps2::loader::ModuleRecord;
 // kerr.h [header], IOP-5e
 constexpr int kLinkError = -200;
 constexpr int kIllegalObject = -201;
+constexpr int kUnknownModule = -202;
 constexpr int kNoFile = -203;
 constexpr int kFileError = -204;
 constexpr int kNoMemory = -400;
@@ -32,6 +33,14 @@ constexpr int kNoMemory = -400;
 constexpr int kOpenRead = 1;                    // O_RDONLY [header]
 constexpr uint32_t kArgvMax = 16;
 constexpr uint32_t kArgBytesMax = 256;
+
+// Modules loaded by ordinals 6/10 and not yet started, for ordinal 8's by-id
+// lookup. The reference finds a record through LOADCORE's internals
+// (ordinal 3), which has no spec line yet; this list is this module's own,
+// the ids are still LOADCORE's, and docs/implementation.md records the
+// deviation.
+constexpr uint32_t kLoadedMax = 16;
+ModuleRecord *loaded[kLoadedMax];
 
 // --- the reboot core (docs/analysis/45 §2) -----------------------------------
 //
@@ -163,37 +172,24 @@ int isIllegalBootDevice(const char *) {
     return argc;
 }
 
-// Ordinal 7: LoadStartModule(path, arglen, args, result) -> id | error.
-int loadStartModule(const char *path, uint32_t arglen, const char *args, int *result) {
-    if (isIllegalBootDevice(path) != 0) {
-        return kIllegalObject;
-    }
-    uint8_t *file;
-    uint32_t file_size;
-    const int read_result = readFile(path, &file, &file_size);
-    if (read_result < 0) {
-        return read_result;
-    }
-
+// IOP-5b: probe, allocate, load, link, flush, register. The raw image is the
+// caller's to free. Answers the record, or a negative error.
+[[nodiscard]] int loadImage(const uint8_t *file, const char *name, ModuleRecord **out) {
     ExecutableInfo info;
     if (_import_loadcore_probe(file, &info) < 0 || info.type < 1 || info.type > 4) {
-        _import_sysmem_release(reinterpret_cast<uintptr_t>(file));
         return kIllegalObject;
     }
     const auto block = static_cast<uint32_t>(
         _import_sysmem_allocate(0, sizeof(ModuleRecord) + info.memory_size, 0));
     if (block == 0) {
-        _import_sysmem_release(reinterpret_cast<uintptr_t>(file));
         return kNoMemory;
     }
     auto *record = reinterpret_cast<ModuleRecord *>(block);
     info.base = block + sizeof(ModuleRecord);
     if (_import_loadcore_load(file, &info) < 0) {
         _import_sysmem_release(block);
-        _import_sysmem_release(reinterpret_cast<uintptr_t>(file));
         return kIllegalObject;
     }
-    _import_sysmem_release(reinterpret_cast<uintptr_t>(file));
 
     // IOP-5b: link, then flush, then register.
     if (_import_loadcore_link(reinterpret_cast<uint8_t *>(info.base), &info) < 0) {
@@ -202,7 +198,7 @@ int loadStartModule(const char *path, uint32_t arglen, const char *args, int *re
     }
     _import_loadcore_flush();
     record->next = nullptr;
-    record->name = baseName(path);
+    record->name = name;
     record->version = 0;
     record->newflags = 0;
     record->flags = 0;
@@ -213,16 +209,107 @@ int loadStartModule(const char *path, uint32_t arglen, const char *args, int *re
     record->data_size = info.data_size;
     record->bss_size = info.bss_size;
     _import_loadcore_register(record);
+    *out = record;
+    return 0;
+}
 
+// IOP-5d: the entry call, with `*result` the entry's raw return.
+int startRecord(ModuleRecord *record, const char *name, uint32_t arglen, const char *args,
+                int *result) {
     char copy[kArgBytesMax];
     char *argv[kArgvMax];
-    const uint32_t argc = buildArguments(baseName(path), arglen, args, copy, argv);
-    const uint32_t answer = ps2::loader::callEntry(info.entry, info.gp, argc, argv,
+    const uint32_t argc = buildArguments(name, arglen, args, copy, argv);
+    const uint32_t answer = ps2::loader::callEntry(record->entry, record->gp, argc, argv,
                                                    reinterpret_cast<uintptr_t>(record));
     if (result != nullptr) {
         *result = static_cast<int>(answer);
     }
     return record->id;
+}
+
+// The file at `path`, loaded and registered but not started.
+[[nodiscard]] int loadFromPath(const char *path, ModuleRecord **out) {
+    if (isIllegalBootDevice(path) != 0) {
+        return kIllegalObject;
+    }
+    uint8_t *file;
+    uint32_t file_size;
+    const int read_result = readFile(path, &file, &file_size);
+    if (read_result < 0) {
+        return read_result;
+    }
+    const int loaded_result = loadImage(file, baseName(path), out);
+    _import_sysmem_release(reinterpret_cast<uintptr_t>(file));
+    return loaded_result;
+}
+
+// Ordinal 7: LoadStartModule(path, arglen, args, result) -> id | error.
+int loadStartModule(const char *path, uint32_t arglen, const char *args, int *result) {
+    ModuleRecord *record;
+    const int loaded_result = loadFromPath(path, &record);
+    if (loaded_result < 0) {
+        return loaded_result;
+    }
+    return startRecord(record, record->name, arglen, args, result);
+}
+
+// A record loaded but not started is held until ordinal 8 asks for it. Out
+// of slots, the module is loaded and registered but cannot be started later;
+// the id is still answered, as the reference's list has no such limit.
+void holdLoaded(ModuleRecord *record) {
+    for (uint32_t k = 0; k < kLoadedMax; k++) {
+        if (loaded[k] == nullptr) {
+            loaded[k] = record;
+            return;
+        }
+    }
+}
+
+// Ordinal 6: LoadModule(path) -> id | error.
+int loadModule(const char *path) {
+    ModuleRecord *record;
+    const int loaded_result = loadFromPath(path, &record);
+    if (loaded_result < 0) {
+        return loaded_result;
+    }
+    holdLoaded(record);
+    return record->id;
+}
+
+// Ordinal 10: LoadModuleBuffer(buffer) -> id | error. The image is already
+// in memory and stays the caller's; the record is named from the image's
+// own `.iopmod` name (spec/02 IRX-2, offset 26), there being no path.
+int loadModuleBuffer(const uint8_t *buffer) {
+    ps2::loader::Segments segments;
+    if (!ps2::loader::readHeaders(buffer, segments)) {
+        return kIllegalObject;
+    }
+    const auto *name = reinterpret_cast<const char *>(buffer + segments.iopmod_offset + 26);
+    ModuleRecord *record;
+    const int loaded_result = loadImage(buffer, name, &record);
+    if (loaded_result < 0) {
+        return loaded_result;
+    }
+    holdLoaded(record);
+    return record->id;
+}
+
+// Ordinal 8: StartModule(id, name, arglen, args, result) -> id | error.
+// IOP-5e: an id that names no loaded, unstarted module is -202. The `name`
+// argument stands in for the path ordinal 7 would have had, so it is what
+// argv[0] is built from when given (docs/analysis/39 §3: both ordinals end
+// in the same argument builder); the record keeps its own name.
+int startModule(int id, const char *name, uint32_t arglen, const char *args, int *result) {
+    for (uint32_t k = 0; k < kLoadedMax; k++) {
+        ModuleRecord *record = loaded[k];
+        if (record == nullptr || record->id != id) {
+            continue;
+        }
+        loaded[k] = nullptr;
+        return startRecord(record, name != nullptr ? baseName(name) : record->name, arglen,
+                           args, result);
+    }
+    return kUnknownModule;
 }
 
 int unimplemented() {
@@ -377,11 +464,11 @@ PS2_EXPORT_TABLE ExportTable<16> modload_exports = {
         slot(reservedHook),             // 3
         slot(reBootStart),              // 4  ReBootStart
         slot(unimplemented),            // 5  LoadModuleAddress
-        slot(unimplemented),            // 6  LoadModule
+        slot(loadModule),               // 6  LoadModule
         slot(loadStartModule),          // 7  LoadStartModule
-        slot(unimplemented),            // 8  StartModule
+        slot(startModule),              // 8  StartModule
         slot(unimplemented),            // 9  LoadModuleBufferAddress
-        slot(unimplemented),            // 10 LoadModuleBuffer
+        slot(loadModuleBuffer),         // 10 LoadModuleBuffer
         slot(unimplemented),            // 11 LoadStartKelfModule
         slot(unimplemented),            // 12 SetSecrmanCallbacks
         slot(unimplemented),            // 13 SetCheckKelfPathCallback

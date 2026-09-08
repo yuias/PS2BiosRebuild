@@ -957,12 +957,18 @@ that switched away from the boot thread whenever a program thread was ready,
 request or not, was tried and withdrawn as redundant: with the request kept,
 the boot thread is never found running over a ready one.
 
-**`MODLOAD` loads, and little else.** Of its sixteen ordinals,
-`LoadStartModule` and `IsIllegalBootDevice` are real — the latter accepts
-every path, its rule being unread (IOP-5g) — and the rest answer -1; the
-module id counts on from the boot list's length (IOP-5c), so the first module
-loaded on request is number thirteen here where the reference's is
-twenty-five. `IOMAN`'s and `ROMDRV`'s unread error numbers are kept as the
+**`MODLOAD` loads and starts, and little else.** Of its sixteen ordinals,
+`LoadModule`, `LoadStartModule`, `StartModule`, `LoadModuleBuffer` and
+`IsIllegalBootDevice` are real — the last accepts every path, its rule being
+unread (IOP-5g) — and the rest answer -1; the module id counts on from the
+boot list's length (IOP-5c), so the first module loaded on request takes the
+number after the list's last, which is the reference's twenty-five only while
+the lists are the same length. `StartModule` finds its
+module by id in a list of this module's own — the records ordinals 6 and 10
+loaded and did not start — where the reference walks `LOADCORE`'s internals
+through ordinal 3, which has no spec line yet; the ids are still `LOADCORE`'s.
+The `…Address` variants (5, 9) wait on `SYSMEM`'s block records, since their
+`-205` answer is a query of those (IOP-5e). `IOMAN`'s and `ROMDRV`'s unread error numbers are kept as the
 analysis found them.
 
 **Slot `0x76` reports a transfer running until channel 6 idles**, where the
