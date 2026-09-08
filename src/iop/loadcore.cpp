@@ -404,7 +404,7 @@ template <typename F>
     {
         reservedHook,                   // 0  reserved
         reservedHook,                   // 1  reserved
-        unimplemented,                  // 2
+        reservedHook,                   // 2  reserved (IRX-6a)
         unimplemented,                  // 3  GetLibraryEntryTable
         asSlot(flushIcache),            // 4  FlushIcache
         asSlot(flushDcache),            // 5  FlushDcache
@@ -420,8 +420,8 @@ template <typename F>
         unimplemented,                  // 15
         asSlot(registerModule),         // 16 RegisterModule
         unimplemented,                  // 17 ReleaseModule
-        unimplemented,                  // 18
-        unimplemented,                  // 19
+        reservedHook,                   // 18 reserved (IRX-6a)
+        reservedHook,                   // 19 reserved (IRX-6a)
         asSlot(addBootupCallback),      // 20 bootup callbacks
         unimplemented,                  // 21 SetCacheCtrl
         asSlot(probeExecutable),        // 22 ProbeExecutableObject

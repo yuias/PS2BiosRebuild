@@ -22,7 +22,8 @@ namespace {
 // clear the whole boot image instead. `tools/imgcheck.py` gates the image
 // against it. The high bound stops below the boot list at `0x001F8100` and
 // the stack the boot block put above that; the reference's is the RAM size
-// the reset path latched (spec/03 BOOT-4 step 5), still not plumbed through.
+// the reset path latched (spec/03 BOOT-4 step 5), which the entry receives
+// as `ram_size` but this constant still caps.
 constexpr uint32_t kHeapStart = 0x00020000;
 // BOOT-4: what a retail machine latches, for an entry that was told nothing.
 constexpr uint32_t kDefaultRamSize = 0x00200000;
@@ -197,7 +198,7 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
     {
         reservedHook,                   // 0  reserved
         reservedHook,                   // 1  reserved
-        unimplemented,                  // 2
+        reservedHook,                   // 2  reserved (IRX-6a)
         unimplemented,                  // 3
         reinterpret_cast<int (*)(uint32_t)>(allocate),   // 4  allocate(mode, size, address)
         deallocate,                     // 5  release
