@@ -235,23 +235,47 @@ in order:
    too; it is not — the branch lands on `+0x132c`, the walk's own first
    instruction, and the second print inside the loop (the module's tag,
    `"  %.8s %x \n"` at `+0x19ac`) has its own `beqz $19` at `+0x1378`.
-2. **Walk and tear down every resident module, unconditionally.**
-   `loadcore.<ord>` returns the head of the resident
-   module list, and each entry whose record has non-null words at `+0x14`,
-   `+0x18` and `+0x1c` is called as `fn(0)` (`jalr $2` with `move $4, $zero`
-   at `+0x1398`) — a generic per-module teardown hook distinct from, and coarser
-   than, the ordinary non-residency teardown `spec/02` IRX-12b describes
-   (which runs *inside* a module's own entry return, not from an external
-   walk). **A rebuild's reboot path must expose this walk-and-call hook on
-   every module it wants reboot-capable**, not just implement IRX-12b.
+2. **Walk the registered export tables, unconditionally, and call ordinal 2
+   of each.** An earlier reading of this step had it walking a module list;
+   re-read at the bytes, it does not. `loadcore` **ordinal 3** (`jal 0x1710`
+   at `+0x132c`, the first stub of `MODLOAD`'s `loadcore` import table at
+   `+0x16fc`) returns the address of `LOADCORE`'s own internals block, and
+   `+0x1334` dereferences that block's **word 0** — the head of the
+   registered-export-table registry, the list `RegisterLibraryEntries` links
+   a table into by writing the old head over the table's magic (`spec/02`
+   IRX-4c). The module records are a different list, at `+0x10` of the same
+   block, and this walk never reads it.
+
+   Per table, `+0x1348`..`+0x13a4`: entries 0, 1 and 2 (`spec/02` IRX-5:
+   header `+0x14`, `+0x18`, `+0x1c`) must all be non-null, and **entry 2 —
+   ordinal 2 — is what is called**, as `fn(0)` (`lw $2, 0x8($16)` with
+   `$16 = table+0x14`, then `jalr $2` with `move $4, $zero` at `+0x1398`).
+   The next link is captured at `+0x134c` *before* any check or call, so a
+   hook that unregisters its own table does not derail the walk. The header's
+   flags at `+0xa` are never read: an inherited table (IRX-10b) is called
+   like any other.
+
+   This is a generic teardown hook distinct from, and coarser than, the
+   ordinary non-residency teardown `spec/02` IRX-12b describes (which runs
+   *inside* a module's own entry return, not from an external walk). It also
+   explains why the reference stubs ordinal 2 in modules with nothing to tear
+   down (IRX-6a): **a rebuild's reboot path must occupy ordinal 2 of every
+   export table it registers**, not just implement IRX-12b — a module whose
+   table stops short of three entries is simply skipped, and one with no
+   export table at all is never reached.
 3. **Re-apply BOOT-4 step 1's bus/RAM-controller table, without the reset
-   vector.** `MODLOAD` re-reads `CP0 $15` (`PRId`) and re-evaluates BOOT-3's
-   exact discriminator (`PRId < 0x10 || *(u32*)0xBF801450 & 8`), then reads
-   two fixed-offset word pairs straight out of the boot block itself
-   (`lw $4, 0xBFC02000+{0x8,0xc}` or `+{0x10,0x14}` depending on the
-   discriminator) and applies them through what is, by shape, the same
-   "walk `(address,value)` pairs until a zero address" routine BOOT-4 step 1
-   already describes. **This is the mechanism behind the outside lead's "no
+   vector — unless `mode` says otherwise.** These are two separately gated
+   things, not one. `MODLOAD` re-reads `CP0 $15` (`PRId`) and re-evaluates
+   BOOT-3's exact discriminator (`PRId < 0x10 || *(u32*)0xBF801450 & 8`) to
+   pick **one** word out of the boot block as a table pointer — `+0x8` or
+   `+0xc` of `0xBFC02000` — and walks `(address,value)` pairs from it until a
+   zero address (`+0x13fc`..`+0x1414`), the same routine BOOT-4 step 1
+   already describes. **`mode` bit 0 set skips that apply entirely**
+   (`andi $2, $20, 1; bnez` at `+0x13b4`). Then, separately, **`mode` bit 1
+   clear** (`+0x141c`) re-evaluates the same discriminator to pick `+0x10` or
+   `+0x14` and passes that word to **`loadcore` ordinal 21** (`jal 0x1758`
+   at `+0x1454`), `SetCacheCtrl` by IOP-5a's header name. What those two
+   words hold was not read. **This is the mechanism behind the outside lead's "no
    POST codes"**: the update reboot re-runs a subset of BOOT-4's own table
    application in software, in place, without re-entering `0xBFC02000` at
    all — so none of BOOT-5's POST writes fire a second time, and a rebuild's

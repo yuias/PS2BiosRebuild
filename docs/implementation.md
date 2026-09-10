@@ -635,12 +635,15 @@ again, `LOADCORE` publishes boot record key 4 as `1`, and the two processors
 meet again from the beginning. `tests/iopreset` is the client that judges it.
 
 Two things the reference does here are missing, both stated at the code. It
-walks the resident module list first and calls a per-module teardown hook out
-of each record, reached through a `loadcore` ordinal this project has not
-identified — no module here exposes such a hook, so the walk is absent rather
-than empty. And it re-applies BOOT-4 step 1's bus table, which guards against
-a controller a half-finished transfer left in another state; nothing between
-the trap and `IOPBOOT` disturbs it here.
+walks the registered export tables first — `loadcore` ordinal 3 gives it the
+registry head — and calls **ordinal 2** of each table that has at least three
+entries, as a teardown hook (`docs/analysis/45` §2). Every module here
+registers an ordinal 2, so the walk would not be empty: it would call our
+`SYSMEM`'s and `LOADCORE`'s reserved return-stubs and whatever each other
+module has in that slot, none of which tears anything down. And it re-applies
+BOOT-4 step 1's bus table unless the reboot's `mode` bit 0 says not to, which
+guards against a controller a half-finished transfer left in another state;
+nothing between the trap and `IOPBOOT` disturbs it here.
 
 With **an argument** the worker still takes the old path: re-arm the
 receiving channel and raise `SMFLG`'s `SIF_STAT_SIFINIT`, `SIF_STAT_CMDINIT`
