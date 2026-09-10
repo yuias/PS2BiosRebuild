@@ -53,8 +53,9 @@ module's file image.
 
 ## 4. Two corrections to the `IOPBTCONF` grammar
 
-`docs/analysis/45` has `"!addr "` and `"!include "` the wrong way round, and
-`src/iop/udnl.cpp` inherited it:
+`docs/analysis/45` has `"!addr "` and `"!include "` the wrong way round.
+`src/iop/udnl.cpp` takes them from this table, not from `45`, and recognises
+and skips both -- neither retail list carries either:
 
 | Token | Effect |
 | --- | --- |
@@ -65,8 +66,9 @@ module's file image.
 The version compared is the `EXTINFO` type `0x02` record (`ARC-6b`), as our
 model already has it. Names match on ten bytes. Candidates are walked
 **newest source first** and replaced only on a strictly greater version, so an
-equal version leaves the newest winner standing -- `src/iop/udnl.cpp` walks the
-other way, which agrees only while there is exactly one named source.
+equal version leaves the newest winner standing. `src/iop/udnl.cpp` walked the
+other way when this was written, which agrees only while there is exactly one
+named source; `db21b27` turned it round.
 
 A source whose name begins with `mc`, `hd`, `net` or `dev` followed by a digit
 is refused outright, silently, before anything is opened.
