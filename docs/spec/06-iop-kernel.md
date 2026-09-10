@@ -134,8 +134,8 @@ position `16 + (irq - 0x20)`, i.e. bits 16–22), sets `DICR` **bit 23** (the
 controller's own master enable, and the master for both banks) and sets
 `I_MASK` bit 3 (`IOP_IRQ_DMA`, the umbrella cause) — all three are required
 before a channel's own `DICR` flag can ever reach `I_STAT`. Bit 31 is a
-separate read-only flag, the OR of the enabled channels' own flags, and
-neither variant ever writes it. `DisableIntr` clears the channel's `DICR`
+separate flag, the OR of the enabled channels' own flags, and neither
+variant's `EnableIntr` writes it. `DisableIntr` clears the channel's `DICR`
 enable bit and reports through `*res` whether that channel's own flag bit was
 also set.
 
@@ -386,9 +386,11 @@ return to the interrupted thread with zero scheduler support present
 (cross-ref IOP-3h).
 
 **IOP-2k — `CpuSuspendIntr`/`CpuResumeIntr`/`CpuEnableIntr`/`CpuDisableIntr`:
-the `Status` `IEp`/`IEo` stack.** The public ordinals are thin wrappers that
-trap via `syscall 4` (`CpuDisableIntr`), `syscall 8` (`CpuEnableIntr`),
-`syscall 0x10` (`CpuSuspendIntr`) and `syscall 0x14` (`CpuResumeIntr`); the
+the `Status` `IEp`/`IEo` stack.** On `INTRMANP` the public ordinals are thin
+wrappers that trap via `syscall 4` (`CpuDisableIntr`), `syscall 8`
+(`CpuEnableIntr`), `syscall 0x10` (`CpuSuspendIntr`) and `syscall 0x14`
+(`CpuResumeIntr`); the resident `INTRMANI` traps from ordinal 9 alone, as the
+end of this section says. In both variants the
 actual `Status` manipulation lives in the SYSCALL-exception handler INTRMAN
 registers for cause 8 (IOP-2d), dispatched by syscall number. Every case
 first computes an "old-state" result as `Status & 0x414` (bits 2 `IEp`, 4
@@ -409,9 +411,10 @@ independently confirmed — described in the analysis only as "thinner
 wrappers."
 
 **The resident `INTRMANI` reaches that handler from one ordinal only.** Its
-ordinals 8, 17 and 18 call no trampoline at all: 8 and 17 read `I_CTRL`
-through ordinal 12 and return `-0x66` if what they read was already `0`, 17
-also storing it through `*state`, and 18 writes back the value it is passed.
+ordinals 8, 17 and 18 call no trampoline at all: both 8 and 17 read `I_CTRL`
+and return `-0x66` if what they read was already `0` — 8 through ordinal 12,
+17 by a route `docs/analysis/37` does not name — with 17 also storing the
+value through `*state`, and 18 writes back the value it is passed.
 Neither 8 nor 17 writes `I_CTRL`, and neither touches `Status`. Only ordinal
 9 traps, and it writes both gates — the same `syscall 8` above, then ordinal
 13's `I_CTRL = 1`. So on this variant the state ordinal 17 hands to ordinal 18

@@ -53,9 +53,10 @@ module's file image.
 
 ## 4. Two corrections to the `IOPBTCONF` grammar
 
-`docs/analysis/45` has `"!addr "` and `"!include "` the wrong way round.
-`src/iop/udnl.cpp` takes them from this table, not from `45`, and recognises
-and skips both -- neither retail list carries either:
+`docs/analysis/45` has `"!addr "` and `"!include "` the wrong way round, and
+`src/iop/udnl.cpp` inherited it; `db21b27` corrected the comment against this
+table. The code recognises and skips both either way, neither retail list
+carrying one:
 
 | Token | Effect |
 | --- | --- |
