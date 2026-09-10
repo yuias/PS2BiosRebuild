@@ -105,10 +105,14 @@ others) and ps2sdk's `intrman.h` [header]:
 | 30 | `SetShouldPreemptCb(cb) -> void` | IOP-2j |
 | 31 | `ResetShouldPreemptCb() -> void` | restores a built-in default |
 
-Ordinals 1, 2 and 26 are reserved stubs; ordinals 10, 11, 21 and 22 are the
-bare `syscall 4`/`8`/`0x10`/`0x14` trampolines ordinals 8/9/17/18 wrap;
-ordinals 12 and 13 are not decoded; ordinal 27 sets an internal DMA-bank-2
-handler mask field, described in IOP-2i.
+Ordinals 1, 2 and 26 are reserved stubs. Ordinals 10, 11, 21 and 22 are the
+bare `syscall 4`/`8`/`0x10`/`0x14` trampolines; on `INTRMANP` they back
+ordinals 8/9/17/18, and on the resident `INTRMANI` only ordinal 9 reaches one
+of them (IOP-2k). Ordinals 12 and 13 are `INTRMANI`'s two `I_CTRL` helpers, a
+raw read of `0xBF801078` and a write of `1` to it, called by ordinals 8 and 9
+respectively; they are unnamed in `INTRMANP`'s table. Ordinal 27 sets the
+fourth word of the internals record ordinal 3 returns, the mask gating the
+bank-2 handler bracket IOP-2i describes.
 
 **IOP-2b — the registration record.** `RegisterIntrHandler(irq, mode,
 handler, arg)` accepts `irq` in `0..0x2D` (46 values) and the two software
@@ -126,14 +130,22 @@ passed. `CpuSuspendIntr`/`CpuResumeIntr` bracket the whole table mutation.
 bit.** For `irq < 0x20`: a plain `I_MASK |= 1<<irq` (enable) or `I_MASK &=
 ~(1<<irq)` (disable). For `0x20 <= irq < 0x27` (the seven DMA-bank-1
 channels): `EnableIntr` sets the channel's own enable bit in `DICR` (bit
-position `16 + (irq - 0x20)`, i.e. bits 16–22), sets `DICR` bit 31 (the
-controller's own master enable) and sets `I_MASK` bit 3 (`IOP_IRQ_DMA`, the
-umbrella cause) — all three are required before a channel's own `DICR` flag
-can ever reach `I_STAT`. `DisableIntr` clears the channel's `DICR` enable bit
-and reports through `*res` whether that channel's own flag bit was also set.
-For `irq >= 0x27`, `EnableIntr` does nothing and returns success (a silent
-no-op); `DisableIntr` returns `-0x65` instead — an intentional asymmetry, not
-a typo.
+position `16 + (irq - 0x20)`, i.e. bits 16–22), sets `DICR` **bit 23** (the
+controller's own master enable, and the master for both banks) and sets
+`I_MASK` bit 3 (`IOP_IRQ_DMA`, the umbrella cause) — all three are required
+before a channel's own `DICR` flag can ever reach `I_STAT`. Bit 31 is a
+separate read-only flag, the OR of the enabled channels' own flags, and
+neither variant ever writes it. `DisableIntr` clears the channel's `DICR`
+enable bit and reports through `*res` whether that channel's own flag bit was
+also set.
+
+Above `0x26` the two variants part. `INTRMANP`'s `EnableIntr` does nothing
+and returns success (a silent no-op) for `irq >= 0x27` while its
+`DisableIntr` returns `-0x65` — an intentional asymmetry, not a typo. The
+resident `INTRMANI` carries both calls across the second bank instead
+(IOP-2i), which leaves `irq == 0x27` in the gap between the two banks'
+ranges: it satisfies neither range check and both calls reject it with
+`-0x65`.
 
 Register addresses (bank 1, all confirmed by direct disassembly):
 
@@ -334,6 +346,12 @@ priority pattern (`0x07777777`/`0x07777777`/`0x777`) and the unnamed
 into `INTRMAN` — it is purely a register-poking accessor library with no
 opinion on how DMA completion reaches a handler.
 
+The `0x1578` register is acquired and released again around each handler the
+`irq`-3 dispatch calls, and that bracket is gated by the fourth word of the
+internals record ordinal 3 returns — the word ordinal 27 sets. Which module
+arms it is unread: nothing in `SIFMAN`, `SIFCMD` or `DMACMAN` imports ordinal
+27 (`docs/analysis/37` §5).
+
 **The resident variant is `INTRMANI`** (`docs/analysis/37` §0: the boot
 releases `INTRMANP` on this generation of IOP, the one with the second
 bank), and it reaches the bank. `EnableIntr` for `0x28 <= irq < 0x2E` sets
@@ -389,6 +407,20 @@ whether `CpuDisableIntr`/`CpuEnableIntr` report the previous state through an
 out-parameter the same way `CpuSuspendIntr`/`CpuResumeIntr` do, were not
 independently confirmed — described in the analysis only as "thinner
 wrappers."
+
+**The resident `INTRMANI` reaches that handler from one ordinal only.** Its
+ordinals 8, 17 and 18 call no trampoline at all: 8 and 17 read `I_CTRL`
+through ordinal 12 and return `-0x66` if what they read was already `0`, 17
+also storing it through `*state`, and 18 writes back the value it is passed.
+Neither 8 nor 17 writes `I_CTRL`, and neither touches `Status`. Only ordinal
+9 traps, and it writes both gates — the same `syscall 8` above, then ordinal
+13's `I_CTRL = 1`. So on this variant the state ordinal 17 hands to ordinal 18
+is an `I_CTRL` word rather than a `Status & 0x414` one, which is the same
+split IOP-2k2 records for `syscall 0x20`'s `$a2`. **Open:** how disabling
+takes effect at all on `INTRMANI`, given that neither of its disabling
+ordinals writes either gate — whether through some path `docs/analysis/37`
+did not find, or by relying on the dispatcher's own save and force-disable at
+return (`37` §5).
 
 ## IOP-3: Threads (THREADMAN)
 
