@@ -1259,8 +1259,8 @@ runs, resolves `IOPBTCONF` across that pool newest-source-first for the load
 `EXTINFO` version record — strictly greater wins, so the newest source wins
 ties. Judged against `tools/iopmerge.py`, the same rule in Python: for the
 retail disc's own reboot the two agree name for name, version for version and
-source for source, fifteen names taken from
-`cdrom0:\MODULES\IOPRP310.IMG;1` and seven kept from `rom0`.
+source for source. Of the boot list's twenty-four names, sixteen are taken
+from `cdrom0:\MODULES\IOPRP310.IMG;1` and eight are kept from `rom0`.
 
 **The version compared is the archive's, never the ELF's.** `ROMDRV` is the
 case that punishes the other choice: a module's own version and the version
