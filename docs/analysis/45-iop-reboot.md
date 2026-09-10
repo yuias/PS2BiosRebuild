@@ -257,9 +257,11 @@ in order:
 
    This is a generic teardown hook distinct from, and coarser than, the
    ordinary non-residency teardown `spec/02` IRX-12b describes (which runs
-   *inside* a module's own entry return, not from an external walk). It also
-   explains why the reference stubs ordinal 2 in modules with nothing to tear
-   down (IRX-6a): **a rebuild's reboot path must occupy ordinal 2 of every
+   *inside* a module's own entry return, not from an external walk). It is
+   consistent with the reference reserving ordinal 2 across modules with
+   nothing to tear down (IRX-6a), and it is the caller `docs/analysis/48` §7
+   could not find for `SECRMAN`'s own ordinal 2. **A rebuild's reboot path
+   must occupy ordinal 2 of every
    export table it registers**, not just implement IRX-12b — a module whose
    table stops short of three entries is simply skipped, and one with no
    export table at all is never reached.

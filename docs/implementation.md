@@ -638,9 +638,12 @@ Two things the reference does here are missing, both stated at the code. It
 walks the registered export tables first — `loadcore` ordinal 3 gives it the
 registry head — and calls **ordinal 2** of each table that has at least three
 entries, as a teardown hook (`docs/analysis/45` §2). Every module here
-registers an ordinal 2, so the walk would not be empty: it would call our
-`SYSMEM`'s and `LOADCORE`'s reserved return-stubs and whatever each other
-module has in that slot, none of which tears anything down. And it re-applies
+registers an ordinal 2, so the walk would not be empty. Of the eight modules
+that stay resident past a title's reboot, `IOPTTY` and `REBOOT` register no
+export table and are never reached; the other six all answer at slot 2, five
+with the reserved return-stub and `SECRMAN` with a body that returns 1 and
+does nothing else. So the walk is harmless here rather than absent, and
+nothing in it tears anything down. And it re-applies
 BOOT-4 step 1's bus table unless the reboot's `mode` bit 0 says not to, which
 guards against a controller a half-finished transfer left in another state;
 nothing between the trap and `IOPBOOT` disturbs it here.

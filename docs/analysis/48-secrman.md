@@ -187,7 +187,10 @@ against the reference ROM as well: the title must ship its own for its own
 - **Ordinals 8–13 and the loader exchange** — the encrypted-module path.
   Deliberately unread; out of scope by policy, and unimported by every client
   this document looked at.
-- **Ordinal 2**, which returns 1 and has no caller.
+- ~~**Ordinal 2**, which returns 1 and has no caller.~~ Closed: the caller is
+  `MODLOAD`'s reboot teardown walk, which calls export entry 2 of every
+  registered table as `fn(0)` (`docs/analysis/45` §2 step 2). Returning 1 and
+  doing nothing is what a module with nothing to tear down answers.
 - **What `cnum` means on the mechacon side** — not needed for a stand-in.
 - **What the EE sees after a `-90`**: the driver's PS1-card fallback's answer
   for a PS2 card was not traced.
