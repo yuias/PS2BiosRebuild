@@ -183,3 +183,8 @@ the archive format itself.
 [Zero-Clause BSD](LICENSE) (0BSD) — public-domain-equivalent: use, copy,
 modify and distribute for any purpose, with no attribution requirement and no
 warranty.
+
+One third-party file is bundled: the OSD's font, M+ BITMAP FONTS
+`mplus_f12r.bdf`, under `third_party/fonts/`. Its licence grants the same
+freedoms and its only condition is that the notice travels with it;
+[`licenses/mplus`](licenses/mplus) holds that notice and the provenance.
