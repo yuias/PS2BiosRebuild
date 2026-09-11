@@ -233,6 +233,94 @@ the kernel side, and this is a real caller of it from the other. Both branches
 then repeat the same reconfiguration sequence, so the bit selects a mode the
 kernel holds rather than something the OSD draws.
 
+## The "configured" flag is in the return value, not the struct
+
+The sweep above reads the output struct, so it is blind to anything the
+decoder computes and does not store. One bit is exactly that, and it is the
+one the OSD's own first branch turns on.
+
+Repeating the sweep over **all 240 input bits** of both blocks, at both
+settings of the gate, and watching the decoder's **return value** as well as
+the struct:
+
+```sh
+python3 - <<'PY'
+import sys; sys.path.insert(0, "tools")
+from eesim import Bus, callProgram
+
+img = open("<outdir>/OSDSYS.expanded", "rb").read()
+IN, OUT, N = 0x1000000, 0x1010000, 64
+bus = Bus(b"")
+buf, start = bus.region(0x200000)
+buf[start:start + len(img)] = img
+ram, _ = bus.region(0)
+
+def decode(block):
+    ram[IN:IN + 30] = bytes(block)
+    ram[OUT:OUT + N] = bytes(N)
+    cpu, result = callProgram(bus, 0x203698, (OUT, IN), steps=200000)
+    assert result is not None
+    return result, int.from_bytes(ram[OUT:OUT + N], "little")
+
+for gate in (0x00, 0xE0):
+    seed = bytearray(30); seed[15] = gate
+    base_ret, base_out = decode(seed)
+    for byte in range(30):
+        for bit in range(8):
+            t = bytearray(seed); t[byte] ^= 1 << bit
+            ret, out = decode(t)
+            if ret != base_ret or (out ^ base_out):
+                moved = out ^ base_out
+                print(f"blk{byte // 15} +{byte % 15:2d} bit {bit}: "
+                      f"return {base_ret:#x} -> {ret:#x}  struct "
+                      f"{[i for i in range(N * 8) if moved >> i & 1]}")
+PY
+```
+
+**Exactly one bit changes the return, and it is the only bit that changes the
+return without also changing the struct:**
+
+```
+blk1 + 2 bit 7: return 0x1 -> 0x0   struct []
+```
+
+The same line appears at both gate settings, and every other line in the sweep
+leaves the return at `0x1`. So **block 1 byte +2 bit 7 is carried out of the
+decoder inverted and stored nowhere** — which is why the struct sweep could
+not see it.
+
+## What the OSD does with that return
+
+Two call sites reach the decoder. `0x203D28`'s caller drops the answer on the
+floor (`move $2, $zero` before its `jr`). `0x203BD8`'s keeps it in a
+callee-saved register across the rest of its work and returns it, its own
+caller at `0x203DE8` does the same, and `0x208DF0` is where it is finally
+tested:
+
+```sh
+python3 tools/romdis.py <outdir>/OSDSYS.expanded --cpu ee --vma 0x00200000 \
+        --range 0x208de8 0x208e18
+```
+
+```
+  208df0:  jal   0x203de8            # read and decode the record
+  208df8:  bnez  $2, 0x208e0c        # non-zero: take the extra routine
+  208e00:  lw    $3, 0x7bf0($2)      # zero: a second word decides instead
+  208e04:  beqz  $3, 0x208e14        #        clear, so skip it
+  208e0c:  jal   0x204d60            # the extra routine
+  208e14:  jal   0x204a30            # the common path, either way
+```
+
+Reading the branch as behaviour: **with the bit clear the return is 1 and the
+extra routine always runs; with the bit set the return is 0 and it runs only
+when a separate word is non-zero.** That word is not named here — nothing in
+this document needs it, and it is set elsewhere in the OSD.
+
+What `0x204D60` draws was not read and does not need to be: the rule the
+rebuild needs is which bit gates it, not what the result looks like. `26`
+already established that `CDVDMAN` never interprets the fifteen bytes, so this
+is the only place the rule can live.
+
 ## What this pins for the rebuild
 
 - Only block 1 feeds the decoder. Block 0's fifteen bytes reach the caller
@@ -255,5 +343,9 @@ kernel holds rather than something the OSD draws.
   twelve.
 - **Bit 3 is passed to EE syscall `0x4F`**, which gives `spec/05`'s recorded
   signature for that slot a caller and its band a purpose.
+- **Block 1 byte +2 bit 7 is the "configured" flag.** It reaches no struct
+  bit; the decoder returns it inverted, and the OSD runs its first-boot
+  routine when it is clear. A rebuild that synthesises a record and wants the
+  browser rather than setup sets this bit.
 - Fields still unnamed: bit 0, bits 1–2, bits 20–28, and the second word's
   bits 0–1 and its bit-reversed 2–5.

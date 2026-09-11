@@ -318,7 +318,6 @@ would confirm it:
 | `ROMGSCRT` command interface, and the value that makes the ROM deliberately hang | not yet analysed |
 | SIO2: `CTRL` bit 0 must read back clear with `I_STAT` bit 17 raised, or `SIO2MAN` spins | not yet analysed |
 | `sceSifIopReset`: SIFCMD cid `0x80000003` reboots the IOP without the ROM stub, and in-flight FIFO state must be discarded | `12` |
-| OSD configuration: block 1 byte +2 bit 7 is the "configured" flag — clear sends the OSD to first-boot setup, set to the browser. Found by disassembling the expanded decoder in EE RAM (`0x203698`), which returns the bit inverted and never stores it in the configuration struct, so `28`'s bit sweep of the struct could not see it | `28`; verify by calling the decoder under `eesim`, as `28` did for the other fields |
 
 The traffic goes both ways: the same project asks questions of this one, and
 `docs/analysis/26-cdvd-nvm-and-config.md` was written to answer one — why an
@@ -719,8 +718,20 @@ simulator, in this order:
 useful without a menu and a menu without titles is not. Two of its three parts
 are now built: the display path and a freely-licensed font, which together put
 the version line on screen. What is left is the configuration field map of
-`26`–`28`, and that is blocked on the "configured" flag in §4's leads table
-being verified under `eesim` before the OSD branches on it.
+`26`–`28`, and what blocks it is a chain rather than a single thing:
+
+1. **Nothing from `26`–`28` is in `docs/spec/` yet.** The NVM word interface,
+   the two 15-byte blocks with their checksum byte, and the decoder's field
+   map are all analysed and none of it has a spec line. `spec/06` IOP-8h
+   mentions them only to put them out of scope.
+2. **`CDVDMAN` serves no S-command.** IOP-8h says so deliberately: the driver
+   built so far is the one `LOADFILE`'s ELF path needs. NVM lives behind
+   S-commands `0x0A`/`0x0B` (`26`).
+3. **`CDVDFSV`'s `0x80000593` fnos 14–17 answer zeroes**, because there is no
+   ordinal behind them (§5b's "acknowledged no-op").
+
+So the next step towards it is a spec section, not code. The "configured"
+flag itself is no longer part of the blockage — it is settled (§4).
 
 ### How M1 is worked
 
@@ -886,8 +897,11 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
   channel's interrupt instead. Why the bit never clears on PCSX2 is still not
   understood, and nothing waits for it to be.
 - The lead recorded from PS2e in §4 — block 1 byte +2 bit 7 as the OSD's
-  "configured" flag — belongs to M3 and is verified then, by calling the
-  decoder under `eesim` the way `28` did with the other fields.
+  "configured" flag — is **closed**. Sweeping all 240 input bits of both
+  blocks through the decoder under `eesim` and watching its *return* rather
+  than its output struct: that one bit is the only input that moves the
+  return, it moves no struct bit, and the return is the bit inverted. The
+  OSD's own branch on it is in `28`. Clear means not configured.
 - *Deferred:* the remaining unnamed OSD configuration fields (M3), the nine
   inferred returns of `spec/05` SYS-1c (settled as M1 reaches each slot).
 - *Dropped as an ordering:* filling syscall slots by band, building modules by
