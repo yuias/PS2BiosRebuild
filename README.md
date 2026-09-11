@@ -186,5 +186,6 @@ warranty.
 
 One third-party file is bundled: the OSD's font, M+ BITMAP FONTS
 `mplus_f12r.bdf`, under `third_party/fonts/`. Its licence grants the same
-freedoms and its only condition is that the notice travels with it;
-[`licenses/mplus`](licenses/mplus) holds that notice and the provenance.
+freedoms and attaches no conditions at all;
+[`licenses/mplus`](licenses/mplus) keeps the notice and the provenance anyway,
+so that where the font came from stays checkable.

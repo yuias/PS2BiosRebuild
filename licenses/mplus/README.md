@@ -20,7 +20,9 @@ the hash above is checkable against a fresh download.
 
 The licence grants unlimited permission to use, copy and distribute, modified
 or not, commercially or not, with no attribution requirement and no warranty.
-Keeping the notice is the whole obligation.
+It states no conditions, so this directory is provenance rather than
+compliance: the notice is kept because a reader should be able to see where
+the glyphs came from, not because the terms demand it.
 
 Of the six Latin faces, only `mplus_f10r` and `mplus_f12r` are monospaced --
 the XLFD spacing field is `C` for those two and `P` for `h10r`, `h12r`, `s10r`
