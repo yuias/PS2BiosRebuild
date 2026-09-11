@@ -195,10 +195,24 @@ add_custom_target(build_stamp ALL
     BYPRODUCTS "${PS2_BUILD_STAMP}"
     COMMENT "Stamping the build with its commit")
 
+# The OSD's glyphs, packed out of the BDF at build time. Unlike the stamp
+# above this has file inputs, so it is a custom command with DEPENDS rather
+# than a target that runs unconditionally: an unchanged font and script skip
+# the Python run entirely.
+set(PS2_OSD_FONT "${CMAKE_CURRENT_BINARY_DIR}/osd_font.h")
+set(PS2_OSD_FONT_BDF "${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/mplus_f12r.bdf")
+add_custom_command(OUTPUT "${PS2_OSD_FONT}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/makefont.py"
+            "${PS2_OSD_FONT}" "${PS2_OSD_FONT_BDF}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/makefont.py" "${PS2_OSD_FONT_BDF}"
+    COMMENT "Packing the OSD font")
+add_custom_target(osd_font DEPENDS "${PS2_OSD_FONT}")
+
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
 add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp src/ee/sifclient.cpp)
-add_dependencies(osdsys.elf build_stamp)
+add_dependencies(osdsys.elf build_stamp osd_font)
 target_include_directories(osdsys.elf PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(osdsys.elf PRIVATE
     PS2_BUILD_VERSION="${PROJECT_VERSION}")
