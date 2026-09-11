@@ -211,7 +211,8 @@ add_custom_target(osd_font DEPENDS "${PS2_OSD_FONT}")
 
 # An EE program is stored as the ELF it is: the kernel's loader reads the
 # program headers rather than being told a layout.
-add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp src/ee/sifclient.cpp)
+add_executable(osdsys.elf src/ee/osdsys.S src/ee/osdsys.cpp src/ee/display.cpp
+    src/ee/sifclient.cpp)
 add_dependencies(osdsys.elf build_stamp osd_font)
 target_include_directories(osdsys.elf PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_compile_definitions(osdsys.elf PRIVATE

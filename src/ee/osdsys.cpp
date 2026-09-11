@@ -2,13 +2,15 @@
 //
 // docs/spec/04-ee-kernel.md EE-9c: the default boot runs `rom0:OSDSYS` with a
 // single argument selecting the browser. This is that program's place in the
-// image and its entry contract; what an on-screen menu needs -- a display, a
-// font, artwork -- is material `docs/clean-room-policy.md` puts out of bounds
-// and would be built from freely-licensed sources when there is a screen to
-// put it on.
+// image and its entry contract.
 //
-// What it does have is the one job the retail OSDSYS does that the rest of the
-// boot depends on: `docs/analysis/41` §4 established that reading
+// There is no menu here. The retail one's artwork and fonts are material
+// `docs/clean-room-policy.md` puts out of bounds, and what stands in their
+// place so far is one line of text -- which build this is -- drawn by
+// `display.cpp` on a freely-licensed font. A menu needs pad input and the
+// configuration record before it is worth more than that.
+//
+// The job the rest of the boot actually depends on is the other one: `docs/analysis/41` §4 established that reading
 // `cdrom0:\SYSTEM.CNF;1` and honouring its `BOOT2=` line belongs here and not
 // to EELOAD, whose own contract is only "load the path you were handed". So
 // this asks the IOP's FILEIO for that file over the SIF, takes the path out of
@@ -25,12 +27,20 @@
 
 #include "build_stamp.h"
 #include "console.hpp"
+#include "display.hpp"
 #include "sifclient.hpp"
 
 namespace {
 
 using namespace ps2::sifclient;
 using namespace ps2::console;
+
+// Which build this is, in one string, so the console line and the screen
+// cannot drift apart. The version is the project's, not ROMVER's (that field
+// is the archive's own, spec/01 ARC-7a); the commit comes from the build-time
+// stamp, with a trailing `+` when the tree was not the commit it names.
+constexpr char kBanner[] =
+    "PS2BiosRebuild " PS2_BUILD_VERSION " (" PS2_BUILD_STAMP ")";
 
 // --- FILEIO's RPC (docs/analysis/43 §3, §4; spec/06 IOP-9) ------------------
 
@@ -213,11 +223,10 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
 
 [[noreturn]] void osdMain(int argc, const char *const *argv) {
     // Which build this is, first: the one line a disc-less boot ends on that
-    // identifies the image, and the line a drawing OSD would put up first.
-    // The version is the project's, not ROMVER's (that field is the archive's
-    // own, spec/01 ARC-7a); the commit comes from the build-time stamp, with
-    // a trailing `+` when the tree was not the commit it names.
-    print("# OSDSYS: PS2BiosRebuild " PS2_BUILD_VERSION " (" PS2_BUILD_STAMP ")\n");
+    // identifies the image.
+    print("# OSDSYS: ");
+    print(kBanner);
+    print("\n");
     print("# OSDSYS: loaded from the archive and running. Argument: ");
     // Say which argument arrived, since that is what selects what an OSD would
     // show; EE-9c passes exactly one.
@@ -225,6 +234,13 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
         print(argv[0]);
         print("\n");
     }
+
+    // The screen, before anything that can fail: with no disc in the drive
+    // every step after this reports a refusal and stops, and the picture
+    // should still be up when it does. The console keeps every line it had.
+    ps2::display::begin();
+    ps2::display::setLine(0, kBanner);
+    ps2::display::present();
 
     deci2_ettyp[2] = reinterpret_cast<uintptr_t>(deci2Handler);
     (void)syscall<int32_t>(kSysDeci2Call, 1,

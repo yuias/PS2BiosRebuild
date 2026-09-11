@@ -125,6 +125,33 @@ The `SYSTEM.CNF` parse is deliberately tolerant -- the retail file spaces its
 itself on the console and stops, which is what a run with no disc attached
 does.
 
+**It also puts that build's version on the screen.** `src/ee/display.cpp`
+brings the display up and draws one line of text, which is the first thing in
+this image to put a pixel anywhere. Three decisions in it are worth stating
+because none is forced by the interface:
+
+- The geometry is the reference console's, read off a register trace
+  (`docs/analysis/53`): 640x224 in `PSMCT32`, read out by circuit 2 alone,
+  with `SMODE2`'s `FFMD` making both interlaced fields read the same lines so
+  the 448-line raster shows each of the 224 twice. `FFMD` is slot `0x02`'s
+  `field` argument, so the call is `SetGsCrt(1, 2, 1)`. Halving the buffer is
+  the point: a 1-pixel horizontal stroke on a 448-line buffer is drawn by one
+  field only and blinks at 30 Hz.
+- Pixels reach GS memory as a host-to-local image transfer, not as textured
+  sprites. A screen that changes on a button press gains nothing from the
+  drawing environment a sprite needs, and a wrong `BITBLTBUF` leaves
+  recognisable garbage somewhere in GS memory where a wrong `TEX0` draws a
+  blank quad and says nothing.
+- The transfer goes out on DMA channel 2 rather than as stores into the GIF
+  FIFO, because the FIFO takes a quadword per write and this target's
+  instruction set has no store that wide. The packet is composed through the
+  uncached alias, since the data cache is write-back and the DMAC would
+  otherwise read whatever was in memory before.
+
+The screen is additive. Every console line the boot printed before still
+prints, in the same order and with the same bytes, and the version line is one
+string fed to both.
+
 The SIF client both this and `EELOAD` reach the IOP through is one translation
 unit, `src/ee/sifclient.cpp`, linked into each separately: the second program
 initialises the command layer again from scratch, with state of its own.
