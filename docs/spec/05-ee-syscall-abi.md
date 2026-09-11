@@ -628,6 +628,12 @@ SMODE2 is the only register the caller's own arguments reach: interlaced
 (`interlace != 0`) writes `(field & 1) << 1 | 1` — INT set, FFMD carrying
 `field` — and progressive writes a **literal zero**, not a masked argument.
 
+FFMD set makes **both fields read the same framebuffer lines**, so a caller
+passing `field == 1` displays a buffer of half the raster's height with each
+line shown twice. The reference console's own OSD does exactly that: 224 lines
+of `PSMCT32` on a 448-line NTSC raster (`docs/analysis/53`). A caller that
+wants every scanline distinct passes `0`.
+
 The slot **produces no value**. No path that programs the GS assigns the result
 register, so SYS-1's `-> $v0` is satisfied by whatever was already there; a
 rebuild inventing a status would be answering a question the interface does not

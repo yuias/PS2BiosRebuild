@@ -462,11 +462,14 @@ front of the project, in order:
 
 1. **Documentation.** Keep this file and `docs/implementation.md` true to the
    image; the gate's list is the authority on what is missing.
-2. **`OSDSYS`, the minimal version.** The program a disc-less boot ends in
-   says which build it is (version and commit) on the console, and the same
-   line is what a drawing OSD would put on screen first. The drawing OSD
-   itself (M3 below) starts from a written list of what it needs, not from
-   code.
+2. **`OSDSYS`, the minimal version.** Done. The program a disc-less boot ends
+   in says which build it is (version and commit) on the console *and on the
+   screen*: `src/ee/display.cpp` programs the display and puts that one line
+   on a 640x448 NTSC raster. The geometry is the reference console's own,
+   traced rather than derived (`docs/analysis/53`), and the glyphs come from a
+   freely-licensed bitmap font packed out of `third_party/fonts/` at build
+   time. What is still missing for a menu is pad input and the configuration
+   record, which is M3.
 3. **The IOP modules whose analysis is complete.** Ordinals that have a spec
    line and no implementation are built on the spec, whether or not a title
    exercises them; the boot before a reboot and `tools/iopsim.py` are their
@@ -712,10 +715,12 @@ simulator, in this order:
   no pad input and no screenshot, so that console is where the gate stops;
   the play beyond it is PS2e's.
 
-**M3 — an OSD that draws** (GS initialisation, a freely-licensed font, and the
-configuration field map of `26`–`28`) is real work but comes *after* M2, since a
-BIOS that boots titles is useful without a menu and a menu without titles is
-not.
+**M3 — an OSD that draws** comes *after* M2, since a BIOS that boots titles is
+useful without a menu and a menu without titles is not. Two of its three parts
+are now built: the display path and a freely-licensed font, which together put
+the version line on screen. What is left is the configuration field map of
+`26`–`28`, and that is blocked on the "configured" flag in §4's leads table
+being verified under `eesim` before the OSD branches on it.
 
 ### How M1 is worked
 

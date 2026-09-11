@@ -55,10 +55,11 @@ missing factor is in `SMODE2`.
 interlaced raster read the *same* buffer lines, so each of the 224 lines is
 shown on both fields and fills two of the 448.
 
-This settles a question the kernel's own `SetGsCrt` left open. `SYS-14a` has
-slot `0x02` writing `SMODE2` as `(field & 1) << 1 | 1` on the interlaced path,
-so `FFMD` **is** the call's `field` argument. The reference's OSD therefore
-calls it with `field = 1`, not 0.
+`SYS-14a` already had slot `0x02` writing `SMODE2` as `(field & 1) << 1 | 1`
+on the interlaced path, so it already named `FFMD` as the call's `field`
+argument. What it did not say is what that bit does to the picture, which is
+the sentence above -- and therefore which value a caller wants. The
+reference's OSD calls it with `field = 1`, not 0.
 
 The consequence is worth stating because it is not obvious from the register
 names: a 1-pixel horizontal stroke in a 448-line buffer is drawn by one field
