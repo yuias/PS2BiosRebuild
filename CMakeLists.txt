@@ -321,6 +321,11 @@ add_custom_target(check
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/loaddelay.py"
             --objdump "${PS2_OBJDUMP}"
             "$<TARGET_FILE:excepman.elf>" "$<TARGET_FILE:intrman.elf>"
+    # IOP-8i to IOP-8k: the mechacon's register sequence, which no part of the
+    # boot reaches, so it is executed against a modelled controller instead of
+    # sitting in the image untried.
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/scmdcheck.py" "${PS2_IMAGE}"
     DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")

@@ -590,11 +590,37 @@ reference reads it through a null tail and faults.
 
 **`CDVDMAN` serves one datapattern, and `FILEIO` has no arbitrary-alignment
 push.** IOP-8 and IOP-9. Our `CDVDMAN` implements the plain 2048-byte sector
-(datapattern 0) and ignores `sceCdRead`'s mode; the S-command families
-(`docs/analysis/26`) and the streaming API are not built, and the fifty
-ordinals outside the twelve it implements share one "return 0" stub so a
-client's import still binds. That shallowness is what bounds `CDVDFSV`
-below. Our `FILEIO` serves
+(datapattern 0) and ignores `sceCdRead`'s mode; the streaming API is not
+built, and the ordinals outside the eighteen it implements share one
+"return 0" stub so a client's import still binds. That shallowness is what
+bounds `CDVDFSV` below.
+
+**The mechanism controller's ordinals are built and nothing calls them.**
+IOP-8i to IOP-8k: the S-command register sequence, `sceCdReadNVM` and
+`sceCdWriteNVM`, and the four-ordinal configuration session. They are the
+transport under the OSD's configuration record, and the reason they exist
+ahead of a caller is that the alternative was writing the caller against an
+untried driver.
+
+Nothing in the boot reaches them, so `tools/scmdcheck.py` does instead: it
+boots the image under `tools/iopsim.py`, finds the export table `LOADCORE`
+registered, and calls the ordinals with a mechanism controller modelled on
+the bus. It runs as part of `check`. The model is strict about the one bit
+the sequence turns on -- status bit `0x40` means the result FIFO is empty,
+and it is the only thing that ends both the drain and the read-back -- so a
+driver that miscounts its result bytes hangs there rather than passing. What
+it asserts is the set of things a rebuild gets wrong without a symptom: the
+address bytes going out most-significant first, `open`'s first two arguments
+arriving reversed, the sum byte stripped on the way in and appended on the
+way out, the verdict a bad sum produces, and a read outside a session
+completing nothing rather than failing.
+
+Two things in there are ours rather than the reference's, and both are
+stated in the source: what the NVM ordinals return to their caller was not
+read, so they answer "the command went out" and leave the controller's own
+answer in the status byte; and over several blocks a read reports the last
+block's checksum verdict, since whether the reference accumulates was not
+read either. Our `FILEIO` serves
 `open`/`close`/`read`/`lseek`/`getstat` and answers every other function of
 its table `-1`. Its second service, `sid 0x80000003` -- the IOP-heap
 service, `docs/analysis/43` §12 -- is built: all three of its functions

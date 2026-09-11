@@ -1,8 +1,8 @@
 // CDVDMAN: the disc driver, `cdrom0:`.
 //
-// docs/analysis/42-cdvd.md is what this follows; a spec section for it
-// (working title IOP-8) has not been merged yet, so the comments below cite
-// that analysis directly by section. One device, `cdrom` (§1), with a real
+// docs/spec/06-iop-kernel.md IOP-8 and docs/analysis/42-cdvd.md, whose
+// sections the comments below cite directly where the spec points back at
+// them. One device, `cdrom` (§1), with a real
 // open/close/read/lseek resolving `\DIR\FILE;1`-shaped paths against the
 // disc's ISO9660 layout (§4) and every other op sharing one "return 0" stub,
 // write included (§1's table) -- unlike ROMDRV, which gives `write` its own
@@ -10,6 +10,10 @@
 // (no `dmacman` import) and completed by IRQ 2, whose handler this module
 // registers itself (§1, §2b, §3). No dedicated thread exists: every hardware
 // command runs on whichever thread called in, serialised by a semaphore.
+//
+// The mechanism controller is reached through a second, narrower register
+// block (IOP-8i) that has nothing to do with the disc: the console's
+// non-volatile memory and the OSD's configuration record live behind it.
 
 #include "module.hpp"
 
@@ -47,8 +51,8 @@ constexpr uint32_t kChcrStart = 0x41000200;
 // words = 0x200, matching §3's own literal BCR formula for this case.
 constexpr uint32_t kBlockWords = 0x200;
 
-// The N-command register block (§2b) -- separate from the S-command pair
-// `docs/analysis/26` already covers, and not imported through this module.
+// The N-command register block (§2b) -- the drive, and separate from the
+// S-command block below, which is the mechanism controller.
 constexpr uintptr_t kNCommand = 0xBF402004;
 constexpr uintptr_t kNStatus = 0xBF402005;      // read: status; write: one param byte
 constexpr uintptr_t kNSubmode = 0xBF402006;     // write: submode; read: result byte
@@ -56,6 +60,31 @@ constexpr uintptr_t kNBreak = 0xBF402007;
 constexpr uintptr_t kNIrqStat = 0xBF402008;
 constexpr uintptr_t kNReady = 0xBF40200A;       // sceCdStatus/sceCdDiskReady
 constexpr uintptr_t kNDiskType = 0xBF40200F;
+
+// The S-command block (IOP-8i): the mechanism controller, not the drive.
+constexpr uintptr_t kSCommand = 0xBF402016;     // write: command, starts it
+constexpr uintptr_t kSStatus = 0xBF402017;      // read: status; write: one param byte
+constexpr uintptr_t kSResult = 0xBF402018;      // read: one result byte
+constexpr uint8_t kSBusy = 0x80;
+constexpr uint8_t kSResultEmpty = 0x40;
+
+// The six commands this driver sends (IOP-8j, IOP-8k).
+constexpr uint8_t kSCmdReadNvm = 0x0A;
+constexpr uint8_t kSCmdWriteNvm = 0x0B;
+constexpr uint8_t kSCmdOpenConfig = 0x40;
+constexpr uint8_t kSCmdReadConfig = 0x41;
+constexpr uint8_t kSCmdWriteConfig = 0x42;
+constexpr uint8_t kSCmdCloseConfig = 0x43;
+
+// A configuration block is sixteen bytes on the wire and fifteen to the
+// caller: the last is a sum of the rest (IOP-8k).
+constexpr uint32_t kConfigWireBytes = 16;
+constexpr uint32_t kConfigBytes = 15;
+
+// What `open` waits before sending. `docs/analysis/26` records the delay
+// without a reason for it, and a rebuild that drops it is guessing that the
+// mechacon does not need it.
+constexpr uint32_t kConfigOpenDelay = 16000;
 
 constexpr uint32_t kCdvdIrq = 2;                // §1: the CDVD interrupt line
 // §2b's observed submode set is {0x40,0x80,0x83,0x85,0x86,0x8f}, chosen by
@@ -107,6 +136,12 @@ struct Sema {
 
 int sema_driver = -1;   // guards a whole open()/read() call and the sector cache
 int sema_ncmd = -1;     // guards the N-command channel itself (§2b step 1)
+int sema_scmd = -1;     // guards the mechanism controller's channel (IOP-8i)
+
+// The only state a configuration session has: how many blocks the open asked
+// for. Zero means no session, which makes a read or write complete nothing
+// rather than fail (IOP-8k).
+uint32_t config_blocks;
 
 volatile int g_done;              // 0 pending, 1 ok, -1 error -- the IRQ-2 handler's word
 volatile uint8_t g_result;        // the command's raw result byte (sceCdGetError)
@@ -383,8 +418,10 @@ struct File {
 int init(void *) {
     Sema driver_sema = {1 /* SA_THPRI */, 0, 1, 1};
     Sema ncmd_sema = {1, 0, 1, 1};
+    Sema scmd_sema = {1, 0, 1, 1};
     sema_driver = _import_thsemap_create(&driver_sema);
     sema_ncmd = _import_thsemap_create(&ncmd_sema);
+    sema_scmd = _import_thsemap_create(&scmd_sema);
     for (Handle &handle : handles) {
         handle.in_use = false;
     }
@@ -557,7 +594,47 @@ int moduleInit() {
     return _import_ioman_add_drv(&device);        // triggers ops.init (§1)
 }
 
-// ---- the exported ordinals (§0, §2b, §3, §4) --------------------------------
+// ---- the S-command channel (IOP-8i) -----------------------------------------
+
+// Send one command and collect its reply. The order is the whole contract:
+// drain what a previous command left, push the parameters, start the command,
+// wait for it, then read until the result FIFO says it is empty.
+//
+// The answer is "sent", not "succeeded". A busy mechacon is **declined**
+// rather than waited for, the same shape the N-command channel uses, and what
+// the mechacon thought of a command that did go out is in its result bytes --
+// which is why every ordinal below reports that separately.
+bool sendSCommand(uint8_t command, const uint8_t *params, uint32_t param_count,
+                  uint8_t *results, uint32_t result_count) {
+    if (_import_thsemap_poll(sema_scmd) < 0) {
+        return false;
+    }
+    if ((readReg8(kSStatus) & kSBusy) != 0) {
+        _import_thsemap_signal(sema_scmd);
+        return false;
+    }
+    while ((readReg8(kSStatus) & kSResultEmpty) == 0) {
+        (void)readReg8(kSResult);               // a previous reply, unread
+    }
+    for (uint32_t i = 0; i < param_count; i++) {
+        writeReg8(kSStatus, params[i]);
+    }
+    writeReg8(kSCommand, command);
+    while ((readReg8(kSStatus) & kSBusy) != 0) {
+    }
+    // A short reply is truncated, not an error: the FIFO is drained either
+    // way, because whatever is left in it belongs to the next command.
+    for (uint32_t got = 0; (readReg8(kSStatus) & kSResultEmpty) == 0; got++) {
+        const uint8_t byte = readReg8(kSResult);
+        if (got < result_count) {
+            results[got] = byte;
+        }
+    }
+    _import_thsemap_signal(sema_scmd);
+    return true;
+}
+
+// ---- the exported ordinals (§0, §2b, §3, §4, IOP-8j, IOP-8k) ----------------
 
 // sceCdInit(mode): mode 0 spins on the N-command channel's ready bit before
 // anything else may be sent (§1/§7a); every mode installs the IRQ/DMA state
@@ -649,6 +726,131 @@ int sceCdNop() {
     return 0;
 }
 
+// --- the mechanism controller's ordinals (IOP-8j, IOP-8k) --------------------
+
+// Non-volatile memory is addressed in 16-bit words, not bytes, and one call
+// moves exactly one halfword. Both directions put the address out
+// most-significant byte first.
+//
+// What the reference returns from these two was not read, so the convention
+// here is stated rather than claimed: non-zero when the command went out,
+// zero when the channel declined it. The mechacon's own answer is `status`.
+int sceCdReadNVM(uint32_t address, uint16_t *data, uint8_t *status) {
+    const uint8_t params[2] = {static_cast<uint8_t>(address >> 8),
+                               static_cast<uint8_t>(address)};
+    uint8_t results[3] = {0, 0, 0};
+    if (!sendSCommand(kSCmdReadNvm, params, 2, results, 3)) {
+        return 0;
+    }
+    if (status != nullptr) {
+        *status = results[0];
+    }
+    if (data != nullptr) {
+        *data = static_cast<uint16_t>((results[1] << 8) | results[2]);
+    }
+    return 1;
+}
+
+int sceCdWriteNVM(uint32_t address, uint16_t data, uint8_t *status) {
+    const uint8_t params[4] = {
+        static_cast<uint8_t>(address >> 8), static_cast<uint8_t>(address),
+        static_cast<uint8_t>(data >> 8), static_cast<uint8_t>(data)};
+    uint8_t result = 0;
+    if (!sendSCommand(kSCmdWriteNvm, params, 4, &result, 1)) {
+        return 0;
+    }
+    if (status != nullptr) {
+        *status = result;
+    }
+    return 1;
+}
+
+// The configuration session. `open` sends its first two arguments **reversed**
+// -- the wire order is `[b, a, count]` -- which is the kind of thing a rebuild
+// gets wrong without any symptom until the mechacon refuses.
+int sceCdOpenConfig(uint32_t a, uint32_t b, uint32_t count, uint32_t *status) {
+    if (status != nullptr) {
+        *status = 0;
+    }
+    config_blocks = count;
+    const uint8_t params[3] = {static_cast<uint8_t>(b), static_cast<uint8_t>(a),
+                               static_cast<uint8_t>(count)};
+    uint8_t result = 0;
+    _import_thbase_delay(kConfigOpenDelay);
+    if (!sendSCommand(kSCmdOpenConfig, params, 3, &result, 1)) {
+        return 0;
+    }
+    if (status != nullptr) {
+        *status = result;
+    }
+    return 1;
+}
+
+int sceCdCloseConfig(uint32_t *status) {
+    config_blocks = 0;
+    uint8_t result = 0;
+    if (!sendSCommand(kSCmdCloseConfig, nullptr, 0, &result, 1)) {
+        return 0;
+    }
+    if (status != nullptr) {
+        *status = result;
+    }
+    return 1;
+}
+
+// A block is sixteen bytes on the wire and fifteen to the caller: byte 15 is
+// the sum of the rest. The read verifies it and strips it; the write computes
+// and appends it. The two report different things through `status` -- the
+// read its own verdict on that sum, the write the mechacon's reply -- and
+// that asymmetry is the driver's, not an oversight here. Over several blocks
+// the caller sees the last one's; whether the reference accumulates instead
+// was not read, and a caller that needs per-block verdicts asks for one block
+// at a time.
+//
+// Both answer with the number of blocks completed, so zero means there was no
+// session and fewer than asked for means a fault partway.
+int sceCdReadConfig(uint8_t *buffer, uint32_t *status) {
+    uint32_t done = 0;
+    for (; done < config_blocks; done++) {
+        uint8_t block[kConfigWireBytes] = {};
+        if (!sendSCommand(kSCmdReadConfig, nullptr, 0, block, kConfigWireBytes)) {
+            break;
+        }
+        uint8_t sum = 0;
+        for (uint32_t i = 0; i < kConfigBytes; i++) {
+            buffer[i] = block[i];
+            sum = static_cast<uint8_t>(sum + block[i]);
+        }
+        if (status != nullptr) {
+            *status = sum == block[kConfigBytes] ? 0u : 1u;
+        }
+        buffer += kConfigBytes;
+    }
+    return static_cast<int>(done);
+}
+
+int sceCdWriteConfig(const uint8_t *buffer, uint32_t *status) {
+    uint32_t done = 0;
+    for (; done < config_blocks; done++) {
+        uint8_t block[kConfigWireBytes];
+        uint8_t sum = 0;
+        for (uint32_t i = 0; i < kConfigBytes; i++) {
+            block[i] = buffer[i];
+            sum = static_cast<uint8_t>(sum + block[i]);
+        }
+        block[kConfigBytes] = sum;
+        uint8_t result = 0;
+        if (!sendSCommand(kSCmdWriteConfig, block, kConfigWireBytes, &result, 1)) {
+            break;
+        }
+        if (status != nullptr) {
+            *status = result;
+        }
+        buffer += kConfigBytes;
+    }
+    return static_cast<int>(done);
+}
+
 // The rest of the 62-slot table (§0's ordinal ceiling): a shared "return 0"
 // filler, matching the reference's own table size exactly.
 int exportStub() {
@@ -688,15 +890,15 @@ PS2_EXPORT_TABLE ExportTable<62> cdvdman_exports = {
         slot(exportStub),            // 23
         slot(exportStub),            // 24
         slot(exportStub),            // 25
-        slot(exportStub),            // 26
-        slot(exportStub),            // 27
+        slot(sceCdReadNVM),            // 26
+        slot(sceCdWriteNVM),           // 27
         slot(sceCdStatus),           // 28
         slot(exportStub),            // 29
         slot(exportStub),            // 30
-        slot(exportStub),            // 31
-        slot(exportStub),            // 32
-        slot(exportStub),            // 33
-        slot(exportStub),            // 34
+        slot(sceCdOpenConfig),         // 31
+        slot(sceCdCloseConfig),        // 32
+        slot(sceCdReadConfig),         // 33
+        slot(sceCdWriteConfig),        // 34
         slot(exportStub),            // 35
         slot(exportStub),            // 36
         slot(exportStub),            // 37

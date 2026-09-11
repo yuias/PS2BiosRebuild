@@ -720,11 +720,13 @@ are now built: the display path and a freely-licensed font, which together put
 the version line on screen. What is left is the configuration field map of
 `26`–`28`, and what blocks it is a chain rather than a single thing:
 
-1. **`CDVDMAN`'s side is now specified and not built.** `spec/06` IOP-8i to
-   IOP-8k give the S-command register block and its sender, NVM read and
-   write, and the configuration session with its 15-byte blocks and sum byte;
-   IOP-8h, which used to put all of that out of scope, is narrowed to say so.
-   No code answers any of it yet: the driver serves the N-command block only.
+1. **`CDVDMAN`'s side is specified and built.** `spec/06` IOP-8i to IOP-8k
+   give the S-command register block and its sender, NVM read and write, and
+   the configuration session with its 15-byte blocks and sum byte; IOP-8h,
+   which used to put all of that out of scope, is narrowed to say so. The
+   driver serves ordinals 26, 27 and 31 to 34. Nothing in the boot calls
+   them, so `tools/scmdcheck.py` executes them against a modelled controller
+   as part of `check` rather than leaving them untried.
 2. **`CDVDFSV` has no spec section at all.** `src/iop/cdvdfsv.cpp` ships in
    the archive and nothing in `docs/spec/` states its RPC surface. `27` has
    the mapping the configuration record needs — service `0x80000593`, fnos 14
