@@ -720,18 +720,26 @@ are now built: the display path and a freely-licensed font, which together put
 the version line on screen. What is left is the configuration field map of
 `26`–`28`, and what blocks it is a chain rather than a single thing:
 
-1. **Nothing from `26`–`28` is in `docs/spec/` yet.** The NVM word interface,
-   the two 15-byte blocks with their checksum byte, and the decoder's field
-   map are all analysed and none of it has a spec line. `spec/06` IOP-8h
-   mentions them only to put them out of scope.
-2. **`CDVDMAN` serves no S-command.** IOP-8h says so deliberately: the driver
-   built so far is the one `LOADFILE`'s ELF path needs. NVM lives behind
-   S-commands `0x0A`/`0x0B` (`26`).
-3. **`CDVDFSV`'s `0x80000593` fnos 14–17 answer zeroes**, because there is no
-   ordinal behind them (§5b's "acknowledged no-op").
+1. **`CDVDMAN`'s side is now specified and not built.** `spec/06` IOP-8i to
+   IOP-8k give the S-command register block and its sender, NVM read and
+   write, and the configuration session with its 15-byte blocks and sum byte;
+   IOP-8h, which used to put all of that out of scope, is narrowed to say so.
+   No code answers any of it yet: the driver serves the N-command block only.
+2. **`CDVDFSV` has no spec section at all.** `src/iop/cdvdfsv.cpp` ships in
+   the archive and nothing in `docs/spec/` states its RPC surface. `27` has
+   the mapping the configuration record needs — service `0x80000593`, fnos 14
+   to 17 onto `CDVDMAN` ordinals 31 to 34, and fnos 8 and 9 onto 26 and 27 —
+   but the request and reply layouts of those fnos are decoded in none of
+   `26`, `27` or `28`. That is analysis work, not specification work.
+3. **The decoder's field map has no spec home.** `28` has it completely and
+   there is no document for the OSD's own behaviour to put it in; `spec/04`
+   is the kernel's and `spec/05` is the syscall ABI. Deciding where it goes
+   is part of doing it.
 
-So the next step towards it is a spec section, not code. The "configured"
-flag itself is no longer part of the blockage — it is settled (§4).
+Feasibility is not in question: PS2e models the whole S-command side,
+including the configuration session and NVRAM persistence, and reads the
+image's NVM from `<image>.nvm`. The "configured" flag is no longer part of
+the blockage — it is settled (§4).
 
 ### How M1 is worked
 

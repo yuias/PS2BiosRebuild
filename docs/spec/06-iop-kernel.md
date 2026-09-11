@@ -1110,7 +1110,7 @@ the N-command channel itself. Only the second is polled non-blocking
 busy channel is a declined call, not a wait.
 
 **IOP-8c — the N-command register block.** A block separate from the
-S-command pair `docs/analysis/26-cdvd-nvm-and-config.md` already covers:
+S-command registers of IOP-8i:
 
 | Addr | Use |
 | --- | --- |
@@ -1211,19 +1211,121 @@ matches the reference's exactly:
 | 12 | `sceCdGetDiskType()` | raw `0xBF40200F` |
 | 13 | `sceCdDiskReady(mode)` | mode `1` a single check; otherwise a bare spin on `0xBF40200A == 0x0A`, no event flag |
 | 21 | `sceCdCheckCmd()` | the raw completion word IOP-8e describes |
+| 26 | `sceCdReadNVM(address, u16 *data, u8 *status)` | IOP-8j |
+| 27 | `sceCdWriteNVM(address, data, u8 *status)` | IOP-8j |
 | 28 | `sceCdStatus()` | raw `0xBF40200A` |
+| 31 | open the configuration session | IOP-8k |
+| 32 | close it | IOP-8k |
+| 33 | read `count` blocks | IOP-8k |
+| 34 | write `count` blocks | IOP-8k |
 | 39 | `sceCdBreak()` | writes `1` to `0xBF402007` |
 | 46 | `sceCdNop()` | no-op |
 
-**IOP-8h — what is out of scope for this minimal driver.** No S-commands
-(NVM, OSD configuration, disc keys — `docs/analysis/26`), no CD streaming
-API (`sceCdSt*`, ordinals 56–61), no `CDVDFSV` RPC surface (§5) and
-therefore no EE-facing SIF service for any of the above — an EE client
-reaches only what a later `CDVDFSV` build forwards. `sceCdRead`'s `mode`
+**IOP-8h — what is out of scope for this minimal driver.** The S-commands
+of IOP-8i to IOP-8k are **in** scope and were not when this section was
+first written; what stays out is the rest of that group, the disc keys
+among them. No CD streaming API (`sceCdSt*`, ordinals 56–61), and no
+`CDVDFSV` RPC surface — an EE client reaches only what a `CDVDFSV` build
+forwards, and what that service must forward for the configuration record
+has no requirement here yet. `sceCdRead`'s `mode`
 argument (trycount/spindlectrl/datapattern) is accepted but not
 interpreted: every read is issued as the plain 2048-byte, datapattern-0
 case IOP-8d describes, matching what `LOADFILE`'s own ELF-loading path
 needs and nothing beyond it.
+
+**IOP-8i — the S-command register block and its sender.** Three byte-wide
+registers, and one routine that drives all of them:
+
+| Addr | Use |
+| --- | --- |
+| `0xBF402016` | write: the command number, which starts the command |
+| `0xBF402017` | read: status — bit `0x80` busy, bit `0x40` **result FIFO empty**; write: one parameter byte, looped |
+| `0xBF402018` | read: one result byte |
+
+Only those two status bits are used. The sender takes a command number, a
+parameter buffer with its length, and a result buffer with its length, and
+runs a **fixed order** a rebuild has to keep:
+
+1. Take the S-command semaphore with `PollSema`, not `WaitSema`. A `-419`
+   (`KE_SEMA_ZERO`) is not a wait — the call is **declined**, the same
+   shape IOP-8b records for the N-command channel.
+2. Read status. **If `0x80` is set, release and decline**; a busy mechacon
+   is never waited on.
+3. Drain: while `0x40` is clear, read `0xBF402018` and discard. A previous
+   command's unread bytes are the caller's problem otherwise.
+4. Write the parameter bytes one at a time to `0xBF402017`.
+5. Write the command number to `0xBF402016`.
+6. Spin while `0x80` is set.
+7. While `0x40` is clear, read result bytes from `0xBF402018` and count
+   them; copy `min(counted, expected)` to the caller. **A short reply is
+   truncated, not an error.**
+8. Release the semaphore.
+
+Steps 3 and 7 both terminate only on `0x40` becoming set, so an emulator
+that never raises it hangs the driver at step 7 rather than at step 3.
+
+**The sender's own answer says "sent", never "succeeded"**: non-zero when
+the command went out, zero when step 1 or step 2 declined. What the
+mechacon thought of it is in the result bytes, and every ordinal below
+reports that separately.
+
+**IOP-8j — NVM is word-addressed and big-endian on the wire.** Ordinal 26
+is S-command `0x0A` with two parameter bytes and three result bytes;
+ordinal 27 is `0x0B` with four and one.
+
+The `address` argument is a **16-bit word index, not a byte offset**, and
+one call moves exactly one halfword. Both put the address out
+most-significant byte first, and the data with it:
+
+| | parameters | results |
+| --- | --- | --- |
+| read | `addr >> 8`, `addr & 0xFF` | `status`, `data >> 8`, `data & 0xFF` |
+| write | `addr >> 8`, `addr & 0xFF`, `data >> 8`, `data & 0xFF` | `status` |
+
+The status byte goes to the caller's `u8 *` in both. What the ordinals
+themselves return was not read (`docs/analysis/26`), so a rebuild picks a
+convention and states it rather than claiming one.
+
+**IOP-8k — the configuration record is a session of 15-byte blocks with a
+sum byte.** Four ordinals, each one S-command:
+
+| Ord | S-cmd | Parameters | Results |
+| --- | --- | --- | --- |
+| 31 open | `0x40` | 3 bytes | 1 |
+| 32 close | `0x43` | none | 1 |
+| 33 read | `0x41`, once per block | none | 16 |
+| 34 write | `0x42`, once per block | 16 bytes | 1 |
+
+Open takes `(a, b, count, u32 *status)` and sends **`[b, a, count]`** — the
+first two arguments are reversed on the wire, which is the kind of thing a
+rebuild gets wrong silently. It zeroes `*status` before sending, and
+`count` is the session's only state. It also delays before sending
+(`DelayThread(16000)`); `26` records the delay without a reason for it, so
+a rebuild keeps it and says the same.
+
+Close sends its command and clears the stored count. **A read or write
+outside a session is not an error**: it completes zero blocks.
+
+Read and write loop `count` times, advancing the caller's buffer **15**
+bytes per block, stop at the first failure, and answer with the number of
+blocks completed — so zero means no session and fewer than `count` means a
+fault partway.
+
+**The wire block is 16 bytes and the caller's is 15.** Byte 15 is the sum
+of bytes 0 to 14, modulo 256. Read verifies it and strips it; write
+computes and appends it. The status word the two report is **not the same
+kind of thing**: on read it is the local checksum verdict (0 match, 1
+mismatch), on write it is the device's own reply byte.
+
+**`CDVDMAN` never interprets the fifteen bytes.** No field decoding, no
+version check, no "is this console configured" test — those live in the
+OSD, which is why `docs/analysis/26` could establish the transport without
+settling any field.
+
+The OSD's own record is **two blocks, thirty bytes**, opened as
+`open(1, 0, 2)` — `[0, 1, 2]` on the wire (`docs/analysis/27`). The OSD
+retries that open while the returned status has either of bits `0x01` and
+`0x80` set, so a successful open must leave both clear.
 
 ## IOP-9: The EE's file service (FILEIO)
 
