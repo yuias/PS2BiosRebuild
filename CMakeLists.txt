@@ -187,6 +187,9 @@ ps2AddModule(sio2man MODULE sio2man VERSION 1.00
 # command line asks for it (docs/analysis/45 §2).
 ps2AddModule(padman MODULE Pad_Manager VERSION 1.00
     SOURCES src/iop/padman.cpp)
+# Not on the boot list either: the shell loads it when it wants a card.
+ps2AddModule(mcman MODULE Memory_Card_Manager VERSION 1.00
+    SOURCES src/iop/mcman.cpp)
 ps2AddModule(udnl MODULE UDNL VERSION 1.00
     SOURCES src/iop/udnl.cpp)
 ps2AddModule(sifman MODULE IOP_SIF_manager VERSION 1.01
