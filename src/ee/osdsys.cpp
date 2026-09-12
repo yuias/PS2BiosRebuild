@@ -206,6 +206,30 @@ constexpr uint32_t kLineBytes = ps2::display::kColumns + 1;
 char config_lines[3][kLineBytes];
 char pad_line[kLineBytes];
 
+// The menu. Three entries, one of which does something: this is our own
+// screen, not a reproduction of the reference's (docs/clean-room-policy.md
+// §3), so the wording and the layout are ours and the decisions behind them
+// are in docs/implementation.md rather than in a numbered requirement.
+constexpr uint32_t kItems = 3;
+constexpr uint32_t kItemBoot = 0;
+constexpr uint32_t kItemBuild = 1;
+constexpr uint32_t kItemSettings = 2;
+const char *const kItemNames[kItems] = {
+    "start what is in the drive",
+    "what this build is",
+    "re-read this machine's settings",
+};
+
+// Rows: the banner at 0, the settings at 2..4, the controller at 6, the menu
+// at 8..10, and whatever an entry has to say at 12.
+constexpr uint32_t kRowSettings = 2;
+constexpr uint32_t kRowPad = 6;
+constexpr uint32_t kRowMenu = 8;
+constexpr uint32_t kRowDetail = 12;
+
+char item_lines[kItems][kLineBytes];
+char detail_line[kLineBytes];
+
 char *appendText(char *at, const char *end, const char *text) {
     for (; *text != '\0' && at < end; text++) {
         *at++ = *text;
@@ -285,63 +309,186 @@ void showConfig(const ps2::config::Record &record) {
         print("# OSDSYS: ");
         print(config_lines[row]);
         print("\n");
-        ps2::display::setLine(2 + row,
+        ps2::display::setLine(kRowSettings + row,
                               config_lines[row][0] != '\0' ? config_lines[row]
                                                           : nullptr);
     }
     ps2::display::present();
 }
 
-// Wait for the raster, read the controller, and say what changed. The line is
-// rebuilt only on a change, because a controller held down would otherwise
-// print sixty identical lines a second and bury everything above it.
-[[noreturn]] void padLoop() {
-    uint16_t shown = 0;
+// Read the disc's boot record and enter what it names. Only returns when
+// there is nothing to enter: a successful launch does not come back, because
+// syscall 0x06 stages the loader again and the dispatcher's own return lands
+// in it. Written to be called more than once, since the menu's one action is
+// to try again after a disc has been put in.
+[[nodiscard]] bool bootFromDisc() {
+    // Bound here rather than once at start-up: the client keeps exactly one
+    // server bound, and bringing the controller up binds two others over it.
+    // Without this the second call would put an open request to whichever
+    // service was bound last and read its answer as a file descriptor.
+    if (!bindRpc(kFileioServer)) {
+        print("# OSDSYS: the IOP has no FILEIO to ask; nothing to boot from.\n");
+        return false;
+    }
+    const int32_t read = readWholeFile(kSystemCnf);
+    if (read < 0) {
+        print("# OSDSYS: cdrom0:\\SYSTEM.CNF refused, error ");
+        printSigned(read);
+        print(" -- no disc, or none this driver can read.\n");
+        return false;
+    }
+
+    char *boot2 = findBoot2(config);
+    if (boot2 == nullptr) {
+        print("# OSDSYS: SYSTEM.CNF has no BOOT2 line.\n");
+        return false;
+    }
+
+    print("# OSDSYS: BOOT2 = ");
+    print(boot2);
+    print("\n");
+
+    // EE-9a: slot 0x06 stages EELOAD again with this path, and does not come
+    // back -- the dispatcher's own `eret` lands in EELOAD (spec/05 SYS-6a's
+    // shape). A negative answer means the archive has no EELOAD to stage.
+    (void)syscall(kSysLoadProgram, reinterpret_cast<uintptr_t>(boot2), 0, 0);
+    print("# OSDSYS: syscall 0x06 refused the disc's path.\n");
+    return false;
+}
+
+// The menu, and the loop that drives it. Redrawn only when something moved,
+// because a screen rebuilt sixty times a second costs a transfer per band for
+// a picture nobody asked to change.
+void drawMenu(uint32_t selected) {
+    for (uint32_t item = 0; item < kItems; item++) {
+        char *at = item_lines[item];
+        const char *end = item_lines[item] + kLineBytes - 1;
+        // The cursor is a character in the line rather than a separate row,
+        // so that moving it costs no more than redrawing the two rows it
+        // left and arrived at.
+        at = appendText(at, end, item == selected ? "> " : "  ");
+        at = appendText(at, end, kItemNames[item]);
+        *at = '\0';
+        ps2::display::setLine(kRowMenu + item, item_lines[item]);
+    }
+}
+
+void setDetail(const char *text) {
+    char *at = detail_line;
+    at = appendText(at, detail_line + kLineBytes - 1, text);
+    *at = '\0';
+    ps2::display::setLine(kRowDetail, detail_line);
+}
+
+void showPad(const ps2::pad::State &state, uint16_t held) {
+    char *at = pad_line;
+    const char *end = pad_line + kLineBytes - 1;
+    if (!state.present) {
+        // Three different silences, and they need telling apart: no record
+        // has landed at all (the frame counter never moves), one lands every
+        // blank but the controller never answered (slot 0), or the handshake
+        // is stuck partway through it (slot 5).
+        at = appendText(at, end, "controller: no answer, frame ");
+        at = appendSigned(at, end, static_cast<int32_t>(state.frame));
+        at = appendText(at, end, ", slot state ");
+        at = appendSigned(at, end, state.slot_state);
+    } else if (held == 0) {
+        at = appendText(at, end, "controller: ready");
+    } else {
+        at = appendText(at, end, "controller:");
+        for (uint32_t bit = 0; bit < ps2::pad::kButtons; bit++) {
+            if ((held & (1u << bit)) != 0) {
+                at = appendText(at, end, " ");
+                at = appendText(at, end, ps2::pad::kButtonNames[bit]);
+            }
+        }
+    }
+    *at = '\0';
+    ps2::display::setLine(kRowPad, pad_line);
+}
+
+// What an entry does when it is chosen. The disc entry is the only one that
+// can leave this program, and it only does so when there is something to
+// leave for.
+void activate(uint32_t selected) {
+    print("# OSDSYS: menu: activated ");
+    print(kItemNames[selected]);
+    print("\n");
+    switch (selected) {
+    case kItemBoot:
+        setDetail("looking for a disc...");
+        ps2::display::present();
+        (void)bootFromDisc();
+        setDetail("nothing in the drive this loader can read.");
+        break;
+    case kItemBuild:
+        setDetail(kBanner);
+        break;
+    case kItemSettings:
+        showConfig(ps2::config::read());
+        setDetail("settings read again.");
+        break;
+    default:
+        break;
+    }
+}
+
+[[noreturn]] void menuLoop() {
+    uint32_t selected = 0;
+    uint16_t previous = 0;
+    uint16_t shown_held = 0;
+    bool shown_present = false;
     bool ever = false;
+    setDetail("up and down to choose, circle to start.");
+    drawMenu(selected);
+
     for (;;) {
         ps2::display::waitVsync();
         const ps2::pad::State state = ps2::pad::read();
         const uint16_t held = state.present ? state.buttons : 0;
-        // While nothing is answering, keep reporting: the counter in the line
-        // is the only thing that says whether records are arriving at all,
-        // and it is worthless if the line is printed once.
-        if (ever && held == shown && state.present) {
-            continue;
-        }
-        if (!state.present && ever && (state.frame & 0x3f) != 0) {
-            continue;                           // roughly once a second
-        }
-        shown = held;
-        ever = true;
 
-        char *at = pad_line;
-        const char *end = pad_line + kLineBytes - 1;
-        if (!state.present) {
-            // Three different silences, and they need telling apart: no
-            // record has landed at all (the frame counter never moves), one
-            // lands every blank but the controller never answered (slot 0),
-            // or the handshake is stuck partway through it (slot 5).
-            at = appendText(at, end, "controller: no answer, frame ");
-            at = appendSigned(at, end, static_cast<int32_t>(state.frame));
-            at = appendText(at, end, ", slot state ");
-            at = appendSigned(at, end, state.slot_state);
-        } else if (held == 0) {
-            at = appendText(at, end, "controller: nothing held");
-        } else {
-            at = appendText(at, end, "controller:");
-            for (uint32_t bit = 0; bit < ps2::pad::kButtons; bit++) {
-                if ((held & (1u << bit)) != 0) {
-                    at = appendText(at, end, " ");
-                    at = appendText(at, end, ps2::pad::kButtonNames[bit]);
-                }
-            }
+        // Edges, not levels: a button held across four frames must move the
+        // cursor once. Edges are only taken from a controller that answered,
+        // so one still finishing its handshake cannot start anything.
+        const uint16_t pressed = state.present
+            ? static_cast<uint16_t>(held & ~previous) : 0;
+        previous = held;
+
+        bool moved = !ever;
+        ever = true;
+        if ((pressed & ps2::pad::kUp) != 0) {
+            selected = selected == 0 ? kItems - 1 : selected - 1;
+            moved = true;
         }
-        *at = '\0';
-        print("# OSDSYS: ");
-        print(pad_line);
-        print("\n");
-        ps2::display::setLine(6, pad_line);
-        ps2::display::present();
+        if ((pressed & ps2::pad::kDown) != 0) {
+            selected = selected + 1 < kItems ? selected + 1 : 0;
+            moved = true;
+        }
+        if (moved) {
+            print("# OSDSYS: menu: selected ");
+            print(kItemNames[selected]);
+            print("\n");
+            drawMenu(selected);
+        }
+        if ((pressed & ps2::pad::kCircle) != 0) {
+            activate(selected);
+            moved = true;
+        }
+
+        // The controller row changes far more often than the menu does, so
+        // it drives the redraw on its own; everything else only when it
+        // moved. While nothing is answering, the row carries a counter that
+        // moves every frame, so that case is rate-limited instead -- a
+        // present() per frame is a transfer per band for a picture whose only
+        // change is a number nobody is reading yet.
+        const bool silent_tick = !state.present && (state.frame & 0x3f) == 0;
+        if (moved || held != shown_held || state.present != shown_present
+            || silent_tick) {
+            showPad(state, held);
+            ps2::display::present();
+            shown_held = held;
+            shown_present = state.present;
+        }
     }
 }
 
@@ -406,42 +553,16 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
     // would draw, and reading them is the point at which this program stops
     // being a loader with a banner. Shown whatever the drive holds.
     showConfig(ps2::config::read());
-    if (!bindRpc(kFileioServer)) {
-        print("# OSDSYS: the IOP has no FILEIO to ask; nothing to boot from.\n");
-        osdHalt();
-    }
-
-    const int32_t read = readWholeFile(kSystemCnf);
-    if (read < 0) {
-        print("# OSDSYS: cdrom0:\\SYSTEM.CNF refused, error ");
-        printSigned(read);
-        print(" -- no disc, or none this driver can read.\n");
-        // Nothing to boot is where an OSD would show its menu instead, so
-        // this is where the controller belongs: the loop below is the first
-        // thing in this program that waits for a person.
+    if (!bootFromDisc()) {
+        // Nothing to boot is where an OSD shows a menu instead, so this is
+        // where the controller belongs: the loop below is the first thing in
+        // this program that waits for a person.
         if (ps2::pad::begin()) {
             print("# OSDSYS: controller driver up on port 0.\n");
-            padLoop();
+            menuLoop();
         }
         print("# OSDSYS: no controller driver; nothing to wait for.\n");
-        osdHalt();
     }
-
-    char *boot2 = findBoot2(config);
-    if (boot2 == nullptr) {
-        print("# OSDSYS: SYSTEM.CNF has no BOOT2 line.\n");
-        osdHalt();
-    }
-
-    print("# OSDSYS: BOOT2 = ");
-    print(boot2);
-    print("\n");
-
-    // EE-9a: slot 0x06 stages EELOAD again with this path, and does not come
-    // back -- the dispatcher's own `eret` lands in EELOAD (spec/05 SYS-6a's
-    // shape). A negative answer means the archive has no EELOAD to stage.
-    (void)syscall(kSysLoadProgram, reinterpret_cast<uintptr_t>(boot2), 0, 0);
-    print("# OSDSYS: syscall 0x06 refused the disc's path.\n");
     osdHalt();
 }
 
