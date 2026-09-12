@@ -2,13 +2,15 @@
 
 Derived from `docs/analysis/37-iop-interrupts.md` (EXCEPMAN and INTRMAN),
 `38-iop-threads.md` (THREADMAN), `39-iop-file-layer.md` (IOMAN, ROMDRV,
-MODLOAD, LOADFILE) and `40-sio2man.md` (SIO2MAN's start-up).
+MODLOAD, LOADFILE), `40-sio2man.md` (SIO2MAN's start-up) and `54-padman.md`
+(the controller driver above it).
 
 This covers the IOP-side kernel services above `SYSMEM`/`LOADCORE`
 (`docs/spec/02-module-abi.md`): exception and interrupt delivery, the thread
 scheduler, the file-driver framework and the ROM device it serves, the module
-loader that answers `SifLoadModule`, and the one device driver (`SIO2MAN`)
-whose start-up sequence is analysed in enough depth to specify. `spec/02`
+loader that answers `SifLoadModule`, and the device drivers analysed in enough
+depth to specify -- the serial interface (`SIO2MAN`) and the controller driver
+that speaks through it. `spec/02`
 already fixes the module container, the ordinal-binding ABI (IRX-6/-9), the
 entry/residency convention (IRX-12) and the `intrman` 17/18 critical-section
 aliasing; that is not restated here. `spec/03-boot-chain.md` BOOT-12e already
@@ -1824,3 +1826,184 @@ service DMAs the 0x20 bytes there itself before answering the return code.
 A newer generation of this module switches that layout on the request size --
 `0x12c` or `0x128` moves the path to `+0x24` and the address to `+0x124` --
 and a rebuild serving only the older shape answers an empty path.
+
+## IOP-14: The controller (PADMAN)
+
+Derived from `docs/analysis/54`, with `docs/analysis/40` for the serial
+interface underneath and `docs/analysis/47` for the vertical-blank callback.
+This is the first driver in the archive whose whole purpose is to move data
+*to* the EE without being asked: an EE client opens a port once and then reads
+a record that arrives in its own memory every frame. Nothing about that is
+visible in an RPC trace, which is why it is written out here.
+
+The scope is one controller on **port 0, slot 0**, answering with digital
+buttons. Vibration, pressure-sensitive mode, analogue sticks, multitaps and
+the second port are out of scope; where the record carries their bytes it
+says so, and a rebuild leaves them zero.
+
+**IOP-14a — one service, and it is not the one a title binds.** The module
+registers SIF RPC service **`0x8000010f`**. The ids `0x80000100` and
+`0x80000101`, which `docs/analysis/43` records a title binding, belong to a
+later generation of this driver; in this one those values are **function
+codes carried inside the request**, a different namespace entirely. A rebuild
+that registers `0x80000100` here is answering a client this archive has none
+of, and leaving `0x8000010f` unserved. The reference also registers a second
+id and then never dispatches it -- its loop polls the first queue -- so a
+rebuild registering only `0x8000010f` is not missing anything a client can
+reach.
+
+**IOP-14b — the function code comes from the request, not from `fno`.** The
+dispatcher ignores the `fno` the RPC layer hands it and reads request word 0.
+Codes run `0x80000100` to `0x8000010e`; anything else is answered with the
+buffer unchanged. **The reply is the request buffer itself**, returned as the
+dispatcher's answer and sent back sized by the client's own receive size, so
+a rebuild must write its results into the request and return that pointer
+rather than composing a separate reply. The buffer is `0x80` bytes and the
+service is registered without a size, so a client sending more overruns it;
+a rebuild must not rely on the client's restraint for anything it writes.
+
+**IOP-14c — the four entry points a digital read needs.**
+
+| Code | Request words in | Answer | Meaning |
+|---|---|---|---|
+| `0x80000100` | `[1]` port, `[2]` slot, `[4]` EE address | `[3]` 1 or 0 | open |
+| `0x8000010b` | — | `[3]` = 2 | how many ports |
+| `0x8000010c` | `[1]` port | `[3]` = 1 | how many slots on it |
+| `0x8000010d` | `[1]` port, `[2]` slot | `[3]` 1 or 0 | close |
+
+Word 0 is never rewritten, so the client's own code survives in the reply.
+Opening a port that is already open answers 0. Opening rejects a port index
+outside `0..1` and nothing else: **the EE address in word 4 is taken as
+given, with no check that it is non-zero or aligned**, and a zero there makes
+the first push close the port again (IOP-14g). A rebuild may check it; what it
+may not do is push to it.
+
+**IOP-14d — one serial batch and one push per vertical blank.** The cycle,
+which a rebuild must reach whatever its internal shape:
+
+1. Wake on the start-of-blank callback. The callback only signals once a port
+   has been opened; before that the driver is idle.
+2. Read `sio2man` ordinal 11 once, and keep its bits 4 and 5 -- one per port.
+   Their meaning is not known (`docs/analysis/54` §5); they select a second
+   set of register words and a one-byte shift of the reply. **A rebuild takes
+   the bit-clear path** and a machine that raises them is out of contract.
+3. Build at most one command per open port, then run **one** serial batch for
+   all of them: `sio2man` ordinal 23, then ordinal 25. The batch's descriptor
+   packs each port's bytes back to back in one block, and its `regdata` slot
+   `n` carries the port index in bits 0 and 1.
+4. Judge each port from the status word the transfer brought back: the port
+   failed if bit 13 is set, or if bit `16 + n` is set for its index `n` in the
+   batch. Otherwise its reply bytes are its own share of the output.
+5. For a port whose open mask is exactly slot 0, push IOP-14g's record.
+
+**IOP-14e — the frames on the wire, for a digital pad.** Lengths follow the
+controller's ID byte: with `id` in hand the frame is `((id & 0xf) << 1) + 3`
+bytes each way, which makes a digital pad's `0x41` a five-byte frame and the
+configuration mode's `0xf3` a nine-byte one. The steady poll is:
+
+```
+transmit  01 42 00 00 00
+receive   ff 41 5a <low> <high>
+```
+
+with `port_ctrl1 = 0xffc00505`, `port_ctrl2 = 0x00020014` and
+`regdata = 0x00140540` (`(tx << 8) | 0x40 | (rx << 18)`, the port index filled
+in by the batch). **These three words are carried exactly**, not reconstructed
+from what an emulator happens to need: what their fields mean has not been
+read, and a model that ignores them proves nothing about hardware.
+
+A reply is good only when the transfer did not fail, `receive[2]` is `0x5a`
+and `receive[1]` is the ID last agreed. Otherwise the driver returns to
+discovery. Ten consecutive transfer failures also return it to discovery.
+
+**The two button bytes are the wire's own, and their bits are active low** --
+a bit is 0 while its button is held. The driver does not invert them and
+neither does the record; the EE client does. Bit order in the halfword, low
+byte first: select, L3, R3, start, up, right, down, left, L2, R2, L1, R1,
+triangle, circle, cross, square.
+
+**IOP-14f — discovery is all of it or none of it.** Before steady polling the
+reference probes the controller, and the sequence is not divisible:
+
+```
+01 42 00 00 00                      until the ID byte is non-zero and known
+01 43 00 01 00                      enter the configuration mode
+01 45 00 5a 5a 5a 5a 5a 5a          model and table sizes
+01 46 00 00 5a 5a 5a 5a 5a          } tables this scope does not use,
+01 47 00 00 5a 5a 5a 5a 5a          } but whose frames must still be sent
+01 4c 00 00 5a 5a 5a 5a 5a          }
+01 41 00 5a 5a 5a 5a 5a 5a          the button mask, only if the model allows
+01 43 00 00 5a 5a 5a 5a 5a          leave the configuration mode
+01 42 00 00 00                      re-read the ID, then poll for ever
+```
+
+A controller in the configuration mode answers with ID `0xf3`, so every frame
+between the two `0x43`s is a nine-byte one and the `0x45` frame is rejected
+unless the ID reads `0xf3`. **A rebuild that sends the first `0x43` and then
+stops never leaves discovery**, because the controller is still in the mode
+and its ID no longer matches. Two endings are correct: send the whole
+sequence, or send none of it and poll the pad as found. The first gives the
+record's slot-state byte the value 6 and fills its model byte; the second
+gives 2 and leaves the model byte 0. Ten failures of the `0x43` frame
+themselves take the second ending, which is how a controller that has no
+configuration mode is handled.
+
+**IOP-14g — the record pushed to the EE, `0x40` bytes.** Built in IOP memory
+and sent with `sifman` ordinal 7 under a suspend/resume bracket, from thread
+context. **It alternates between two halves of a `0x80`-byte area** at the
+address the open carried: an even frame counter lands at `+0`, an odd one at
+`+0x40`. The client owns both halves and picks the one whose counter is
+larger.
+
+| Offset | Size | Contents |
+|---|---|---|
+| `+0x00` | 4 | frame counter, incremented after the record is built |
+| `+0x04` | 1 | slot state: 0 nothing answered, 2 stable and not configurable, 5 handshake in progress, 6 stable and configured, 7 the last poll failed |
+| `+0x05` | 1 | request state: 0 idle, 1 the last request was refused, 2 one is in flight |
+| `+0x06` | 2 | 1 when this frame's reply was good, 0 otherwise |
+| `+0x08` | 1 | 0 when the block below is valid, `0xff` when it is not |
+| `+0x09` | 1 | the controller's ID byte, `0x41` for a digital pad |
+| `+0x0a` | 2 | **the button halfword, exactly as the wire sent it, active low** |
+| `+0x0c` | 4 | the stick bytes when the controller is in a mode that sends them; zero for a digital pad |
+| `+0x10` | 0x17 | the rest of the reply, zero for a five-byte frame |
+| `+0x27` | 1 | the `0x5a` byte from the reply |
+| `+0x28` | 4 | `0x20` when the block from `+0x08` is valid, 0 when it is not |
+| `+0x2c` | 1 | port state |
+| `+0x2d` | 1 | 1 the controller has no configuration mode, 2 it entered one |
+| `+0x2e` | 1 | the model byte from the `0x45` frame |
+| `+0x2f` | 1 | the status bit sampled in IOP-14d step 2 |
+| `+0x30` | 1 | consecutive transfer failures |
+| `+0x31` | 0xf | not written; a rebuild leaves it zero |
+
+There is **no single "a controller is connected" field**, and a client that
+invents one from any single byte is wrong in one direction or the other. A
+digital pad is present and readable this frame exactly when `+0x06` is 1 and
+`+0x09` is `0x41`.
+
+The record is also pushed immediately, outside the vertical blank, whenever a
+request is accepted, so that a client sees its request go in flight without
+waiting a frame.
+
+**IOP-14h — what this section does not pin.** The reference reaches the above
+with four module-wide threads and six more per open port, coordinated through
+two event flags. **None of that is required.** A rebuild that produces the
+same frames in the same order, the same record with the same contents, and
+the same per-blank cadence satisfies IOP-14 with as few threads as it likes.
+What a client and a serial controller can observe is the contract; the
+topology behind it is not, and reproducing it because `docs/analysis/54`
+describes it would be copying structure for its own sake.
+
+### Verification
+
+`IOP-14` has **no simulator gate**, for the reason IOP-6 and IOP-13 have
+none and one more: `tools/iopsim.py` models no serial interface at all, so
+nothing offline can carry a frame. A simulator gate needs a serial-interface
+device model and a controller behind it, which is worth building and is not
+built.
+
+The two emulators are the gate. A controller can be held down over a cycle
+range headless, so the check is: bring the driver up after the boot is
+otherwise finished, print the buttons the EE decodes on the frame the press
+begins, and confirm the console names exactly the buttons that were held and
+nothing else. The press must fall **after** the screen is up; a press during
+the boot list is over before any client has opened a port.
