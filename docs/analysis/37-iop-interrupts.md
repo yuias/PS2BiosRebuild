@@ -674,13 +674,60 @@ be4:  jalr $16                                                  ; handler(arg), 
 `0x28`–`0x2d`**, reached by channel index `irq-0x28` for `irq` in that range.
 Ack precedes the handler call here too, matching bank 1 and the main scan.
 Once both banks are drained, the whole thing loops back to re-read `DICR`/
-`DICR2` (`0xa10`) — so a channel that re-asserts its flag while a sibling
-handler is still running gets picked up again before this irq-3 dispatch
-returns, rather than waiting for the next hardware edge. The tail (`0xc60`
-onward) busy-waits for `DICR`'s bit 31 (the read-only master OR-of-flags bit)
-to clear, re-asserts `DICR`'s bit 23 (the master *enable* bit, §2.3 — cheap
-insurance that acking channel flags didn't clobber it), and returns 1
-(`0xd14: addiu $2,zero,1`), exactly like `INTRMANP`'s equivalent handler.
+`DICR2` (`0xa10`, reached from `0xc50`'s `beqz $23,0xa10`) — so a channel that
+re-asserts its flag while a sibling handler is still running gets picked up
+again before this irq-3 dispatch returns, rather than waiting for the next
+hardware edge.
+
+The tail at `0xc60` **pulses `DICR` bit 23**, the master enable of §2.3:
+
+```
+c68:  DICR = DICR & 0x007fffff      ; bit 23 clear, and 0 in the ack bits
+c84:  lw $2,0(DICR) ; and $2,0x00800000 ; beqz -> 0xcb4
+ca0:  lw $2,0(DICR) ; and $2,0x00800000 ; bnez -> 0xca0   ; wait for the clear
+cb4:  DICR = (DICR & 0x00ffffff) | 0x00800000             ; bit 23 back on
+d14:  return 1
+```
+
+The mask is `lui $3,0x80` — `0x00800000`, **bit 23**, not bit 31: an earlier
+reading of this passage had it as the read-only OR-of-flags bit, and that is
+wrong in both halves. The loop waits for the handler's *own* clear of bit 23
+to become visible, not for any channel flag to drain, so it cannot be held up
+by a flag nobody serves. What the pulse is for is the same insurance §2.3
+describes: acking channel flags writes the whole register, and a master enable
+that a write lost would silently stop every later DMA interrupt.
+
+### 3.4.1 The force bit's handler is `table[0x27]`, in the gap between the banks
+
+The force branch at `0xa60`–`0xaa8` clears `DICR` bit 15 (`DICR & 0x00ff7fff`,
+so no channel flag is acked with it) and then calls a handler/arg pair at the
+absolute cells `0x5b8`/`0x5bc` if the handler is non-null. `0x5b8` is
+`0x480 + 0x27 * 8` — **the same `0x480` table again, at index `0x27`**, the
+one index between bank 1's `0x20`–`0x26` and bank 2's `0x28`–`0x2d`.
+
+That explains §2.3's otherwise odd hole: `EnableIntr`/`DisableIntr` reject
+`irq == 0x27` on `INTRMANI` because it names no channel and has no enable bit
+of its own, while `RegisterIntrHandler` accepts it because the dispatcher
+reads exactly that slot. Nothing in the reference archive registers it.
+
+### 3.4.2 Every `DICR` access is bracketed by a gate on `0xBF801578`
+
+Two routines at `0x90c` and `0x95c` wrap every read and write of `DICR` and
+`DICR2` in the dispatcher above, including the tail's pulse. Both first test a
+word at `internals + 0x15fc` against a mask in `$a0` — the dispatcher passes 2
+around the register accesses and 1 alongside it at the very end — and do
+nothing at all when the bit is clear:
+
+- `0x95c(mask)`: if `[0xBF801578] != 0`, write `0` and spin until it reads `0`.
+- `0x90c(mask)`: if `[0xBF801578] != 1`, write `1` and spin until it reads `1`.
+
+`0xBF801578` is one of the two unnamed registers §3.4's own address table
+lists beside `DPCR2`/`DICR2`. **Ordinal 27 (`0x8fc`) is what sets the gate
+word**: three instructions, `[internals + 0x15fc] = $a0`, and nothing else. So
+the gate is off until something calls ordinal 27, and nothing in the reference
+archive does — which is why a rebuild can leave the bracketing out and still
+match the reference's own behaviour on this image. What `0xBF801578` is, and
+whether either emulator models it, is not read here.
 
 **Consequence: `IOP_IRQ_DMA_SIF0`/`SIF1` (irq `0x2a`/`0x2b` [header]) are live
 on the resident variant.** `irq=0x2a` is bank-2 channel `0x2a-0x28=2`;
