@@ -494,6 +494,43 @@ belong to `docs/analysis/42`'s coverage and are reported here only as the
 cross-check they provide for this document's own `FILEIO`/`LOADFILE`
 findings.
 
+## 11a. The title takes the top 64 KiB of IOP RAM, at fixed addresses
+
+Read because `spec/02` IRX-15e's high bound is a deviation here -- our
+`SYSMEM` stops at `0x1F0000` where the reference's heap runs to the RAM size
+the reset path latched -- and the question was whether that 64 KiB is worth
+reclaiming.
+
+```sh
+ps2e --bios build/rom.bin       --disc assets/SLPS-25918.iso --cycles 12e9 --dump <ours>
+ps2e --bios assets/SCPH-50000.bin --disc assets/SLPS-25918.iso --cycles 12e9 --dump <ref>
+xxd -s 0x1f0000 -l 0x40 <ours>/iop_ram.bin      # 0xff fill
+xxd -s 0x001ff100 -l 0x40 <ours>/iop_ram.bin    # 0x11 fill
+```
+
+By 1e9 cycles the whole of `0x1F0000`-`0x200000` carries the title's own
+fill patterns, and it carries **the same patterns at the same addresses on
+the reference kernel**: 89% of those 65536 bytes are byte-identical between
+the two runs, with the same byte histogram. So the region is not something an
+allocator handed out on one kernel and not the other -- the title writes it at
+addresses of its own choosing, and both kernels merely leave it alone.
+
+Two consequences:
+
+- **The high bound is not worth raising.** Memory handed out above `0x1F0000`
+  would be overwritten by the title without warning. The reference survives
+  running its heap up to the RAM top only because what it places there is
+  transient: `MODLOAD`'s mode-1 raw files are released as each module's image
+  is built, so nothing of the reference's own is still living up there by the
+  time a title runs.
+- **This project's boot bookkeeping is inside that region.** The registry head
+  at `0x1F8010`, the marker at `0x1F8020` and the boot list at `0x1F8100` are
+  this project's own (`45` §"`0x1F8100` is not in the reference at all"), and
+  the title's fill goes straight over all three. Nothing reads them after the
+  title's twelve modules are loaded, so no failure follows today, but a later
+  `SifLoadModule` would walk a registry head of `0xFFFFFFFF`. Where they
+  should live instead is open.
+
 ## 12. Unresolved
 
 - ~~**`FILEIO`'s second RPC service, `sid = 0x80000003`**~~ — **its caller
