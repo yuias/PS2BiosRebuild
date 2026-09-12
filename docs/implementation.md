@@ -536,10 +536,19 @@ reference because every module after it is *allocated* out of the heap. The
 boot list's modules are placed here, from the list's base upwards, so a heap
 starting under them would be handed out over modules not yet loaded. Ours
 starts above the image instead, and `tools/imgcheck.py` fails the build if
-the image ever reaches it. The high bound stops below the boot list at
-`0x001F8100` rather than at the RAM size of BOOT-4 step 5, which is still not
-plumbed through. Allocating the list's modules the way the reference does
-would retire both deviations at once.
+the image ever reaches it.
+
+The high bound stops at `0x001F0000`, below the boot list at `0x001F8100`,
+rather than at the RAM size of BOOT-4 step 5. That one is **not** a deviation
+to retire: `docs/analysis/43` §11a found that a title writes the whole of
+`0x1F0000`-`0x200000` at addresses of its own choosing, and writes the same
+bytes at the same addresses on the reference kernel, so memory handed out
+there would be overwritten without warning. The reference survives running its
+heap to the RAM top only because what it puts there is transient -- `MODLOAD`
+releases each raw file as it builds the module's image, so nothing of the
+reference's own is still living up there when a title starts. The low bound
+remains the real deviation, and allocating the list's modules the way the
+reference does is what retires it.
 
 **The boot-info block is inside the heap here, and is read before anything
 allocates.** BOOT-8c puts the block at the absolute address `0x20000`, which
