@@ -329,6 +329,33 @@ indices `0x20`–`0x26`. This outer handler always returns 1 (keeping
 own return). Whether the resident kernel extends this same loop to scan the
 second DMA bank is IOP-2i.
 
+**IOP-2h1 — the force bit and its handler.** Bit 15 is read through the same
+bank-1 shadow mask as the channel flags. When set, the handler clears it --
+writing the register back with bit 15 zero and **zeroes in the acknowledge
+bits**, so no channel flag is acknowledged along with it -- and then calls
+`table[0x27]`, the one index between the two banks' ranges. That is why
+`EnableIntr`/`DisableIntr` reject `irq == 0x27` (IOP-2c) while
+`RegisterIntrHandler` accepts it: the slot names no channel and has no enable
+bit, but the dispatcher reads it. A build with nothing registered there leaves
+the slot null and the force bit still gets cleared.
+
+**IOP-2h2 — the scan repeats until nothing is pending.** After serving every
+flagged channel of both banks, the handler re-reads both registers and starts
+again, and only leaves when the two banks' masked flags and the force bit are
+all clear. A channel that re-asserts while a sibling's handler is running is
+therefore served before this dispatch returns, rather than waiting for the
+next hardware edge. Flags that the shadow mask gates out do not count towards
+"pending", so a gated channel cannot hold the loop.
+
+**IOP-2h3 — the master enable is pulsed on the way out.** Before returning,
+the handler writes `DICR` with bit 23 clear, reads the register back until
+that bit reads clear, and then writes it with bit 23 set again -- each write
+with zeroes in the acknowledge bits. The wait is for the handler's own clear
+to become visible and not for any flag to drain, so nothing a channel does can
+extend it. The pulse is insurance: every acknowledge in the loop above writes
+the whole register, and a master enable lost by one of them would silently
+stop every later DMA interrupt with no other symptom.
+
 **IOP-2i — the second DMA controller bank (`DICR2`).** Register addresses,
 established from `DMACMAN`'s own accessor pointer table, not inferred, and
 variant-independent — `DMACMAN` is one module, not one of the paired
