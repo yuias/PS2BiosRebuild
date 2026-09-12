@@ -662,6 +662,28 @@ and `0x48b8` is ordinal `0x22`. The claim is withdrawn.
 So all four share one reply shape — `+0` the ordinal's return, `+4` the
 `status` word it filled — and only 16 adds anything after it.
 
+**`fno` 8 and 9, the NVM pair, answer differently.** `0x3944` and `0x39b0`
+call the stubs at `0x4878` and `0x4880`, ordinals `0x1a` and `0x1b` — 26 and
+27 — and both hand the ordinals **out-pointers into the request buffer**
+rather than into the reply:
+
+```
+3978  addiu $5, $16, 0x4      # ordinal 26's u16 *data  = request + 4
+3984  addiu $6, $16, 0x6      # its u8 *status          = request + 6
+397c  lw    $4, 0x0($16)      # its address             = request word 0
+3988  sw    $2, 0x0($17)      # reply + 0 = the return
+398c  lw    $3, 0x0($16) ; sw $3, 0x4($17)    # reply + 4 = request word 0
+3990  lw    $7, 0x4($16) ; sw $7, 0x8($17)    # reply + 8 = request word 1
+```
+
+The call fills the request, and the wrapper then copies the request's first
+two words into the reply behind the return. So the client reads its answer at
+`reply + 8`: the data halfword in the low half, the status byte at bit 16.
+`fno` 9 is the same shape with `lhu $5, 0x4($16)` — the data read *from* the
+request instead of written to it — and the same two copies afterwards. Neither
+is the `+4`-status shape the configuration quartet uses, so a rebuild cannot
+serve the six with one helper.
+
 ### 5c. `sid`s `0x80000597` and `0x8000059A`: search and disc-ready
 
 Both are single-purpose, and neither is `fno`-switched: `$a0` is never read

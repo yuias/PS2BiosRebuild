@@ -1751,6 +1751,21 @@ Three numbers meet here and have to agree: IOP-8k hands 15 bytes per block up
 from `CDVDMAN`, the OSD asks for two blocks, and the 30 bytes it reads are
 those two at `+0x8`.
 
+**IOP-13e1 — the NVM pair answers in a different shape.** `fno` 8 and 9
+forward `CDVDMAN` ordinals 26 and 27 (IOP-8j), and unlike IOP-13e's four they
+hand those ordinals out-pointers **into the request buffer**, then copy the
+request's first two words into the reply behind the return:
+
+| | Request | Reply |
+| --- | --- | --- |
+| 8, read NVM | `+0x0` address; `+0x4` receives the data halfword, `+0x6` the status byte | `+0x0` return, `+0x4` the address word echoed, `+0x8` the word holding data and status |
+| 9, write NVM | `+0x0` address, `+0x4` the data halfword; `+0x6` receives the status byte | the same three |
+
+So the client reads the data at `reply + 0x8` low half and the status at its
+bit 16. A rebuild cannot serve these two and IOP-13e's four through one
+helper, and one that answers the `+0x4`-status shape here returns the address
+where the caller expects the data.
+
 **IOP-13f — the other entry points a boot needs.** `0x80000592` reads the
 request's first word as `sceCdInit`'s mode and answers that ordinal's return.
 `0x8000059A` reads a mode word and answers `2` or `6` for ready or not,
