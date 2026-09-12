@@ -306,9 +306,10 @@ uint32_t list_base;
                 continue;
             }
             if (directive(&text[token], length)) {
-                // `!addr ` and `!include ` each take a hex argument, which
-                // whitespace splitting leaves as the next token; skipping it
-                // keeps it from being read as a module name.
+                // `!addr ` takes a hex argument and `!include ` a name
+                // (docs/analysis/51 §4); either way whitespace splitting
+                // leaves it as the next token, and skipping it keeps it from
+                // being read as a module name of its own.
                 while (i < list.size && text[i] < 0x20) {
                     i++;
                 }
