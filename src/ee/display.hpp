@@ -51,4 +51,10 @@ void setLine(uint32_t row, const char *text);
 // row would erase its neighbour.
 void present();
 
+// Block until the start of the next vertical blank, so that a program which
+// redraws in a loop runs at the raster's pace instead of as fast as the bus
+// allows. Returns anyway after a wait far longer than a frame: a machine
+// whose GS never reports a blank should not hold the program for ever.
+void waitVsync();
+
 }  // namespace ps2::display

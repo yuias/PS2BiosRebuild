@@ -34,6 +34,13 @@ constexpr uintptr_t kPmode = 0x12000000;
 constexpr uintptr_t kDispfb2 = 0x12000090;
 constexpr uintptr_t kDisplay2 = 0x120000A0;
 
+// The GS's own status word, which sits in the second page of privileged
+// registers rather than the first. Bit 3 latches at each vertical blank and
+// is cleared by writing a one back to it; the read side is 64 bits wide like
+// every other register here, but only the low half carries the flags.
+constexpr uintptr_t kGsCsr = 0x12001000;
+constexpr uint32_t kCsrVsync = 1u << 3;
+
 // The DMAC and the GIF, through the uncached alias the kernel's own interrupt
 // code reaches the DMAC by.
 constexpr uintptr_t kGifCtrl = 0xB0003000;
@@ -289,6 +296,12 @@ void setLine(uint32_t row, const char *text) {
     }
 }
 
+// A ceiling on the wait rather than a bare spin, for the same reason
+// `sendBand` has one: a frame is 1/60 s and a machine that never raises the
+// flag must not take the program with it. The count is far longer than a
+// frame at any plausible clock, so a real blank is never missed.
+constexpr uint32_t kVsyncAttempts = 40000000;
+
 void present() {
     for (uint32_t top = 0; top < kHeight; top += kBandLines) {
         fillBand(kBackground);
@@ -303,6 +316,18 @@ void present() {
             }
         }
         sendBand(top);
+    }
+}
+
+void waitVsync() {
+    // Clear first, then wait for the next one to arrive. Waiting on the bit
+    // as found would return immediately on a blank that happened while the
+    // caller was drawing, which is a frame of pacing lost every time.
+    writeRegister(kGsCsr, kCsrVsync);
+    for (uint32_t attempt = 0; attempt < kVsyncAttempts; attempt++) {
+        if ((readWord(kGsCsr) & kCsrVsync) != 0) {
+            return;
+        }
     }
 }
 

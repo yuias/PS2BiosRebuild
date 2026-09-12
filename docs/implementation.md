@@ -153,6 +153,26 @@ The screen is additive. Every console line the boot printed before still
 prints, in the same order and with the same bytes, and the version line is one
 string fed to both.
 
+**Pacing is a poll on the GS's own status word, not an interrupt.** A program
+that redraws in a loop has to wait for the raster, and `waitVsync` does it by
+clearing the vertical-blank flag in `GS_CSR` and spinning until the hardware
+sets it again -- clearing first, because waiting on the bit as found returns
+at once on a blank that happened while the caller was still drawing, losing a
+frame of pacing every time round. The wait has a ceiling for the reason
+`sendBand`'s has one: a machine that never reports a blank must not take the
+program with it.
+
+No interrupt is involved, deliberately. The EE kernel's interrupt path exists
+(`spec/04` EE-4) but a single-threaded program that has nothing to do between
+frames gains nothing from being woken instead of waiting, and the poll needs
+no handler installed, no stack for it, and nothing to unwind at exit. It was
+measured rather than assumed: 240 waits take 1.175 billion EE cycles under
+PS2e, against the 4.9152 million per frame an NTSC machine gives -- 0.4% off,
+which is the resolution of the measurement rather than a drift.
+
+Nothing calls it yet. It is the half of a redraw loop that does not depend on
+what the loop is for.
+
 The SIF client both this and `EELOAD` reach the IOP through is one translation
 unit, `src/ee/sifclient.cpp`, linked into each separately: the second program
 initialises the command layer again from scratch, with state of its own.
