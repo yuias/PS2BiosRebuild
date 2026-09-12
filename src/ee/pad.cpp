@@ -10,19 +10,6 @@ namespace {
 
 using namespace ps2::sifclient;
 
-// spec/03 BOOT-12e: the module loader's service and its fno 0.
-constexpr uint32_t kLoadfileServer = 0x80000006;
-constexpr uint32_t kFunctionLoad = 0;
-constexpr uint32_t kPathMax = 252;
-
-struct LoadRequest {
-    uint32_t argument_length;
-    uint32_t pad;
-    char path[kPathMax];
-    char arguments[kPathMax];
-};
-static_assert(sizeof(LoadRequest) == 0x200);
-
 // IOP-14a/14b: the service, and the function codes that reach it.
 constexpr uint32_t kPadServer = 0x8000010f;
 constexpr uint32_t kCodeOpen = 0x80000100;
@@ -46,20 +33,10 @@ constexpr uintptr_t kUncached = 0x20000000;
 // sit at a fixed stride the driver computes from its own frame counter.
 alignas(64) volatile uint8_t area[kAreaBytes];
 
-alignas(16) LoadRequest load_request;
-alignas(16) uint32_t load_answer[4];
 alignas(16) uint32_t request[8];
 alignas(16) uint32_t reply[8];
 
 bool opened;
-
-void copyString(char *to, const char *from, uint32_t limit) {
-    uint32_t k = 0;
-    for (; k + 1 < limit && from[k] != '\0'; k++) {
-        to[k] = from[k];
-    }
-    to[k] = '\0';
-}
 
 [[nodiscard]] const volatile uint8_t *uncached(uint32_t index) {
     const uintptr_t physical = reinterpret_cast<uintptr_t>(&area[index]) & 0x1FFFFFFF;
@@ -70,19 +47,6 @@ void copyString(char *to, const char *from, uint32_t limit) {
     const volatile uint8_t *at = uncached(half * kRecordBytes + kOffFrame);
     return static_cast<uint32_t>(at[0]) | (static_cast<uint32_t>(at[1]) << 8)
          | (static_cast<uint32_t>(at[2]) << 16) | (static_cast<uint32_t>(at[3]) << 24);
-}
-
-// One module, by the path the archive knows it as. The answer's first word is
-// the module id or a negative error (BOOT-12e).
-[[nodiscard]] bool loadModule(const char *path) {
-    load_request.argument_length = 0;
-    load_request.pad = 0;
-    copyString(load_request.path, path, kPathMax);
-    load_request.arguments[0] = '\0';
-    load_answer[0] = 0;
-    callRpc(kFunctionLoad, &load_request, sizeof load_request,
-            load_answer, sizeof load_answer);
-    return static_cast<int32_t>(load_answer[0]) >= 0;
 }
 
 }  // namespace
@@ -100,13 +64,10 @@ bool begin() {
     for (uint32_t i = 0; i < kAreaBytes; i++) {
         *const_cast<volatile uint8_t *>(uncached(i)) = 0;
     }
-    if (!bindRpc(kLoadfileServer)) {
-        return false;
-    }
     // The serial interface first: the driver imports it, so loading them the
     // other way round leaves the driver's imports unbound and, per IRX-9, it
     // goes quiet rather than failing.
-    if (!loadModule("rom0:SIO2MAN") || !loadModule("rom0:PADMAN")) {
+    if (!loadIopModule("rom0:SIO2MAN") || !loadIopModule("rom0:PADMAN")) {
         return false;
     }
     if (!bindRpc(kPadServer)) {

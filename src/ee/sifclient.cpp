@@ -204,4 +204,45 @@ void callRpc(uint32_t fno, const void *send, uint32_t send_size, void *receive,
 }
 
 
+
+// spec/03 BOOT-12e: a 512-byte request with the argument length at +0, the
+// path at +8 and the arguments at +0x104; the answer's first word is the
+// module id or a negative error.
+namespace {
+
+constexpr uint32_t kLoadfileServer = 0x80000006;
+constexpr uint32_t kFunctionLoad = 0;
+constexpr uint32_t kPathMax = 252;
+
+struct LoadRequest {
+    uint32_t argument_length;
+    uint32_t spare;
+    char path[kPathMax];
+    char arguments[kPathMax];
+};
+static_assert(sizeof(LoadRequest) == 0x200);
+
+alignas(16) LoadRequest load_request;
+alignas(16) uint32_t load_answer[4];
+
+}  // namespace
+
+bool loadIopModule(const char *path) {
+    if (!bindRpc(kLoadfileServer)) {
+        return false;
+    }
+    load_request.argument_length = 0;
+    load_request.spare = 0;
+    uint32_t k = 0;
+    for (; k + 1 < kPathMax && path[k] != '\0'; k++) {
+        load_request.path[k] = path[k];
+    }
+    load_request.path[k] = '\0';
+    load_request.arguments[0] = '\0';
+    load_answer[0] = 0;
+    callRpc(kFunctionLoad, &load_request, sizeof load_request,
+            load_answer, sizeof load_answer);
+    return static_cast<int32_t>(load_answer[0]) >= 0;
+}
+
 }  // namespace ps2::sifclient

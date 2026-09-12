@@ -60,6 +60,11 @@ void initRpc();
 // Bind one server by its id; false if the IOP has no such service.
 [[nodiscard]] bool bindRpc(uint32_t sid);
 
+// Load an IOP module by the path the archive knows it as (spec/03 BOOT-12e).
+// Binds the module loader itself, so it leaves that service bound and not
+// whatever the caller had: the client keeps exactly one.
+[[nodiscard]] bool loadIopModule(const char *path);
+
 // One call on the bound server. `receive` takes the server's reply and must be
 // quadword-aligned -- it is a DMA destination, not a return value.
 void callRpc(uint32_t fno, const void *send, uint32_t send_size, void *receive,
