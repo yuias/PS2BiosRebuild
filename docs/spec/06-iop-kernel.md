@@ -2,8 +2,9 @@
 
 Derived from `docs/analysis/37-iop-interrupts.md` (EXCEPMAN and INTRMAN),
 `38-iop-threads.md` (THREADMAN), `39-iop-file-layer.md` (IOMAN, ROMDRV,
-MODLOAD, LOADFILE), `40-sio2man.md` (SIO2MAN's start-up) and `54-padman.md`
-(the controller driver above it).
+MODLOAD, LOADFILE), `40-sio2man.md` (SIO2MAN's start-up), `54-padman.md`
+(the controller driver above it) and `55-mcman.md` (the card driver beside
+it).
 
 This covers the IOP-side kernel services above `SYSMEM`/`LOADCORE`
 (`docs/spec/02-module-abi.md`): exception and interrupt delivery, the thread
@@ -2013,3 +2014,203 @@ otherwise finished, print the buttons the EE decodes on the frame the press
 begins, and confirm the console names exactly the buttons that were held and
 nothing else. The press must fall **after** the screen is up; a press during
 the boot list is over before any client has opened a port.
+
+## IOP-15: The memory card (MCMAN, MCSERV)
+
+Derived from `docs/analysis/55`, with `docs/analysis/40` for the serial
+interface underneath, `48` for the authentication interface, and `55` §0.1 for
+the card's own on-image layout, which was read out of real cards rather than
+out of any binary.
+
+The scope is **one question asked from the EE: is a formatted card in the
+slot, and what is in its root directory?** Writing, creating, deleting,
+formatting, the allocation path, PS1-format cards and the error-correction
+algorithm are out of scope; where the contract below touches them it says
+what a rebuild must leave alone rather than what it must do.
+
+**IOP-15a — two modules, and the split between them.** The driver owns the
+card: the serial frames, the authentication, the page reads, the filesystem.
+The service is a thin thread over it that answers one SIF RPC id and calls
+the driver's exports. Nothing on the EE can reach the driver directly, and
+the driver installs no RPC of its own.
+
+**IOP-15b — the driver's port state, and what "which port" means.** A port's
+state is one record per slot, and the **serial port index is the caller's
+port number's low bit plus two**: the controllers occupy 0 and 1, the cards 2
+and 3. Every entry point takes the caller's numbering and converts; nothing
+outside the module sees the serial index. The record holds a copy of the
+card's superblock page, the card type (none, PS1, PS2, PS1-pocket), a
+geometry flag byte, the derived cluster arithmetic, and a **mounted** word
+that is the memo the detect ladder short-circuits on.
+
+**IOP-15c — the detect ladder, and every code it can answer.** From nothing
+known to mounted, in this order. Each numbered step is one serial batch
+unless it says otherwise.
+
+1. **Probe** (`0x11`, four bytes each way), up to five times. A reply byte of
+   `0x66` at offset 3, or a failed transfer, is a miss. **Any other value is
+   a hit and skips to step 5** -- that short-circuit is what makes a second
+   call on the same card cost two batches instead of nine.
+2. **Reset** (`0xf3`, five bytes), once. A failed transfer answers **-11**
+   and stops. The reply is not examined.
+3. **Authenticate**: the card-authentication interface's third entry point,
+   with the serial port index, the slot, and a card number that is the port's
+   low bit shifted left three. **Zero answers -90 and stops.**
+4. **Presence** (`0x28`, five bytes), up to five times; a hit is a successful
+   transfer whose reply byte 4 is not `0x66`. Five misses answer **-12**.
+5. If reply byte 3 is the terminator value the driver sets in step 6, this is
+   a card it has already seen: a mounted record answers **0** and stops, a
+   record marked invalid answers **-2**, and an unmounted one falls through
+   (which is the unformatted card's path -- it is known, and still not
+   mounted).
+6. **Terminator** (`0x27` carrying `0x5a`, five bytes), up to five times; a
+   hit is a successful transfer whose reply byte 4 is `0x5a`. Five misses
+   answer **-13**.
+7. **Mount** (IOP-15e). Success answers **-1**, not 0: *the card changed*.
+   Its own failures pass through.
+
+**A rebuild must reproduce the masking, not just the ladder.** The entry point
+callers use answers this ladder's code only when it is **-1 or above**;
+anything below is discarded and replaced by the answer of a separate probe for
+the older card format, with the card type set to none. So `-11`, `-12`, `-13`,
+`-90` and the mount's own failures never leave the module. A caller sees, in
+practice: `0` (the same card, still mounted), `-1` (a card, newly mounted),
+`-2` (a card that is not formatted), or the older format's probe code.
+
+**IOP-15d — the serial batch, which is the DMA path and not the byte path.**
+This is the first user in the archive of the transfer descriptor's DMA
+arguments (`spec/06` IOP-6, `docs/analysis/40` §4). The descriptor is built
+once and reused:
+
+- The byte fields are zero throughout. **The command bytes never go through
+  the data register**; they arrive by DMA on the sending channel and the
+  replies leave by DMA on the receiving one.
+- One **block per sub-transfer**, `0x24` words -- 144 bytes -- each, with the
+  block count equal to the number of sub-transfers. A sub-transfer's command
+  starts at its own block's start, and its reply is read from the matching
+  block of the receive area. At most eleven sub-transfers to a batch.
+- Each sub-transfer's `regdata` word is
+  `serial_port | 0x70 | (length << 8) | (length << 18)`, transmit and receive
+  lengths equal, with a **zero word after the last one** to terminate the
+  list. Note the `0x70` where the controller driver uses `0x40`; neither
+  field's meaning has been read, and both are carried as they are.
+- `port_ctrl1` for the two card ports is `0xff020405` and `0xff030405`. The
+  second control word is set and never reaches hardware through this
+  generation of the serial module at all.
+- The verdict on a batch is one test: the status word's bits 12 to 15 must
+  read `0x1000`. Nothing else in the read path looks at any status register.
+
+**A command's block is only written as far as its payload**, so the bytes
+after it are whatever that block last carried. A rebuild that clears each
+block first is producing frames the reference does not; one that does not
+clear them must not then *check* those bytes.
+
+**IOP-15e — reading one page, and mounting.** A page read is one batch of
+three kinds of sub-transfer, in this order:
+
+```
+81 23 p0 p1 p2 p3 X 00 00      set the page; X is p0^p1^p2^p3        (9 bytes)
+81 43 80 00 ...                128 bytes of data, four times        (134 bytes)
+81 43 10 00 ...                the sixteen bytes after the page      (22 bytes)
+81 81 00 00                    end the read                          (4 bytes)
+```
+
+A frame's length is its payload plus six. The tail frame goes only when the
+card's geometry flags say the card has one. Checked: the set-page reply's
+byte 8 is `0x5a`; each data chunk's trailing byte is the exclusive-or of its
+128; the end frame's reply carries `0x5a`. The tail's own check byte is not
+checked. Up to five attempts, each after the first preceded by the probe of
+IOP-15c step 1.
+
+The error-correcting codes in the tail are compared per chunk. A page whose
+tail ends in `0xff` counts as never written and is accepted without a check.
+A single-bit difference is corrected in place, retried, and **accepted
+anyway on the fifth attempt**; a difference the code cannot place answers
+**-2** after five. A rebuild may leave the codes unchecked, and must then say
+so where it says what it does not do -- it is the difference between reading
+a damaged card and reading a damaged card quietly.
+
+The mount then reads, in this order: the card's geometry over the serial
+interface (`0x26`, thirteen bytes, its reply's own exclusive-or checked),
+**page 0**, the **first two pages of the second of the two spare erase blocks
+the superblock names**, and then the root directory's first two entries. It
+answers "not formatted" when page 0 is uncorrectable, when page 0 does not
+begin with the format identifier, or when the root's first two entries are
+not the two conventional names. Everything else about page 0 is copied into
+the port record and believed.
+
+**The root is not found through the superblock's root-directory field.** A
+path beginning with a separator starts at *relative cluster 0*, and so does
+the initial current directory, and the field is read only to decide whether a
+listing hides the two conventional entries. A rebuild is free to read the
+field; it must not depend on it being anything but zero, and it must add the
+first-allocatable-cluster offset when it turns a relative cluster into a page.
+
+**IOP-15f — the allocation table, and the entries.** Both are in
+`docs/analysis/55` §0.1 and are properties of the card, not of the driver.
+What the driver does with them: a cluster's successor is found by two
+indirections from the superblock's list, the high bit of an entry is masked,
+and the value with every bit set ends the chain. Entries are 512 bytes, two
+to a cluster, and a directory's own length field says how many of its slots
+are in use.
+
+**IOP-15g — the smallest export surface.** Three entries carry the whole
+question, and a rebuild that implements only these has a driver a service can
+use:
+
+| Ordinal | Shape | Answers |
+|---|---|---|
+| 5 | `detect(port, slot)` | IOP-15c |
+| 12 | `getdir(port, slot, path, mode, max, out)` | how many entries it wrote |
+| 39 | `type(port)` | 0 none, 1 older format, 2 this one |
+
+Two more are needed beneath them, the page read and the error-correcting
+code, and the rest of the forty-three may be the bare return the reference
+puts in its own unused slots, or a refusal. `getdir` takes a path whose last
+separator splits a directory from a pattern, starts a listing with a mode of
+zero and continues it with any other, skips entries whose in-use bit is
+clear, skips the two conventional entries when it is listing the root, and
+answers zero at the end. Each entry it writes is `0x40` bytes: two
+eight-byte timestamps, the length, the mode as a half-word, a half-word
+copied from the entry, the attributes, and a 32-byte name.
+
+**IOP-15h — the service, and the two calls a shell needs.** SIF RPC id
+**`0x80000400`**, one thread, one queue. Its dispatcher subtracts `0x70` from
+the `fno` and refuses seventeen or more; it answers with a fixed four-byte
+area holding the driver's return, not with the request buffer.
+
+- **`fno 0x78`** is "what is in this slot": the request's words 1 and 2 are
+  the port and the slot, word 3 asks for the type, word 4 for the free-space
+  count, and word 7 is the EE address to deliver a `0x40`-byte record to. The
+  service calls detect, then the type and the free-space entry points if
+  asked, sends the record, and answers detect's code.
+- **`fno 0x76`** is "list a directory": words 0 to 4 are port, slot, mode,
+  how many entries, and the EE address; the path follows at `+0x14`. The
+  reference asks the driver for **one entry per call** and sends each
+  `0x40`-byte record separately, advancing the address. It answers the number
+  sent.
+
+**IOP-15i — what this section does not pin.** The cluster cache, the
+memoised chain, the handle table, the filesystem device the driver registers
+with the file manager, and the service's thread count are all *how* the
+reference gets there. A rebuild that produces the same frames in the same
+order and the same answers satisfies IOP-15 without any of them. The
+filesystem device in particular is worth having only if something wants to
+reach a card by path rather than through the service.
+
+### Verification
+
+Like IOP-6, IOP-13 and IOP-14, **no simulator gate**: nothing offline models a
+serial interface, let alone a card behind one. The emulator that can attach a
+card image is the gate, and this path has a witness the others did not --
+**two real card images, one freshly formatted and one with a save on it,
+whose contents are known independently of any rebuild**. So the check is not
+"something came back" but "the entries this rebuild lists are the entries a
+reader of the image finds, and the formatted card's root is the two
+conventional names and nothing else".
+
+This is also the first thing in the archive to drive the transfer
+descriptor's DMA arguments, so a failure here is as likely to be in the
+serial module or the transfer controller as in the driver. Judge the batch
+before judging the card: the status word's `0x1000`, then the set-page
+reply's `0x5a`, then the chunk exclusive-ors.
