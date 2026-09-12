@@ -930,7 +930,7 @@ ordering. New analysis documents are written only for what M1 or M2 faults on
 | --- | --- | --- |
 | The IOP's DMA busy bit never clears on PCSX2 | `spec/03` BOOT-11h, `docs/analysis/25` | no longer waited on anywhere: the IOP takes the channel's interrupt instead; cause still unknown |
 | Some syscall slots report themselves rather than working | the gate's "not required of the image yet" list, `docs/implementation.md` | deliberate — the count is the gate's, not this table's |
-| Not every boot-list module exists, and only `SIO2MAN` is loadable on request | the gate's list, `docs/implementation.md` | deliberate — `SSBUSC` and `EECONF` are the two the list still lacks; the title brings its own drivers |
+| Not every boot-list module exists, and only `SIO2MAN` is loadable on request | the gate's list, `docs/implementation.md` | deliberate — `SSBUSC`, `EECONF`, `IGREETING` and `SIFINIT` are the four the list still lacks, and two more of the reference's twenty-nine names are the rejected halves of its `INTRMANP`/`INTRMANI` and `TIMEMANP`/`TIMEMANI` pairs, which are one module each here; the title brings its own drivers |
 | Slot `0x60` zeroes `Config` | `spec/05` SYS-4a | **not a problem** — the reference's own defect, reproduced on purpose |
 | The clean-room role separation is not enforced | `docs/clean-room-policy.md` | recorded, not fixed |
 
