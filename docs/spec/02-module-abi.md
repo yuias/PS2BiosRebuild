@@ -269,14 +269,26 @@ comparison at all. The flag is set at run time; the stored table has `flags 0`.
 
 ## IRX-11: Supersession
 
+An export table's word at +`0x4` heads the list of import tables bound against
+it, chained through each **importer's** own word at +`0x4`. IRX-9's binder has
+to build that list at every bind, or supersession finds nothing to move.
+
 When IRX-10a accepts a higher minor version, the old library's list of bound
 clients is walked and each client's flags halfword at +`0xA` is tested:
 
-- bit 0 clear → the client is re-bound against the new library;
-- bit 0 set → the client stays attached to the old one.
+- bit 0 clear → the client is re-bound against the new library, by IRX-9's
+  stub rewriting, and joins the new table's own client list;
+- bit 0 set → the client stays attached to the old one, and its stubs are left
+  alone.
 
 Supersession therefore actually redirects callers, and IRX-10b's flag is what
 exempts a library from having its clients taken.
+
+**IRX-11b:** The registry is walked to its end, not as far as the first match.
+A superseded table stays registered, so a third generation of a library has two
+older ones to take clients from and must take from both. The version test is
+applied to every match before anything moves: a registration that is refused
+leaves every client exactly where it was.
 
 **IRX-11a:** A module may rewrite its own table's version in RAM before
 registering it, to arrange the generation ordering. `SYSCLIB` decrements its
