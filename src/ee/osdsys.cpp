@@ -28,6 +28,7 @@
 #include "build_stamp.h"
 #include "console.hpp"
 #include "config.hpp"
+#include "pad.hpp"
 #include "display.hpp"
 #include "sifclient.hpp"
 
@@ -203,6 +204,7 @@ constexpr char kBoot2Key[] = "BOOT2";
 // rather than a copy (`display.hpp`), so these outlive `present`.
 constexpr uint32_t kLineBytes = ps2::display::kColumns + 1;
 char config_lines[3][kLineBytes];
+char pad_line[kLineBytes];
 
 char *appendText(char *at, const char *end, const char *text) {
     for (; *text != '\0' && at < end; text++) {
@@ -290,6 +292,46 @@ void showConfig(const ps2::config::Record &record) {
     ps2::display::present();
 }
 
+// Wait for the raster, read the controller, and say what changed. The line is
+// rebuilt only on a change, because a controller held down would otherwise
+// print sixty identical lines a second and bury everything above it.
+[[noreturn]] void padLoop() {
+    uint16_t shown = 0;
+    bool ever = false;
+    for (;;) {
+        ps2::display::waitVsync();
+        const ps2::pad::State state = ps2::pad::read();
+        const uint16_t held = state.present ? state.buttons : 0;
+        if (ever && held == shown) {
+            continue;
+        }
+        shown = held;
+        ever = true;
+
+        char *at = pad_line;
+        const char *end = pad_line + kLineBytes - 1;
+        if (!state.present) {
+            at = appendText(at, end, "controller: no answer");
+        } else if (held == 0) {
+            at = appendText(at, end, "controller: nothing held");
+        } else {
+            at = appendText(at, end, "controller:");
+            for (uint32_t bit = 0; bit < ps2::pad::kButtons; bit++) {
+                if ((held & (1u << bit)) != 0) {
+                    at = appendText(at, end, " ");
+                    at = appendText(at, end, ps2::pad::kButtonNames[bit]);
+                }
+            }
+        }
+        *at = '\0';
+        print("# OSDSYS: ");
+        print(pad_line);
+        print("\n");
+        ps2::display::setLine(6, pad_line);
+        ps2::display::present();
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -361,6 +403,14 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
         print("# OSDSYS: cdrom0:\\SYSTEM.CNF refused, error ");
         printSigned(read);
         print(" -- no disc, or none this driver can read.\n");
+        // Nothing to boot is where an OSD would show its menu instead, so
+        // this is where the controller belongs: the loop below is the first
+        // thing in this program that waits for a person.
+        if (ps2::pad::begin()) {
+            print("# OSDSYS: controller driver up on port 0.\n");
+            padLoop();
+        }
+        print("# OSDSYS: no controller driver; nothing to wait for.\n");
         osdHalt();
     }
 
