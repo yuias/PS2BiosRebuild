@@ -157,6 +157,15 @@ correct, suspend must save the *actual* state and resume must write that state
 back rather than unconditionally enabling. This constrains a rebuild; it does
 not contradict `docs/analysis/37` §2.5.
 
+**Correction (`docs/analysis/54` §1).** `PADMAN`'s bracket around its own
+registration is not a suspend/resume pair: it opens with `CpuSuspendIntr`
+(ordinal 17) and closes with **`CpuEnableIntr` (ordinal 9)**, which takes no
+argument and enables unconditionally, so the saved state is computed and
+thrown away. The module does use the 17/18 pair elsewhere. It is the outer
+bracket that is unbalanced here, not ordinal 8's inner one, so the paragraph
+above still holds for ordinal 8; what it does not support is the reading that
+every caller of ordinal 8 restores what it saved.
+
 ## 4. Ordinals 4–7, and the four bits
 
 All four are `WaitEventFlag(id, bits, WEF_OR, NULL)` on the module's own flag,
