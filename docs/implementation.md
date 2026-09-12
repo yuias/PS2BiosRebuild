@@ -198,9 +198,9 @@ loadcore's allocation: 0x100000
 ```
 
 The loader binds a module's imports before entering it and registers its
-exports after relocating it; `SYSMEM`'s bump allocator answers with the heap
-start, which also proves `SYSMEM`'s own entry ran, since an uninitialised
-cursor could not.
+exports after relocating it; `SYSMEM`'s allocator answers with the heap start,
+which also proves `SYSMEM`'s own entry ran, since an uninitialised heap could
+not.
 
 Marking that import table unbindable — IRX-9b's low flag bits — makes the gate
 say exactly what broke:
@@ -493,14 +493,30 @@ loader that table by giving it the module's load base and nothing else; doing
 it everywhere costs nothing and removes the question of which module it is
 true for.
 
-**`SYSMEM`'s allocator is two bump cursors, not a free list.** IRX-15b's low
-and high modes are honoured -- each end of the heap has a cursor and the two
-grow towards each other -- but each end can give back only the block it handed
-out last, and refuses anything else rather than leaking silently. IRX-15b's
-mode 2 has no caller here and is refused. That is enough for the boot: what
-`MODLOAD` releases is always the newest block at its end, so the raw file it
-reads each module out of is actually reclaimed. A free list, and with it the
-out-of-order release, arrives with `HEAPLIB`.
+**`SYSMEM`'s allocator records the blocks it hands out, and the free space is
+what is left between them.** All three of IRX-15b's modes are served: mode 0
+takes the lowest gap the request fits in and carves its bottom, mode 1 the
+highest and carves its top -- which is IRX-15c, and what makes `MODLOAD`'s
+release of the raw file it reads a module out of actually reclaim it -- and
+mode 2 takes the range the caller names, refusing an unaligned address
+outright and refusing a range it does not wholly own. A release may be out of
+order, and ordinals 9 and 10 answer for any address inside a range rather than
+only for a block's own start, marking a free range by setting bit 31 of the
+answer.
+
+The reference chains a node per range, free ones included, and refills the
+chain from fresh chunks as it needs them. Recording only what is in use makes
+the free ranges the gaps between records, which are maximal by construction --
+so there is no coalescing step, and a release cannot leave two adjacent free
+ranges unmerged. The deviation that leaves is the capacity: 256 records, where
+the reference's chain grows. Past that an allocation is refused like any other
+that does not fit (IRX-15d). The boot leaves about forty blocks live and a
+title's own modules roughly double that.
+
+Nothing in the image asks for mode 2, and nothing asks ordinals 9 and 10 about
+an address other than a block it has just been given, so `tools/memcheck.py`
+boots the image and calls them directly -- the same treatment `tools/scmdcheck.py`
+gives the mechacon ordinals, and for the same reason.
 
 **And its heap starts above the whole boot image, not above `SYSMEM`.**
 IRX-15e's low bound is the end of `SYSMEM`'s own image, which works on the

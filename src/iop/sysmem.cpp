@@ -38,19 +38,82 @@ enum Mode : uint32_t { Lowest = 0, Highest = 1, AtAddress = 2 };
 
 constexpr uint32_t kExportMagic = 0x41C00000;
 
-// IRX-15c: two cursors growing towards each other, so mode 0 and mode 1 never
-// interleave. `low_cursor` is zero until the entry runs, which is what every
-// ordinal tests for "initialised" (IRX-15e).
-uint32_t low_cursor;
-uint32_t high_cursor;
+// The heap the entry settled on (IRX-15e). `heap_low` is zero until the entry
+// runs, which is what every ordinal tests for "initialised".
+uint32_t heap_low;
+uint32_t heap_high;
 // What the entry was told the machine has, which ordinal 6 answers.
 uint32_t ram_size;
-// The most recent block at each end -- the only ones `release` can give back,
-// and the only ones `blockSize` can answer for.
-uint32_t low_last;
-uint32_t low_last_size;
-uint32_t high_last;
-uint32_t high_last_end;
+
+// One record per block handed out, kept sorted by address. The reference
+// chains nodes for the free ranges as well and refills the chain from fresh
+// chunks; recording only what is in use makes the free ranges the gaps
+// between records, which are maximal by construction -- so no coalescing step
+// is needed and a release can never leave two adjacent free nodes unmerged.
+//
+// The capacity is the one deviation: the reference's chain grows, this array
+// does not, and an allocation past the last record is refused like any other
+// allocation that does not fit (IRX-15d). The boot leaves about forty blocks
+// live and a title's own modules roughly double that.
+constexpr uint32_t kMaxBlocks = 256;
+
+struct Block {
+    uint32_t start;
+    uint32_t size;
+};
+
+Block blocks[kMaxBlocks];
+uint32_t block_count;
+
+// The free range containing `address`, as [start, end). Only meaningful when
+// no record contains the address; the caller checks that first.
+struct Gap {
+    uint32_t start;
+    uint32_t end;
+};
+
+// The index of the first record starting at or after `address`.
+[[nodiscard]] uint32_t lowerBound(uint32_t address) {
+    uint32_t i = 0;
+    while (i < block_count && blocks[i].start < address) {
+        ++i;
+    }
+    return i;
+}
+
+[[nodiscard]] const Block *blockContaining(uint32_t address) {
+    for (uint32_t i = 0; i < block_count; ++i) {
+        if (address >= blocks[i].start
+            && address - blocks[i].start < blocks[i].size) {
+            return &blocks[i];
+        }
+        if (blocks[i].start > address) {
+            break;                     // sorted: nothing further can contain it
+        }
+    }
+    return nullptr;
+}
+
+// The gap `index` opens: from the end of the record before it to the start of
+// the record at it, clipped to the heap at both ends.
+[[nodiscard]] Gap gapBefore(uint32_t index) {
+    const uint32_t start = index == 0
+        ? heap_low : blocks[index - 1].start + blocks[index - 1].size;
+    const uint32_t end = index == block_count ? heap_high : blocks[index].start;
+    return {start, end};
+}
+
+[[nodiscard]] bool insertBlock(uint32_t index, uint32_t start, uint32_t size) {
+    if (block_count == kMaxBlocks) {
+        return false;
+    }
+    for (uint32_t i = block_count; i > index; --i) {
+        blocks[i] = blocks[i - 1];
+    }
+    blocks[index] = {start, size};
+    ++block_count;
+    return true;
+}
 
 // IRX-7: slots 0 and 1 are reserved hooks that nothing imports, kept occupied
 // rather than removed (IRX-6a), so they need somewhere to point.
@@ -92,36 +155,58 @@ int kprintfSet(KprintfHook hook, void *context) {
 
 // Ordinal 4: allocate(mode, size, address) -> address, or 0.
 //
-// Not a free list: each end of the heap is a bump cursor, and the two grow
-// towards each other. That is enough to honour IRX-15b's low and high modes,
-// which is what makes `MODLOAD`'s release of a raw file actually give the
-// memory back -- the file comes off the top, the image it builds off the
-// bottom, so the file is still the topmost block when it is released. Mode 2
-// (`AtAddress`) has no caller here and is refused rather than misplaced.
-// Anything needing a real lifetime arrives with the heap of `HEAPLIB`.
-[[nodiscard]] int allocate(uint32_t mode, uint32_t size,
-                           [[maybe_unused]] uint32_t address) {
-    if (size == 0 || low_cursor == 0) {
+// IRX-15b's three modes over the gaps between the records: mode 0 takes the
+// lowest gap the request fits in and carves its bottom, mode 1 the highest and
+// carves its top, mode 2 the gap the caller named. That the low and high modes
+// carve opposite ends is IRX-15c, and it is what makes `MODLOAD`'s release of
+// a raw file actually give the memory back -- the file comes off the top, the
+// image it builds off the bottom.
+[[nodiscard]] int allocate(uint32_t mode, uint32_t size, uint32_t address) {
+    if (size == 0 || heap_low == 0) {
         return 0;
     }
     const uint32_t rounded = (size + kAlignment - 1) & ~(kAlignment - 1);
-    if (rounded > high_cursor - low_cursor) {
+
+    if (mode == AtAddress) {
+        // The reference refuses an unaligned address outright rather than
+        // rounding it, and refuses a range that is not wholly free.
+        if ((address & (kAlignment - 1)) != 0 || address < heap_low
+            || rounded > heap_high - address) {
+            return 0;
+        }
+        const uint32_t index = lowerBound(address);
+        const Gap gap = gapBefore(index);
+        if (address < gap.start || rounded > gap.end - address) {
+            return 0;
+        }
+        return insertBlock(index, address, rounded)
+            ? static_cast<int>(address) : 0;
+    }
+
+    if (mode == Lowest) {
+        for (uint32_t i = 0; i <= block_count; ++i) {
+            const Gap gap = gapBefore(i);
+            if (gap.end - gap.start >= rounded) {
+                return insertBlock(i, gap.start, rounded)
+                    ? static_cast<int>(gap.start) : 0;
+            }
+        }
         return 0;                      // IRX-15d: no fallback to the other end
     }
-    if (mode == Lowest) {
-        const uint32_t block = low_cursor;
-        low_last = block;
-        low_last_size = rounded;
-        low_cursor += rounded;
-        return static_cast<int>(block);
-    }
+
     if (mode == Highest) {
-        high_last_end = high_cursor;
-        high_cursor -= rounded;
-        high_last = high_cursor;
-        return static_cast<int>(high_cursor);
+        for (uint32_t i = block_count + 1; i > 0; --i) {
+            const Gap gap = gapBefore(i - 1);
+            if (gap.end - gap.start >= rounded) {
+                const uint32_t block = gap.end - rounded;
+                return insertBlock(i - 1, block, rounded)
+                    ? static_cast<int>(block) : 0;
+            }
+        }
+        return 0;
     }
-    return 0;
+
+    return 0;                          // IRX-15b: no fourth mode
 }
 
 // Ordinal 6: memSize() -> the machine's RAM in bytes, as the entry was told
@@ -132,41 +217,63 @@ int kprintfSet(KprintfHook hook, void *context) {
     return static_cast<int>(ram_size);
 }
 
-// Ordinal 10: blockSize(address) -> the size in bytes of the block that
-// contains `address`, or -1.
-//
-// The reference keeps a record per block and matches any address inside one
-// (IRX-15). A pair of bump cursors keeps no records, so this answers for the
-// most recent block at each end and refuses everything else. That is the
-// whole of what `HEAPLIB` asks: it queries a chunk in the instruction after
-// allocating it, to find the rounding slack it may use. A wrong answer there
-// is not a refused allocation but a heap arena sized past its own memory, so
-// refusing is the only safe alternative to a record table.
+// Ordinals 9 and 10 answer for the range that *contains* an address, in use
+// or not, and mark a free one by setting bit 31 of the answer -- 9 returning
+// the range's start and 10 its size. `HEAPLIB` is the caller that matters: it
+// queries a chunk in the instruction after allocating it, to find the
+// rounding slack it may use, so it always asks about a block that is in use.
+constexpr uint32_t kFreeMark = 0x80000000;
+
+// The gap containing `address`, or a zero-length one when the address is
+// outside the heap entirely.
+[[nodiscard]] Gap gapContaining(uint32_t address) {
+    const uint32_t index = lowerBound(address);
+    const Gap gap = gapBefore(index);
+    return address >= gap.start && address < gap.end ? gap : Gap{0, 0};
+}
+
+// Ordinal 9: blockAddress(address) -> the start of the range containing it.
+[[nodiscard]] int blockAddress(uint32_t address) {
+    if (const Block *block = blockContaining(address); block != nullptr) {
+        return static_cast<int>(block->start);
+    }
+    const Gap gap = gapContaining(address);
+    if (gap.end == 0) {
+        return -1;
+    }
+    return static_cast<int>(gap.start | kFreeMark);
+}
+
+// Ordinal 10: blockSize(address) -> the size in bytes of that same range.
 [[nodiscard]] int blockSize(uint32_t address) {
-    if (low_last != 0 && address >= low_last
-        && address < low_last + low_last_size) {
-        return static_cast<int>(low_last_size);
+    if (const Block *block = blockContaining(address); block != nullptr) {
+        return static_cast<int>(block->size);
     }
-    if (high_last != 0 && address >= high_last && address < high_last_end) {
-        return static_cast<int>(high_last_end - high_last);
+    const Gap gap = gapContaining(address);
+    if (gap.end == 0) {
+        return -1;
     }
-    return -1;
+    return static_cast<int>((gap.end - gap.start) | kFreeMark);
 }
 
 // Ordinal 5: release(address) -> 0, or -1.
 //
-// A pair of bump cursors can give back only what each end handed out last.
-// Saying so is better than accepting every address and leaking: a caller that
-// frees out of order finds out at once rather than exhausting the heap later.
+// The address must be the block's own start, aligned: the reference matches a
+// record's start exactly rather than looking for the range the address falls
+// in, so a pointer into the middle of a block is an error and not a release
+// of the block around it.
 [[nodiscard]] int deallocate(uint32_t address) {
-    if (low_last != 0 && address == low_last) {
-        low_cursor = low_last;
-        low_last = 0;
-        return 0;
+    if ((address & (kAlignment - 1)) != 0) {
+        return -1;
     }
-    if (high_last != 0 && address == high_last) {
-        high_cursor = high_last_end;
-        high_last = 0;
+    for (uint32_t i = 0; i < block_count; ++i) {
+        if (blocks[i].start != address) {
+            continue;
+        }
+        for (uint32_t j = i; j + 1 < block_count; ++j) {
+            blocks[j] = blocks[j + 1];
+        }
+        --block_count;
         return 0;
     }
     return -1;
@@ -205,8 +312,8 @@ static_assert(offsetof(ExportTable, entries) == 0x14);
         reinterpret_cast<int (*)(uint32_t)>(memSize),      // 6  memory size
         unimplemented,                  // 7
         unimplemented,                  // 8
-        unimplemented,                  // 9
-        reinterpret_cast<int (*)(uint32_t)>(blockSize),    // 10 block size
+        blockAddress,                   // 9  block start
+        blockSize,                      // 10 block size
         reservedHook,                   // 11 reserved (IRX-6a)
         reservedHook,                   // 12 reserved
         reservedHook,                   // 13 reserved
@@ -237,10 +344,11 @@ extern "C" {
 int _module_start(int ram_size_byte, char **) {
     const auto ram_top = static_cast<uint32_t>(ram_size_byte) & ~uint32_t{0xFF};
     ram_size = ram_top != 0 ? ram_top : kDefaultRamSize;
-    low_cursor = kHeapStart;
-    high_cursor = ram_top != 0 && ram_top < kHeapEnd ? ram_top : kHeapEnd;
-    low_last = 0;
-    high_last = 0;
+    heap_high = ram_top != 0 && ram_top < kHeapEnd ? ram_top : kHeapEnd;
+    // IRX-15e: a heap narrower than one unit leaves the module uninitialised,
+    // which every ordinal reads off `heap_low` being zero.
+    heap_low = heap_high >= kHeapStart + kAlignment ? kHeapStart : 0;
+    block_count = 0;
     return 0;                          // resident, and no placement to offer
 }
 

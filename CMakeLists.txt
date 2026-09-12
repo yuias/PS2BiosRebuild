@@ -329,6 +329,11 @@ add_custom_target(check
     # sitting in the image untried.
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/scmdcheck.py" "${PS2_IMAGE}"
+    # IRX-15b's mode 2 and the block queries: the boot allocates and releases
+    # constantly but never names an address and never asks about one it did
+    # not just receive, so those paths need calling directly too.
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/memcheck.py" "${PS2_IMAGE}"
     DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")
