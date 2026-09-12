@@ -26,6 +26,10 @@ struct Reply {
     uint8_t pad[2];
 };
 static_assert(sizeof(Reply) == 40);
+// This is a DMA destination and `request` is the next object along, so the
+// two sizes have to move together: the service will fill as many blocks as
+// the session was opened for.
+static_assert(sizeof(Reply) >= 8 + kBlocks * kBlockBytes);
 
 alignas(16) Reply reply;
 alignas(16) uint32_t request[4];

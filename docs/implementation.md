@@ -1025,11 +1025,15 @@ Three things in it are deliberate rather than obvious:
   looks wrong is almost always the gate rather than the index -- so the line
   says `(5-bit)` or `(1-bit)` rather than leaving the reader to guess.
 
-Both emulators were made to answer with different records: PS2e reads
+**The two emulators are the gate here, not `ninja -C build check`.** The
+simulators that judge the image model no mechacon, so nothing in `check`
+executes this path at all -- the same standing IOP-3 to IOP-6 have. What was
+run instead: both emulators, answering with *different* records. PS2e reads
 `<bios>.nvm`, so a block written by hand there comes back as `German (5-bit)`,
 `UTC+5:00`, `12-hour`, configured; PCSX2's own NVM carries its factory-default
-Japanese, unconfigured block and reads back as that. The decode was checked
-against both generations of the gate.
+Japanese, unconfigured block and reads back as that. That covers both
+generations of IOP-13g1's gate, and `ps2e --screenshot` is what shows the
+three lines actually reaching the raster.
 
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's

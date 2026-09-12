@@ -1583,6 +1583,13 @@ module's id, and `SIO2MAN` reaches IOP-6c's parked state. The simulators
 cannot judge these — `tools/eesim.py` delivers no EE interrupt — so the two
 emulators are the gate.
 
+**IOP-13's configuration session has no simulator gate either**, for the same
+reason and one more: `tools/fsvcheck.py` judges the IOP half against a
+modelled mechacon, but the EE half -- a program binding `0x80000593` and
+decoding IOP-13g's record -- needs a machine with both processors and an
+NVRAM. The two emulators are it, and they answer with different records,
+which is what covers IOP-13g1's gate in both directions.
+
 **The gate that matters is the M1 pull**, `docs/project-state.md` §6: an
 independently-built program, run under the PS2SDK toolchain, calls
 `SifInitRpc` and `SifLoadModule("rom0:SIO2MAN")` and prints its own final

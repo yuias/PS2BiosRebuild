@@ -41,8 +41,12 @@ struct Record {
 
     int32_t timezone_minutes;           // IOP-13g, the hour of +2 bit 3 folded in
     bool clock_12_hour;
-    bool kernel_bit;                    // IOP-13g's +0 bit 3, EE syscall 0x4f's
-    uint32_t unsettled;                 // the nine-bit field with no name yet
+    // Decoded and carried, but nothing reads either yet: `kernel_bit` is the
+    // argument EE syscall `0x4f` takes (IOP-13g), and no part of this program
+    // calls that slot; the nine-bit field has no name in the analysis at all.
+    // They are here so that the decode is complete rather than partial.
+    bool kernel_bit;
+    uint32_t unsettled;
 
     uint8_t raw[kBlocks * kBlockBytes];
 };
