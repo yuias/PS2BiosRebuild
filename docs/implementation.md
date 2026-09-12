@@ -153,6 +153,54 @@ The screen is additive. Every console line the boot printed before still
 prints, in the same order and with the same bytes, and the version line is one
 string fed to both.
 
+**The controller is the first thing in this program that waits for a
+person.** `src/iop/padman.cpp` and `src/ee/pad.cpp` are the two halves of
+`spec/06` IOP-14, and four decisions in them were open:
+
+- **Two threads, where the reference has ten.** IOP-14h says what is pinned:
+  the frames on the wire, the once-a-blank cadence, and the record. The
+  reference reaches that with four module-wide threads and six more per open
+  port, each thread being one state of a machine. Here the machine is a switch
+  in the one thread that drives the frame, with a second serving the RPC. The
+  analysis describes the topology in enough detail to copy, which is the
+  reason not to: it would be structure reproduced for its own sake.
+- **The two IOP modules are loaded by the program, not put on the boot list.**
+  The reference's shell reaches a controller by rebooting the IOP against a
+  different archive whose boot list carries the peripheral set. Ours asks the
+  module loader for `rom0:SIO2MAN` and then `rom0:PADMAN`, in that order --
+  which is what any program does, leaves the boot list at the shape the
+  reference's own has, and keeps the serial module's load-on-request path the
+  way the standalone test program exercises it. Loading them the other way
+  round would leave the driver's imports unbound and, per IRX-9, quiet.
+- **Every read of the record goes through the uncached alias, and so does the
+  one write.** The driver writes it from the other processor and this program
+  never does, so a data-cache line filled once would answer with the same
+  buttons for ever. The write matters as much: zeroing the area through the
+  cached address leaves dirty lines over the driver's own transfer target,
+  and their eviction lands on whatever arrived since. Neither emulator models
+  a write-back data cache, so both of those pass on an emulator and fail on a
+  machine.
+- **A frame of latency is in the design, not a defect.** The record is pushed
+  after the serial exchange the same blank began, so a program waking on the
+  blank reads the one before it. At sixty a second that is invisible, and
+  removing it would mean the program waiting on the driver rather than on the
+  raster.
+
+**Both emulators run the driver; only one carries its transfers.** On PS2e a
+button held over a cycle range arrives by name, singly and in combination, on
+the console and on the screen. On PCSX2 the two modules load, the driver comes
+up and pushes a record every blank -- the frame counter advances -- but every
+serial exchange comes back empty, with the status word reading zero and the
+control register's start bit **never reading back clear**. The command bytes
+this driver writes one at a time into the data register do not reach the
+transfer. That path has no other user: the reference's own shell drives the
+serial interface through its newer module, which delivers command bytes by
+DMA instead, so nothing before this had asked PCSX2 to carry the register
+path. What it means here is that the controller is gated on PS2e alone, and
+the console line says which of the three silences it is -- no record at all,
+records with nothing answering, or a handshake stuck partway -- so the
+distinction is visible rather than guessed at.
+
 **Pacing is a poll on the GS's own status word, not an interrupt.** A program
 that redraws in a loop has to wait for the raster, and `waitVsync` does it by
 clearing the vertical-blank flag in `GS_CSR` and spinning until the hardware
