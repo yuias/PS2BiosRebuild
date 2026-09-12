@@ -164,11 +164,18 @@ def checkArchive(image: pathlib.Path) -> tuple[list[str], list[str]]:
     return problems, names
 
 
-def moduleFromImage(image: pathlib.Path, name: str) -> irxinfo.Irx:
-    """A module as the archive stores it, which is what the loader reads."""
+def moduleFromImage(image: pathlib.Path, name: str) -> irxinfo.Irx | None:
+    """A module as the archive stores it, which is what the loader reads.
+
+    `None` when the archive has no such entry, which is a problem for the
+    caller to report rather than an error here: the boot list is a list of
+    names and nothing makes the archive carry one.
+    """
     data = image.read_bytes()
     entries = romdir.parseEntries(data, romdir.findTable(data))
-    entry = next(e for e in entries if e.name == name)
+    entry = next((e for e in entries if e.name == name), None)
+    if entry is None:
+        return None
     return irxinfo.Irx.fromBytes(
         data[entry.offset:entry.offset + entry.size], name)
 
@@ -177,8 +184,16 @@ def checkModules(image: pathlib.Path) -> list[str]:
     """Each built module against the checker the reference's modules pass."""
     problems = []
     for name in bootListModules(image):
-        problems += [f"{name}: {problem}" for problem
-                     in irxinfo.checkModule(moduleFromImage(image, name))]
+        module = moduleFromImage(image, name)
+        if module is None:
+            # Worth its own line rather than a traceback: the boot stops dead
+            # at a name the archive does not carry, before any module has
+            # registered, and nothing in the console output says which name.
+            problems.append(f"{name}: named by the boot list, but the archive "
+                            f"has no such entry")
+            continue
+        problems += [f"{name}: {problem}"
+                     for problem in irxinfo.checkModule(module)]
     return problems
 
 
