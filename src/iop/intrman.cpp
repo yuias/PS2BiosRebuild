@@ -39,6 +39,10 @@ constexpr uint32_t kDmaFirst = 0x20;            // bank 1: 0x20..0x26
 constexpr uint32_t kDmaSecondBank = 0x28;       // bank 2: 0x28..0x2D
 constexpr uint32_t kDmaMaster = 1u << 23;       // DICR's master enable
 constexpr uint32_t kDicrFlags = 0x7F000000;     // write 1 to clear
+// IOP-2h1: the force condition, and the table slot in the gap between the two
+// banks' ranges that the dispatcher calls for it.
+constexpr uint32_t kDmaForce = 1u << 15;
+constexpr uint32_t kDmaForceIrq = 0x27;
 
 // IOP-2c: `EnableIntr`/`DisableIntr` take the line in the **low byte** and
 // read the rest as flags. The reference masks with `0xFF` before it compares
@@ -390,8 +394,12 @@ int enableDispatchIntr(uint32_t irq) {
 // not to the hardware: a gated channel's flag stays set and is served once
 // the gate opens again, which is what the reference's AND-then-shift does.
 // Bank 1 has seven channels, bank 2 six (IOP-2i).
+[[nodiscard]] uint32_t bankFlags(uintptr_t dicr, uint32_t channels, uint32_t gate) {
+    return ((readWord(dicr) & gate) >> 24) & ((1u << channels) - 1);
+}
+
 void serveBank(uintptr_t dicr, uint32_t first_irq, uint32_t channels, uint32_t gate) {
-    const uint32_t flags = ((readWord(dicr) & gate) >> 24) & 0x7F;
+    const uint32_t flags = bankFlags(dicr, channels, gate);
     for (uint32_t channel = 0; channel < channels; channel++) {
         const uint32_t bit = 1u << channel;
         if ((flags & bit) == 0) {
@@ -404,9 +412,40 @@ void serveBank(uintptr_t dicr, uint32_t first_irq, uint32_t channels, uint32_t g
     }
 }
 
+// IOP-2h2: round again until neither bank has a masked flag and the force bit
+// is clear, so a channel that re-asserts while a sibling's handler runs is
+// served here rather than at the next hardware edge. Only flags the shadow
+// mask lets through count as pending, which is what keeps a gated channel
+// from holding the loop for ever.
 int dmaDispatch(void *) {
-    serveBank(kDicr, kDmaFirst, 7, bank_dispatch_mask[0]);
-    serveBank(kDicr2, kDmaSecondBank, 6, bank_dispatch_mask[1]);
+    for (;;) {
+        const uint32_t bank1_word = readWord(kDicr) & bank_dispatch_mask[0];
+        const uint32_t bank1 = (bank1_word >> 24) & 0x7F;
+        const uint32_t bank2 = bankFlags(kDicr2, 6, bank_dispatch_mask[1]);
+        const uint32_t force = bank1_word & kDmaForce;
+        if ((bank1 | bank2 | force) == 0) {
+            break;
+        }
+        if (force != 0) {
+            // IOP-2h1: clear bit 15 with zeroes in the acknowledge bits, so
+            // no channel's flag is lost with it, then call the slot between
+            // the banks. Nothing here registers one, and the reference's own
+            // archive does not either.
+            writeWord(kDicr, readWord(kDicr) & kDicrWritable & ~kDmaForce);
+            (void)callRegistered(kDmaForceIrq);
+        }
+        serveBank(kDicr, kDmaFirst, 7, bank_dispatch_mask[0]);
+        serveBank(kDicr2, kDmaSecondBank, 6, bank_dispatch_mask[1]);
+    }
+
+    // IOP-2h3: pulse the master enable. Every acknowledge above writes the
+    // whole register, and a master enable one of them dropped would stop
+    // every later DMA interrupt with nothing else to show for it. The wait is
+    // for this handler's own clear to read back, not for a flag to drain.
+    writeWord(kDicr, readWord(kDicr) & kDicrWritable & ~kDmaMaster);
+    while ((readWord(kDicr) & kDmaMaster) != 0) {
+    }
+    writeWord(kDicr, (readWord(kDicr) & kDicrWritable) | kDmaMaster);
     return 1;                                   // IOP-2h: the line stays open
 }
 

@@ -922,6 +922,18 @@ before the last chunk is transferred, which hardware cannot do) is what puts
 the driver on that path in the first place, and the reference kernel
 survives it for this reason.
 
+**And it repeats until nothing is pending, then pulses the master enable.**
+IOP-2h2 and IOP-2h3: a channel whose flag comes back while a sibling's handler
+is still running is served before this dispatch returns, and the return path
+writes `DICR` bit 23 off, waits for that to read back, and writes it on again.
+The wait is for the handler's own clear to become visible, not for a flag to
+drain, so a channel nobody serves cannot stall inside an interrupt -- but the
+distinction only holds because the mask really is bit 23. `docs/analysis/37`
+§3.4 had it as bit 31, the read-only OR-of-flags bit, which no emulator here
+sets and which a gated flag would hold set for ever; the correction is in that
+document now. The force bit of IOP-2h1 is cleared on the way past and its
+`table[0x27]` is called, which nothing registers here or in the reference.
+
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
 `Status`, and both reference builds do it unmasked, so a caller that passes
