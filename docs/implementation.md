@@ -201,6 +201,42 @@ the console line says which of the three silences it is -- no record at all,
 records with nothing answering, or a handshake stuck partway -- so the
 distinction is visible rather than guessed at.
 
+**The screen with no disc in the drive is a menu now.** Three entries, one of
+which does something: start what is in the drive, show what this build is,
+read the machine's settings again. That is deliberately short. A browser and a
+configuration screen are what the reference has there, and there is nothing
+behind either of them in this image, so an entry for one would be a label with
+no program under it. The wording and the layout are ours, not the reference's
+(`docs/clean-room-policy.md` §3), and like the rest of the screen they answer
+to no numbered requirement -- `spec/06` says what the controller driver must
+do, and what a rebuild's own shell puts on its own screen is not that.
+
+- **Edges, not levels.** A button held across several frames moves the cursor
+  once, which is also what makes a test deterministic: a hold spanning four
+  frames is one movement whatever the pacing does. No auto-repeat.
+- **Edges are only taken from a controller that answered.** A controller
+  partway through its handshake reports no buttons at all rather than none
+  held, and the menu ignores it, so nothing can be started by a driver that
+  has not finished coming up.
+- **The cursor wraps** at both ends rather than stopping. Three entries is
+  short enough that a wrap is never disorienting, and clamping would need the
+  player to know which end they were at.
+- **The screen is redrawn when something moved, not every frame.** A redraw is
+  a transfer per band; sixty a second for an unchanged picture is the cost of
+  a loop that does not check. The one exception is the controller's own row
+  while nothing is answering, which carries a counter and is rate-limited to
+  roughly once a second.
+
+**Extracting the disc boot so the menu could call it again found a real bug.**
+The client keeps exactly one server bound, and bringing the controller up
+binds the module loader and then the pad service over the file service. The
+second boot attempt therefore put its open request to the pad service, whose
+dispatcher answers every code by returning the buffer -- and the word the
+client read back as a file descriptor was non-negative, so the attempt went on
+to fail at the next step with a message about the boot record instead of one
+about the drive. Every attempt now binds what it needs. Nothing else in this
+program called twice, which is why it had not shown up.
+
 **Pacing is a poll on the GS's own status word, not an interrupt.** A program
 that redraws in a loop has to wait for the raster, and `waitVsync` does it by
 clearing the vertical-blank flag in `GS_CSR` and spinning until the hardware
