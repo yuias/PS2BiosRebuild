@@ -979,6 +979,29 @@ What is reproduced is BOOT-8b's behaviour -- the line is chosen from boot
 record key 4 -- and a mode the module does not recognise prints as its number
 rather than being folded into the cold-boot wording.
 
+**`CDVDFSV` forwards the configuration session now, and it is the only way
+the EE can reach it.** `CDVDMAN`'s ordinals 26, 27 and 31 to 34 were built and
+nothing called them: an EE client reaches only what this service forwards, and
+this service forwarded three entry points, none of them those. It now serves
+`fno` 8, 9, 14, 15, 16 and 17 to IOP-13e and IOP-13e1's layouts.
+
+Two of those layouts are worth stating twice, because both are the kind that
+answers plausible nonsense rather than failing. `open`'s single request word
+holds the mechacon's own reversed argument order -- byte 0 is the ordinal's
+*second* argument -- so unpacking it in the obvious order opens the session on
+a different record and reports success. And the two groups answer in different
+shapes: the configuration quartet puts the `status` word at `+0x4` and the
+read's blocks at `+0x8`, while the NVM pair copies the request's first two
+words back and leaves the data at `+0x8` with the status in its bit 16. A
+rebuild that serves all six through one helper has one group reading the other
+group's field.
+
+`tools/fsvcheck.py` is the gate, and it needs one thing `tools/scmdcheck.py`
+does not: `SIFMAN`'s entry spins until the EE raises `SIF_STAT_SIFINIT`, so
+under a simulator with no EE the boot stops four modules short of `CDVDFSV`.
+The checker's bus answers that one bit and nothing else, which is enough to
+walk the whole boot list and no more than a dispatcher test needs.
+
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
 `Status`, and both reference builds do it unmasked, so a caller that passes

@@ -344,6 +344,11 @@ add_custom_target(check
     # generation built by hand and handed to the registration ordinal.
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/libcheck.py" "${PS2_IMAGE}"
+    # IOP-13: the EE-facing CDVD service. Our own OSD binds one of its five
+    # ids and calls no numbered entry point, so the six that carry the
+    # configuration record and the NVM have no other witness.
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/fsvcheck.py" "${PS2_IMAGE}"
     DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")

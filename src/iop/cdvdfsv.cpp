@@ -19,7 +19,7 @@
 //
 //   0x80000592  init. Not fno-switched (§5a): the dispatcher never reads fno.
 //               It calls sceCdInit with the request's first word. Served.
-//   0x80000593  the 25-fno table (§5). The fnos that are one CDVDMAN ordinal
+//   0x80000593  the 25-fno table (IOP-13b). The fnos that are one CDVDMAN ordinal
 //               each, and whose ordinal this project's CDVDMAN implements,
 //               are served; the rest answer zeroes. fno 22 is the
 //               reference's own multi-way dispatcher and its sub-opcode
@@ -115,16 +115,28 @@ int _import_cdvdman_search_file(void *file, const char *name);
 int _import_cdvdman_get_error();
 int _import_cdvdman_get_disk_type();
 int _import_cdvdman_status();
+int _import_cdvdman_read_nvm(uint32_t address, uint16_t *data, uint8_t *status);
+int _import_cdvdman_write_nvm(uint32_t address, uint16_t data, uint8_t *status);
+int _import_cdvdman_open_config(uint32_t a, uint32_t b, uint32_t count,
+                                uint32_t *status);
+int _import_cdvdman_close_config(uint32_t *status);
+int _import_cdvdman_read_config(uint8_t *buffer, uint32_t *status);
+int _import_cdvdman_write_config(const uint8_t *buffer, uint32_t *status);
 }
 
 [[nodiscard]] uint8_t readStatus() {
     return *reinterpret_cast<volatile uint8_t *>(kNStatus);
 }
 
-// §5c: every service answers through one small fixed cell of its own, so
-// they are grouped rather than sized per fno. The largest single reply named
-// in §5 is the OSD configuration quartet's 16-byte block.
-constexpr uint32_t kReplyBytes = 0x40;
+// IOP-13c: every service answers through one fixed area of its own, so they
+// are grouped rather than sized per fno. The largest single reply is the
+// configuration read's `8 + 15 * count`; `count` is the caller's, and this
+// bound is what a request for more than eight blocks is refused against.
+constexpr uint32_t kConfigBlockBytes = 15;      // IOP-8k: what leaves CDVDMAN
+constexpr uint32_t kConfigHeaderBytes = 8;      // IOP-13c: return, then status
+constexpr uint32_t kReplyBytes = 0x80;
+constexpr uint32_t kConfigBlocksMax =
+    (kReplyBytes - kConfigHeaderBytes) / kConfigBlockBytes;
 
 // §5e: the request-buffer sizes are the reference's own `.bss` gaps.
 constexpr uint32_t kRequestInit = 0x10;
@@ -197,13 +209,48 @@ void *serveInit(uint32_t, void *buffer, uint32_t size) {
 constexpr uint32_t kMainFnoCount = 25;
 constexpr uint32_t kFnoGetDiskType = 3;         // sceCdGetDiskType, ordinal 12
 constexpr uint32_t kFnoGetError = 4;            // sceCdGetError, ordinal 8
+constexpr uint32_t kFnoReadNvm = 8;             // ordinal 26
+constexpr uint32_t kFnoWriteNvm = 9;            // ordinal 27
 constexpr uint32_t kFnoStatus = 12;             // sceCdStatus, ordinal 28
+constexpr uint32_t kFnoOpenConfig = 14;         // ordinal 31
+constexpr uint32_t kFnoCloseConfig = 15;        // ordinal 32
+constexpr uint32_t kFnoReadConfig = 16;         // ordinal 33
+constexpr uint32_t kFnoWriteConfig = 17;        // ordinal 34
 
-void *serveMain(uint32_t fno, void *, uint32_t) {
+// IOP-13e: how many blocks the session was opened for. The count belongs to
+// `CDVDMAN`, which keeps its own copy and is the one that enforces it; this
+// one exists only to size the read's reply, and is clamped on the way in so
+// that a request for more blocks than the reply area holds cannot walk off
+// the end of it.
+uint32_t config_blocks;
+
+// IOP-13e1: the NVM pair's out-pointers go **into the request buffer**, and
+// the reply carries the request's first two words back behind the return.
+// Nothing else in this table answers in that shape.
+void serveNvm(uint32_t fno, void *buffer, uint32_t size, uint32_t *reply) {
+    if (size < 8) {
+        return;                                 // no room for the out-params
+    }
+    auto *request = static_cast<uint8_t *>(buffer);
+    const uint32_t address = *reinterpret_cast<uint32_t *>(request);
+    auto *data = reinterpret_cast<uint16_t *>(request + 4);
+    auto *status = request + 6;
+    const int result = fno == kFnoReadNvm
+        ? _import_cdvdman_read_nvm(address, data, status)
+        : _import_cdvdman_write_nvm(address, *data, status);
+    reply[0] = static_cast<uint32_t>(result);
+    reply[1] = *reinterpret_cast<uint32_t *>(request);
+    reply[2] = *reinterpret_cast<uint32_t *>(request + 4);
+}
+
+void *serveMain(uint32_t fno, void *buffer, uint32_t size) {
     uint32_t *reply = main_service.cleared();
     if (!inTable(fno, kMainFnoCount)) {
-        return reply;                           // §5b: acknowledged no-op
+        return reply;                           // IOP-13b: acknowledged no-op
     }
+    // IOP-13c: the shared shape -- the ordinal's return at +0x0, the `status`
+    // word it filled at +0x4, and a payload after that where there is one.
+    auto *status = &reply[1];
     switch (fno) {
     case kFnoGetDiskType:
         reply[0] = static_cast<uint32_t>(_import_cdvdman_get_disk_type());
@@ -213,6 +260,38 @@ void *serveMain(uint32_t fno, void *, uint32_t) {
         break;
     case kFnoStatus:
         reply[0] = static_cast<uint32_t>(_import_cdvdman_status());
+        break;
+    case kFnoReadNvm:
+    case kFnoWriteNvm:
+        serveNvm(fno, buffer, size, reply);
+        break;
+    case kFnoOpenConfig: {
+        // IOP-13e: one word, and its byte order is the wire's own -- byte 0
+        // is the ordinal's *second* argument. Unpacking it the obvious way
+        // opens the session on the wrong record, with no error anywhere.
+        const uint32_t packed =
+            size >= 4 ? static_cast<const uint32_t *>(buffer)[0] : 0;
+        const uint32_t count = (packed >> 16) & 0xFF;
+        config_blocks = count < kConfigBlocksMax ? count : kConfigBlocksMax;
+        reply[0] = static_cast<uint32_t>(_import_cdvdman_open_config(
+            (packed >> 8) & 0xFF, packed & 0xFF, count, status));
+        break;
+    }
+    case kFnoCloseConfig:
+        config_blocks = 0;
+        reply[0] = static_cast<uint32_t>(_import_cdvdman_close_config(status));
+        break;
+    case kFnoReadConfig:
+        // The blocks land in the reply itself, at +0x8. The request is not
+        // read at all -- the count came from the open.
+        reply[0] = static_cast<uint32_t>(_import_cdvdman_read_config(
+            reinterpret_cast<uint8_t *>(&reply[2]), status));
+        break;
+    case kFnoWriteConfig:
+        if (size >= config_blocks * kConfigBlockBytes) {
+            reply[0] = static_cast<uint32_t>(_import_cdvdman_write_config(
+                static_cast<const uint8_t *>(buffer), status));
+        }
         break;
     default:
         break;                                  // zeroes, until §9 is closed
@@ -352,6 +431,12 @@ PS2_IMPORT(_import_cdvdman_get_error, 8)
 PS2_IMPORT(_import_cdvdman_search_file, 10)
 PS2_IMPORT(_import_cdvdman_get_disk_type, 12)
 PS2_IMPORT(_import_cdvdman_status, 28)
+PS2_IMPORT(_import_cdvdman_read_nvm, 26)
+PS2_IMPORT(_import_cdvdman_write_nvm, 27)
+PS2_IMPORT(_import_cdvdman_open_config, 31)
+PS2_IMPORT(_import_cdvdman_close_config, 32)
+PS2_IMPORT(_import_cdvdman_read_config, 33)
+PS2_IMPORT(_import_cdvdman_write_config, 34)
 PS2_IMPORTS_END()
 
 extern "C" {
