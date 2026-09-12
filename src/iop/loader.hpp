@@ -315,9 +315,19 @@ struct Placed {
     return placed;
 }
 
+// IRX-11: an export table's `+0x4` heads a list of the import tables bound
+// against it, chained through each importer's own `+0x4`. Supersession is
+// what reads it, so the list has to be built at every bind or a later
+// registration finds nothing to move across.
+inline constexpr uint32_t kClientLink = 4;
+
 // IRX-9: bind every import table found between the two addresses. An
 // unresolved import is left as it is: IRX-8a makes an unbound stub return
 // harmlessly rather than fail the boot.
+//
+// Rewriting the stubs is all this does; joining the importer to the
+// exporter's client list is the caller's, because the re-bind supersession
+// performs moves the client itself and must not push it twice.
 static void bindTable(uint8_t *import_table, const uint8_t *export_table) {
     // Step 1: count the exporter's entries to the zero terminator.
     const uint8_t *export_entries = export_table + kTableHeader;
@@ -381,6 +391,8 @@ static uint32_t bind(uint8_t *start, uint8_t *end) {
             continue;                          // nothing exports it yet
         }
         bindTable(at, exporter);
+        poke32(at + kClientLink, peek32(exporter + kClientLink));
+        poke32(exporter + kClientLink, reinterpret_cast<uint32_t>(at));
     }
     return unbound;
 }

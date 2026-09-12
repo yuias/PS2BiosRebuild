@@ -518,6 +518,18 @@ an address other than a block it has just been given, so `tools/memcheck.py`
 boots the image and calls them directly -- the same treatment `tools/scmdcheck.py`
 gives the mechacon ordinals, and for the same reason.
 
+**Supersession moves clients, and this image never exercises it.** IRX-11's
+client list is built at every bind -- `src/iop/loader.hpp` pushes each import
+table it binds onto the exporter's `+0x4`, which both the boot block's binder
+and `LOADCORE`'s go through -- and `registerVersioned` walks the whole registry
+taking the unpinned clients of every older generation it finds. But nothing in
+this archive publishes a second generation of a library something has already
+bound to: the reference's `SYSCLIB` lowers its own `stdio` to 1.01 so that
+`STDIO`'s 1.02 supersedes it, and ours exports no `stdio` at all, so no module
+here ever binds to a table that is later replaced. `tools/libcheck.py` builds
+that second generation by hand and hands it to the registration ordinal,
+because a rebuild otherwise ships the path untried.
+
 **And its heap starts above the whole boot image, not above `SYSMEM`.**
 IRX-15e's low bound is the end of `SYSMEM`'s own image, which works on the
 reference because every module after it is *allocated* out of the heap. The

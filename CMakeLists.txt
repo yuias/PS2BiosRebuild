@@ -334,6 +334,11 @@ add_custom_target(check
     # not just receive, so those paths need calling directly too.
     COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/memcheck.py" "${PS2_IMAGE}"
+    # IRX-11: nothing in this image publishes a second generation of a library
+    # something has already bound to, so supersession needs a second
+    # generation built by hand and handed to the registration ordinal.
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/libcheck.py" "${PS2_IMAGE}"
     DEPENDS "${PS2_IMAGE}" reset.elf excepman.elf intrman.elf
     USES_TERMINAL
     COMMENT "Judging the image against docs/spec/")

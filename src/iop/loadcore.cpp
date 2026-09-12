@@ -84,6 +84,62 @@ static_assert(sizeof(LibraryTable) == 0x14);
     return 0;
 }
 
+// IRX-11: an import table's `+0x4` is its link in the exporter's client list,
+// and its flags halfword at `+0xA` says whether supersession may take it.
+constexpr uintptr_t kClientLink = 4;
+constexpr uintptr_t kClientFlags = 0xA;
+constexpr uint16_t kClientPinned = 1;
+
+[[nodiscard]] uint8_t *clientNext(uint8_t *client) {
+    return reinterpret_cast<uint8_t *>(
+        *reinterpret_cast<uint32_t *>(client + kClientLink));
+}
+
+void setClientNext(uint8_t *client, uint8_t *next) {
+    *reinterpret_cast<uint32_t *>(client + kClientLink) =
+        reinterpret_cast<uint32_t>(next);
+}
+
+// IRX-11: take the unpinned clients off `old` and return them as a list of
+// their own. Pinned ones (flags bit 0) are put back on `old` in the order
+// they were found, which is what the reference's tail pointer preserves.
+[[nodiscard]] uint8_t *detachUnpinnedClients(LibraryTable *old) {
+    auto *old_table = reinterpret_cast<uint8_t *>(old);
+    uint8_t *client = clientNext(old_table);
+    setClientNext(old_table, nullptr);
+
+    uint8_t *kept_tail = old_table;            // the head word is the first link
+    uint8_t *taken = nullptr;
+    while (client != nullptr) {
+        uint8_t *const next = clientNext(client);
+        const uint16_t flags =
+            *reinterpret_cast<uint16_t *>(client + kClientFlags);
+        if ((flags & kClientPinned) != 0) {
+            setClientNext(kept_tail, client);
+            setClientNext(client, nullptr);
+            kept_tail = client;
+        } else {
+            setClientNext(client, taken);      // a stack, as the reference's is
+            taken = client;
+        }
+        client = next;
+    }
+    return taken;
+}
+
+// IRX-11: re-bind each taken client against the new table and put it on the
+// new table's own client list.
+void adoptClients(LibraryTable *table, uint8_t *taken) {
+    auto *new_table = reinterpret_cast<uint8_t *>(table);
+    while (taken != nullptr) {
+        uint8_t *const next = clientNext(taken);
+        ps2::loader::bindTable(taken, new_table);
+        setClientNext(taken, clientNext(new_table));
+        setClientNext(new_table, taken);
+        taken = next;
+    }
+}
+
 // Ordinal 6: versioned registration (IRX-10a). A library's identity is its
 // tag and major version; the minor is a generation counter and only a
 // strictly greater one is allowed to take over.
@@ -102,6 +158,10 @@ static_assert(sizeof(LibraryTable) == 0x14);
     const auto major = static_cast<uint8_t>(table->version >> 8);
     const auto minor = static_cast<uint8_t>(table->version);
 
+    // The whole registry is walked, not just as far as the first match: a
+    // superseded table stays on it, so a third generation of the same library
+    // has two older ones to take clients from.
+    uint8_t *taken = nullptr;
     for (auto *walk = reinterpret_cast<LibraryTable *>(registryHead());
          walk != nullptr;
          walk = reinterpret_cast<LibraryTable *>(walk->link)) {
@@ -113,12 +173,24 @@ static_assert(sizeof(LibraryTable) == 0x14);
             continue;                   // same tag, different major: different library
         }
         // Same tag and major: the same library. Strictly greater supersedes;
-        // equal or lower is refused.
-        return static_cast<uint8_t>(walk->version) < minor
-                   ? registerAccept(table)
-                   : kErrorLibraryFound;
+        // equal or lower is refused -- and refused before anything has moved,
+        // so a refusal leaves the registry exactly as it was.
+        if (static_cast<uint8_t>(walk->version) >= minor) {
+            return kErrorLibraryFound;
+        }
+        uint8_t *const from_this = detachUnpinnedClients(walk);
+        for (uint8_t *last = from_this; last != nullptr;) {
+            uint8_t *const next = clientNext(last);
+            if (next == nullptr) {
+                setClientNext(last, taken);
+                taken = from_this;
+                break;
+            }
+            last = next;
+        }
     }
-    return registerAccept(table);       // nothing registered under this tag yet
+    adoptClients(table, taken);         // IRX-11, before the table is reachable
+    return registerAccept(table);
 }
 
 // Ordinal 10: pinned registration (IRX-10b). No comparison, and flags bit 0

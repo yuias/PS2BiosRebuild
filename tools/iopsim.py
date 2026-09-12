@@ -507,6 +507,37 @@ def checkBoot(bus: "Bus", exports: list, imports: list,
             f"stdio versions {[hex(v) for v in stdio]} != ['0x101', '0x102'] "
             f"-- the provisional stdio was not superseded")
 
+    # IRX-11: an exporter's `+0x4` heads the list of import tables bound
+    # against it, chained through each importer's own `+0x4`. So the client
+    # lists say, for every importer, which generation of a library it is
+    # actually calling -- and supersession is meaningful only if the clients
+    # of the provisional `stdio` are on the newer table by the end.
+    owner: dict[int, int] = {}
+    for at, tag, version, _flags in exports:
+        client = int.from_bytes(bus.ram[at + 4:at + 8], "little")
+        seen = 0
+        while client != 0 and seen <= len(imports):
+            owner[client] = at
+            client = int.from_bytes(bus.ram[client + 4:client + 8], "little")
+            seen += 1
+        require(seen <= len(imports), "IRX-11",
+                f"{tag} v{version:#x}'s client list does not terminate")
+
+    bound = [(at, tag) for at, tag, _, _, ok in imports if ok]
+    orphans = [(hex(at), tag) for at, tag in bound if at not in owner]
+    require(not orphans, "IRX-11",
+            f"{len(orphans)} bound import tables are on no exporter's client "
+            f"list, e.g. {orphans[:3]} -- the binder did not thread them")
+
+    stdio_tables = {at: version for at, tag, version, _ in exports
+                    if tag == "stdio"}
+    newest = max(stdio_tables, key=lambda at: stdio_tables[at], default=None)
+    stranded = [hex(at) for at, tag in bound
+                if tag == "stdio" and owner.get(at) != newest]
+    require(not stranded, "IRX-11",
+            f"stdio importers {stranded} are still on the superseded table -- "
+            f"supersession did not take its clients")
+
     # IRX-10b: the pin is set at run time, and only where it belongs.
     pinned = {tag for _, tag, _, flags in exports if flags & 1}
     require(pinned == PINNED_LIBRARIES, "IRX-10b",

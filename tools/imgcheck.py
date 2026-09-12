@@ -94,8 +94,6 @@ ENTERED_LINE = "EELOAD: entry "
 
 NOT_YET = (
     "the rest of the boot list: {built} of its twenty-nine modules are built",
-    "supersession (spec/02 IRX-11): registration compares versions, but "
-    "nothing yet inherits a superseded library's clients",
     # `{}` is filled in from the image's own table -- a hand-maintained count
     # is exactly the kind of thing that goes quietly stale.
     "{unserved} of the 125 syscall slots: they resolve to the reporter of "
