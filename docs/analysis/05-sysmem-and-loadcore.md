@@ -275,6 +275,47 @@ is not needed to reproduce the interface and is left to a later pass; the
 mode semantics and the `0x100` granularity are what a rebuild has to match,
 and the granularity is the same one IRX-12b's release rounding uses.
 
+The chain covers the *whole* heap: a node exists for a free range as much as
+for a block in use, and bit 0 is what tells them apart. That is why the list
+can be walked in address order and why a release has no separate free-space
+structure to update.
+
+### Mode 2 refuses rather than rounds, and so does a release
+
+```sh
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x604 0x680
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x86c 0x8d0
+```
+
+Mode 2 begins by testing the address's low byte and answering 0 the moment it
+is non-zero. It does not round the address down to the unit the way a size is
+rounded up. It then walks the chain for the node the requested range falls in
+and takes it only if that node is free and reaches the requested end -- so a
+range straddling two nodes, or overlapping a block in use, is refused.
+
+The release worker at `0x86c` is the same shape: an unaligned address is `-1`
+at once, and the walk that follows compares each node's **start** against the
+address, so a pointer into the middle of a block is an error rather than a
+release of the block around it. A node with a zero size is skipped.
+
+### Ordinals 9 and 10 are one lookup with two answers
+
+```sh
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0xb28 0xb90
+python3 tools/romdis.py <outdir>/SYSMEM.text --cpu iop --vma 0 --range 0x3a4 0x470
+```
+
+Both call the helper at `0xb28`, which walks the chain for the node whose
+range **contains** the address -- `start*0x100 <= address < (start+size)*0x100`
+-- and answers 0 when none does, which both ordinals turn into `-1`.
+
+Otherwise ordinal 9 returns the node's start and ordinal 10 its size, and both
+**set bit 31 of the answer when the node is free**. So the pair is a query over
+the whole heap rather than over allocated blocks only, and a caller can tell a
+free range from a block in use by the sign of what it gets back. `HEAPLIB`,
+the caller that matters, queries a chunk in the instruction after allocating
+it, so it always asks about a block in use and never sees the mark.
+
 ### `Kprintf` is a hook, not a printer (slots 14 and 15)
 
 Read because nearly every module in both the ROM and a title's own `IOPRP`
