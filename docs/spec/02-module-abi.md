@@ -359,6 +359,23 @@ exhausts the machine.
 **IRX-15d:** Allocation fails with 0 when the free space cannot hold the
 request. It must not fall back to another mode.
 
+**IRX-15f:** Mode 2 **refuses**, it does not correct. An address that is not
+on a `0x100` boundary is answered with 0 rather than rounded to one, and a
+range that is not wholly inside one free range -- straddling two, or
+overlapping a block in use -- is answered with 0 rather than moved. Ordinal 5
+refuses on the same terms: an unaligned address, or an address that is not a
+block's own start, is `-1` and not a release of the block the address falls in.
+
+**IRX-15g:** Ordinals 9 and 10 are one lookup with two answers. Both take an
+address and find the range **containing** it, in use or not, answering `-1`
+only when the address is outside the heap: 9 returns that range's start and 10
+its size. **Bit 31 of the answer is set when the range is free**, so a caller
+can tell a free range from a block in use by the sign of what it gets back.
+`HEAPLIB` queries a chunk in the instruction after allocating it, to find the
+rounding slack it may use, so it always asks about a block in use; a rebuild
+that answers only for a block's own start still satisfies that one caller and
+fails the moment anything asks about an address in the middle of one.
+
 **IRX-15e:** The heap is the machine's memory above the loaded kernel, bounded
 below by the end of the image the boot chain has placed and above by the RAM
 size the reset path latched (BOOT-4 step 5), each rounded to `0x100`. A heap
@@ -366,6 +383,14 @@ narrower than one unit leaves the allocator uninitialised, and every entry
 answers 0 until it is.
 
 ## Verification
+
+`tools/memcheck.py <image>` boots the image and calls `sysmem`'s allocator
+directly, because the boot exercises only part of it: modes 0 and 1 carry every
+module image and every raw file it is built from, but nothing in the image names
+an address for mode 2 and nothing asks ordinals 9 or 10 about an address other
+than a block it has just been given. It asserts IRX-15a's rounding, IRX-15b's
+three modes, IRX-15c's opposite ends, IRX-15d's refusal to fall back, IRX-15f's
+refusals and IRX-15g's containing lookup and free mark.
 
 `tools/irxinfo.py --check` asserts the mechanically checkable requirements
 against a module and exits non-zero on any failure: IRX-1's container shape,
