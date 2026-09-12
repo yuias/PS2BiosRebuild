@@ -636,8 +636,7 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
             reinterpret_cast<uint8_t *>(module_base),
             reinterpret_cast<uint8_t *>(module_base + loaded.text_size));
         // BOOT-8e: the answer is read twice. Its low two bits decide
-        // residency -- 1 asks to be unloaded, which a bump-placing loader
-        // cannot honour and records rather than acts on -- and everything
+        // residency (IRX-12a, where **set** asks to be freed) and everything
         // above them is a function pointer to run once the list is done.
         const uint32_t answer = ps2::loader::callEntry(
             loaded.entry, loaded.gp, 0, nullptr,
@@ -647,7 +646,16 @@ int _module_start(uint32_t boot_info_address, char **, int, uint32_t record) {
                 reinterpret_cast<void (*)()>(answer & ~uint32_t{3}), 2,
                 nullptr);
         }
-        running_record = loaded.next_base;
+        // A bump-placing loader frees a module by not advancing: the next one
+        // is placed over it. The reference releases the block to `sysmem`
+        // instead, which is the same outcome for a list walked in order --
+        // its heap top is where the next module would go either way. So the
+        // deviation costs nothing here, and `tools/iopsim.py`'s IRX-12a count
+        // stays at zero for us because it counts `sysmem` ordinal 5 calls and
+        // the boot list's modules never reach that ordinal at all.
+        if ((answer & 3) == 0) {
+            running_record = loaded.next_base;
+        }
     }
     bootListWord(kBlNext) = running_record;
 

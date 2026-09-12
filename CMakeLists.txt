@@ -161,6 +161,11 @@ ps2AddModule(romdrv MODULE ROM_File_Driver VERSION 1.00
 ps2AddModule(stdio MODULE Standard_IO VERSION 1.00
     SOURCES src/iop/stdio.cpp)
 # Ours, on neither reference boot list: see src/iop/ioptty.cpp.
+# IRX-13's one-shot shape: no exports, and an entry that returns non-resident.
+# The reference's own has an empty `.iopmod` name and version 0.00; ours keeps
+# a name so the archive's entry and its EXTINFO still agree (IRX-2a).
+ps2AddModule(igreeting MODULE Boot_Greeting VERSION 1.00
+    SOURCES src/iop/igreeting.cpp)
 ps2AddModule(ioptty MODULE IOP_tty_console VERSION 1.00
     SOURCES src/iop/ioptty.cpp)
 ps2AddModule(loadfile MODULE Load_Module_By_EE VERSION 1.00
