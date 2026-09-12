@@ -518,7 +518,7 @@ configuration quartet). Reading the remaining nineteen, and naming every
 | 14 | `0x3a88` | 31 | `sceCdOpenConfig` (`docs/analysis/26`/`27`) |
 | 15 | `0x3b20` | 32 | `sceCdCloseConfig` |
 | 16 | `0x3b94` | 33 | `sceCdReadConfig` |
-| 17 | `0x3c0c` | 34, 35 | `sceCdWriteConfig` + `sceCdReadKey` — needs re-verification, §9 |
+| 17 | `0x3c0c` | 34 | `sceCdWriteConfig`; layout in §5b1 |
 | 18 | `0x3654` | 41 | `sceCdReadConsoleID` |
 | 19 | `0x36a0` | 42 | `sceCdWriteConsoleID` |
 | 20 | `0x36f8` | 43 | `sceCdMV` |
@@ -532,8 +532,11 @@ Every `fno`'s trampoline sets a fixed `$6 = 0x5e08` scratch/context pointer
 before its wrapper call, and every wrapper converges on a shared epilogue at
 module offset `0x4494` — **one fixed reply context, not sized per `fno`**,
 structurally the same shape as `LOADFILE`'s fixed 8-byte answer area
-(`docs/analysis/39` §4), sized to the largest single reply this service
-needs (the OSD configuration quartet's 16-byte block, `docs/analysis/26`).
+(`docs/analysis/39` §4). An earlier draft here sized it to "the OSD
+configuration quartet's 16-byte block"; §5b1 below reads that quartet and
+finds it needs `8 + 15 * count` bytes — 38 for the two blocks the OSD asks
+for — so the 16 was wrong. The `.bss` gap after `0x5e08` runs to the `0x593`
+request buffer at `0x63a8`, `0x5a0` bytes, which is what actually bounds it.
 
 **The `fno` space is exactly 1..25, and an out-of-range `fno` is answered,
 not dropped.** The dispatch function's own bounds check is three
@@ -596,6 +599,68 @@ N-commands on the IOP side. **This is very likely the `fno` a title's
 through from the EE** — every ordinal a read-and-wait sequence needs is
 reachable from it — but its internal sub-opcode field was not decoded in this
 pass; see §9.
+
+### 5b1. The configuration quartet's request and reply layouts
+
+Read because nothing above says what any `fno` of this service puts in its
+buffers, and the four that carry the OSD's configuration record are the ones a
+rebuild needs first (`docs/analysis/27` §"the seven wrappers").
+
+```sh
+python3 tools/irxinfo.py <outdir>/CDVDFSV --dump-load <outdir>/CDVDFSV.load
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x3a88 0x3c8c
+python3 tools/romdis.py <outdir>/CDVDFSV.load --cpu iop --vma 0 --range 0x48a0 0x48c0
+```
+
+The dispatcher hands each wrapper `(request, size, reply)` in `$a0`-`$a2`, and
+the four wrappers are `fno` 14 → `0x3a88`, 15 → `0x3b20`, 16 → `0x3b94`,
+17 → `0x3c0c`. Their import stubs at `0x48a0`, `0x48a8`, `0x48b0` and `0x48b8`
+carry ordinals `0x1f`, `0x20`, `0x21`, `0x22` — `CDVDMAN` 31, 32, 33 and 34,
+one each.
+
+**`fno` 14, open the session.** One word of request, unpacked into three
+bytes:
+
+```
+3abc  lw   $2, 0x0($16)        # $16 = request
+3ac4  sra  $4, $2, 0x8  ; andi $4, 0xff     # -> ordinal 31's first argument
+3acc  andi $5, $2, 0xff                      # -> its second
+3ad0  sra  $2, $2, 0x10 ; andi $16, 0xff     # -> count
+3ac0  addiu $7, $17, 0x4       # $17 = reply; status out-pointer = reply + 4
+3ae4  sw   $6, 0x0($17)        # reply + 0 = what ordinal 31 returned
+```
+
+So the request is a single word: **byte 0 the second argument, byte 1 the
+first, byte 2 the block count**, which is the byte order `26`'s `[b, a, count]`
+wire already describes one layer down. The OSD's `open(1, 0, 2)` is therefore
+the word `0x00020100`.
+
+**`fno` 15, close.** Reads nothing from the request. `$a0` to ordinal 32 is
+`reply + 4`, and `reply + 0` takes the return.
+
+**`fno` 16, read the blocks.** Reads nothing from the request either, and the
+data comes back **inside the reply**:
+
+```
+3bc0  addiu $4, $16, 0x8       # ordinal 33's buffer = reply + 8
+3bc8  addiu $5, $16, 0x4       # its status out-pointer = reply + 4
+3bd0  sw   $5, 0x0($16)        # reply + 0 = blocks completed
+```
+
+`26` has 15 bytes leaving `CDVDMAN` per block, so the reply is `8 + 15 * count`
+bytes — 38 for the OSD's two blocks, which is where `27`'s "30 bytes" and
+`26`'s "15 per block" meet.
+
+**`fno` 17, write the blocks.** The data goes the other way, from the request
+buffer's own first byte: `$a0` to ordinal 34 is the request pointer unchanged,
+`$a1` is `reply + 4`, and `reply + 0` takes the return.
+
+**It does not call ordinal 35.** An earlier reading of this document had `fno`
+17 reaching `sceCdReadKey` as well; `0x3c0c` calls `0x48b8` and nothing else,
+and `0x48b8` is ordinal `0x22`. The claim is withdrawn.
+
+So all four share one reply shape — `+0` the ordinal's return, `+4` the
+`status` word it filled — and only 16 adds anything after it.
 
 ### 5c. `sid`s `0x80000597` and `0x8000059A`: search and disc-ready
 
@@ -781,7 +846,7 @@ own tools where possible, and marked accordingly:
 | IOP DMA ch3 (`0x1F8010B0`) drains the sector data and must be armed before the N-command, or `CDVDMAN` reads zeros | **Confirmed directly** — §3 step 4 shows exactly this ordering inside `sceCdRead` itself |
 | Drive status (`0x1F40200A`) must read `0x0A` (PAUSE) when idle with a disc; `sceCdDiskReady` "blocks on an event flag" until it matches | **Register and value confirmed**; **the "event flag" detail is corrected** — the blocking-mode path in this retail `CDVDMAN` is a bare register-polling spin loop (`lbu` from `0xBF40200A`, `bne`-loop), with no `WaitEventFlag`/semaphore call anywhere in the routine, §2b |
 | DEC-SET (`0x1F40203A`, IOP-writable) arms drive-side sector decryption; bit 0 XORs with disc-key byte 4, bit 1 rotates | **Not independently verified in this pass** — `sceCdDecSet` (ordinal 36, reachable as `sid 0x80000593` `fno 10`) exists and is exported/imported exactly where expected, but its body was not disassembled; the specific bit semantics are taken on the lead's authority only |
-| `N 0x0C` (`sceCdReadKey`) must return a real key, derived from the boot serial, or the OSD/boot rejects the disc; register banks `0x2020`–`0x2034` (XOR-obfuscated with `0x2039`) | **Not verified in this pass** — `sceCdReadKey` (ordinal 35) exists at the expected ordinal and is reachable, oddly, from the same `fno 17` wrapper as `sceCdWriteConfig` (§5, flagged for re-verification); the register-bank mechanism and key-derivation formula are taken on the lead's authority only. Per `docs/clean-room-policy.md` ("Trademarks and compatibility"), this is recorded as an interface a boot path needs to exist, not reproduced as a defeat mechanism |
+| `N 0x0C` (`sceCdReadKey`) must return a real key, derived from the boot serial, or the OSD/boot rejects the disc; register banks `0x2020`–`0x2034` (XOR-obfuscated with `0x2039`) | **Not verified in this pass** — `sceCdReadKey` (ordinal 35) exists at the expected ordinal, and §5b1 has since established that **no `fno` of this service reaches it** — the `fno 17` sighting was a misreading; the register-bank mechanism and key-derivation formula are taken on the lead's authority only. Per `docs/clean-room-policy.md` ("Trademarks and compatibility"), this is recorded as an interface a boot path needs to exist, not reproduced as a defeat mechanism |
 | The PS2 logo area (LSN 0–11) is stored encrypted; `cdvdman` writes `0x53` to `DEC-SET` before PS2LOGO's read and `0x00` after | **Not verified in this pass** — plausible given `sceCdDecSet`'s existence and position, not traced to a call site |
 | A second, interrupt-driven S-command engine exists in some `cdvdman` revisions, with a mailbox and a completion flag polled via `DelayThread` | **Explicitly does not apply to this image** — this retail `CDVDMAN`'s S-command sender (`docs/analysis/26`, `0x2b70`) is the plain FIFO-only, decline-on-busy design; the lead itself notes this is a *different* `cdvdman` revision from the one in this ROM |
 
@@ -842,12 +907,10 @@ own tools where possible, and marked accordingly:
   five helpers at `0x4d8`, `0x15ac`, `0xd8c`, `0x1d5c` and `0x273c` — their
   ordinal lists in §5d are from a bounded scan that did not reach `jr $ra`,
   so they may be missing late calls.
-- **`fno 17`'s apparent call to both ordinal 34 (`sceCdWriteConfig`) and
-  ordinal 35 (`sceCdReadKey`)** needs re-verification by direct disassembly
-  of module offset `0x3c0c` — as reported this looks like two unrelated
-  ordinals sharing one wrapper, which would be unusual against every other
-  `fno`'s one-wrapper-one-ordinal shape and may be a misreading of a shared
-  stub address.
+- ~~`fno 17`'s apparent call to both ordinal 34 and ordinal 35~~ — **closed
+  in §5b1**: `0x3c0c` calls the stub at `0x48b8`, which carries ordinal
+  `0x22`, and nothing else. It was a misreading, and the one-wrapper-one-
+  ordinal shape holds after all.
 - **The N-command opcode-selection table at `.data 0x5508`** (a 16-entry
   table of code addresses, reached from `sceCdRead`'s tail) was not traced
   entry by entry — only that it exists and is indexed by a value derived
