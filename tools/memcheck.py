@@ -122,6 +122,8 @@ def main() -> int:
            alloc(AT_ADDRESS, UNIT, low_two), 0)
     expect("an address below the heap is refused",
            alloc(AT_ADDRESS, UNIT, 0x1000), 0)
+    expect("an address above the heap is refused",
+           alloc(AT_ADDRESS, UNIT, 0x001F8000), 0)
 
     print("\nno mode falls back to another (IRX-15d):")
     expect("a request larger than the whole heap", alloc(LOWEST, 0x400000), 0)

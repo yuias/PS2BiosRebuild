@@ -170,8 +170,11 @@ int kprintfSet(KprintfHook hook, void *context) {
     if (mode == AtAddress) {
         // The reference refuses an unaligned address outright rather than
         // rounding it, and refuses a range that is not wholly free.
+        // `address >= heap_high` is tested before the subtraction below, which
+        // would otherwise wrap and let an address past the top of the heap
+        // through -- a grant over whatever lives above it.
         if ((address & (kAlignment - 1)) != 0 || address < heap_low
-            || rounded > heap_high - address) {
+            || address >= heap_high || rounded > heap_high - address) {
             return 0;
         }
         const uint32_t index = lowerBound(address);
