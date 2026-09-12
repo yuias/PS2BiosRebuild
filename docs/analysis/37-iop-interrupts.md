@@ -708,7 +708,23 @@ one index between bank 1's `0x20`–`0x26` and bank 2's `0x28`–`0x2d`.
 That explains §2.3's otherwise odd hole: `EnableIntr`/`DisableIntr` reject
 `irq == 0x27` on `INTRMANI` because it names no channel and has no enable bit
 of its own, while `RegisterIntrHandler` accepts it because the dispatcher
-reads exactly that slot. Nothing in the reference archive registers it.
+reads exactly that slot.
+
+`0x480` is an absolute low-RAM address, not a module-relative one, so the
+table can be read out of a boot directly — which confirms both the base and
+that the boot leaves the force slot empty:
+
+```sh
+python3 -c "import sys;sys.path.insert(0,'tools');import iopsim,pathlib; \
+bus=iopsim.Bus(pathlib.Path('assets/SCPH-50000.bin').read_bytes()); \
+cpu=iopsim.Cpu(bus); [cpu.step() for _ in range(20_000_000)]; \
+w=lambda a:int.from_bytes(bus.ram[a:a+4],'little'); \
+print([hex(i) for i in range(0x2e) if w(0x480+i*8)], hex(w(0x480+0x27*8)))"
+# ['0x0', '0x3', '0xb', '0x10', '0x2a'] 0x0
+```
+
+So after the reference's own boot the table carries five handlers and **slot
+`0x27` is null**. What a title's own modules do with it is not read here.
 
 ### 3.4.2 Every `DICR` access is bracketed by a gate on `0xBF801578`
 
@@ -724,10 +740,17 @@ nothing at all when the bit is clear:
 `0xBF801578` is one of the two unnamed registers §3.4's own address table
 lists beside `DPCR2`/`DICR2`. **Ordinal 27 (`0x8fc`) is what sets the gate
 word**: three instructions, `[internals + 0x15fc] = $a0`, and nothing else. So
-the gate is off until something calls ordinal 27, and nothing in the reference
-archive does — which is why a rebuild can leave the bracketing out and still
-match the reference's own behaviour on this image. What `0xBF801578` is, and
-whether either emulator models it, is not read here.
+the gate is off until something calls ordinal 27, and **no module in the
+reference archive imports that ordinal** — 61 modules scanned, none:
+
+```sh
+for f in <outdir>/*; do head -c4 "$f" | grep -q ELF || continue
+  python3 tools/irxinfo.py "$f" --imports; done   # no intrman ordinal 27
+```
+
+Which is why a rebuild can leave the bracketing out and still match the
+reference's own behaviour on this image. What `0xBF801578` is, and whether
+either emulator models it, is not read here.
 
 **Consequence: `IOP_IRQ_DMA_SIF0`/`SIF1` (irq `0x2a`/`0x2b` [header]) are live
 on the resident variant.** `irq=0x2a` is bank-2 channel `0x2a-0x28=2`;

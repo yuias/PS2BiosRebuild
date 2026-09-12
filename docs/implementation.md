@@ -941,7 +941,8 @@ distinction only holds because the mask really is bit 23. `docs/analysis/37`
 §3.4 had it as bit 31, the read-only OR-of-flags bit, which no emulator here
 sets and which a gated flag would hold set for ever; the correction is in that
 document now. The force bit of IOP-2h1 is cleared on the way past and its
-`table[0x27]` is called, which nothing registers here or in the reference.
+`table[0x27]` is called; nothing here registers that slot, and the reference's
+own boot leaves it null as well.
 
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's

@@ -430,7 +430,7 @@ int dmaDispatch(void *) {
             // IOP-2h1: clear bit 15 with zeroes in the acknowledge bits, so
             // no channel's flag is lost with it, then call the slot between
             // the banks. Nothing here registers one, and the reference's own
-            // archive does not either.
+            // boot leaves it null too (docs/analysis/37 §3.4.1).
             writeWord(kDicr, readWord(kDicr) & kDicrWritable & ~kDmaForce);
             (void)callRegistered(kDmaForceIrq);
         }
