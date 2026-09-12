@@ -28,6 +28,7 @@
 #include "build_stamp.h"
 #include "console.hpp"
 #include "config.hpp"
+#include "card.hpp"
 #include "pad.hpp"
 #include "display.hpp"
 #include "sifclient.hpp"
@@ -210,12 +211,14 @@ char pad_line[kLineBytes];
 // screen, not a reproduction of the reference's (docs/clean-room-policy.md
 // §3), so the wording and the layout are ours and the decisions behind them
 // are in docs/implementation.md rather than in a numbered requirement.
-constexpr uint32_t kItems = 3;
+constexpr uint32_t kItems = 4;
 constexpr uint32_t kItemBoot = 0;
-constexpr uint32_t kItemBuild = 1;
-constexpr uint32_t kItemSettings = 2;
+constexpr uint32_t kItemCard = 1;
+constexpr uint32_t kItemBuild = 2;
+constexpr uint32_t kItemSettings = 3;
 const char *const kItemNames[kItems] = {
     "start what is in the drive",
+    "what is on the memory card",
     "what this build is",
     "re-read this machine's settings",
 };
@@ -225,10 +228,13 @@ const char *const kItemNames[kItems] = {
 constexpr uint32_t kRowSettings = 2;
 constexpr uint32_t kRowPad = 6;
 constexpr uint32_t kRowMenu = 8;
-constexpr uint32_t kRowDetail = 12;
+constexpr uint32_t kRowDetail = 13;
+// The card's own listing, under the line that announces it.
+constexpr uint32_t kRowCard = 14;
 
 char item_lines[kItems][kLineBytes];
 char detail_line[kLineBytes];
+char card_lines[ps2::card::kEntries][kLineBytes];
 
 char *appendText(char *at, const char *end, const char *text) {
     for (; *text != '\0' && at < end; text++) {
@@ -378,6 +384,11 @@ void setDetail(const char *text) {
     at = appendText(at, detail_line + kLineBytes - 1, text);
     *at = '\0';
     ps2::display::setLine(kRowDetail, detail_line);
+    // Also on the console. A machine with no screen capture, or with no
+    // controller to reach the menu with, still has this.
+    print("# OSDSYS: ");
+    print(detail_line);
+    print("\n");
 }
 
 void showPad(const ps2::pad::State &state, uint16_t held) {
@@ -407,6 +418,58 @@ void showPad(const ps2::pad::State &state, uint16_t held) {
     ps2::display::setLine(kRowPad, pad_line);
 }
 
+// The card. Loading its modules is deferred to the first time the entry is
+// chosen rather than done at start-up: three modules and a serial handshake
+// is a lot to spend on a screen nobody has asked anything of yet.
+bool card_started;
+
+void showCard() {
+    if (!card_started) {
+        setDetail("looking for a memory card...");
+        ps2::display::present();
+        card_started = ps2::card::begin();
+        if (!card_started) {
+            setDetail("no card driver on the other processor.");
+            return;
+        }
+    }
+    const ps2::card::State state = ps2::card::read();
+    if (!state.asked) {
+        setDetail("the card service did not answer.");
+        return;
+    }
+    if (!state.present) {
+        setDetail("nothing in the slot.");
+    } else if (!state.formatted) {
+        setDetail("a card, but not one this build can read.");
+    } else if (state.entries == 0) {
+        setDetail("a card, and nothing saved on it.");
+    } else {
+        setDetail("on the card:");
+    }
+    for (uint32_t i = 0; i < ps2::card::kEntries; i++) {
+        if (i >= state.entries) {
+            ps2::display::setLine(kRowCard + i, nullptr);
+            continue;
+        }
+        const ps2::card::Entry &entry = state.entry[i];
+        char *at = card_lines[i];
+        const char *end = card_lines[i] + kLineBytes - 1;
+        at = appendText(at, end, "  ");
+        at = appendText(at, end, entry.name);
+        if (entry.directory) {
+            at = appendText(at, end, " (");
+            at = appendSigned(at, end, static_cast<int32_t>(entry.length));
+            at = appendText(at, end, " entries)");
+        }
+        *at = '\0';
+        print("# OSDSYS: card: ");
+        print(card_lines[i]);
+        print("\n");
+        ps2::display::setLine(kRowCard + i, card_lines[i]);
+    }
+}
+
 // What an entry does when it is chosen. The disc entry is the only one that
 // can leave this program, and it only does so when there is something to
 // leave for.
@@ -420,6 +483,9 @@ void activate(uint32_t selected) {
         ps2::display::present();
         (void)bootFromDisc();
         setDetail("nothing in the drive this loader can read.");
+        break;
+    case kItemCard:
+        showCard();
         break;
     case kItemBuild:
         setDetail(kBanner);
