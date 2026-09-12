@@ -1711,9 +1711,11 @@ relies on to detect a generation older than its own.
 **IOP-13b — `0x80000593` is a numbered table, 1 to 25.** The bound is
 `(fno - 1) <u 25`, so `fno` 0 wraps and is rejected with everything above 25.
 A rejected `fno` is still **acknowledged**: the client gets the same fixed
-reply area every served `fno` uses, holding whatever the last call left in it.
-Dropping the request instead stalls a client that is waiting on the reply, so
-the acknowledgement is required and the reply's contents are not.
+reply area every served `fno` uses. Dropping the request instead stalls a
+client that is waiting on the reply, so **the acknowledgement is required and
+the reply's contents are not** -- the reference leaves whatever the last call
+put there, and clearing it is equally correct. What a rebuild may not do is
+answer nothing.
 
 **IOP-13c — one reply area, one shape.** Every `fno` of `0x80000593` answers
 through one fixed area rather than a per-`fno` buffer, and the entries that

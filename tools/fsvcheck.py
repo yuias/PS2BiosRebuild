@@ -150,6 +150,18 @@ def main() -> int:
     reply = call(FNO_READ)
     expect("a read after close completes nothing", word(reply), 0)
 
+    print("\na block count the reply area cannot hold is clamped, not honoured:")
+    # The count byte is the EE's, and the read hands CDVDMAN a pointer into
+    # the reply for it to fill: a count passed on unclamped is written past
+    # the end of that area, which nothing above this service would notice.
+    blocks_max = (0x80 - 8) // CONFIG_BLOCK
+    call(FNO_OPEN, (0x00FF0100).to_bytes(4, "little"))
+    expect("the count the mechacon was opened with",
+           bus.sent[-1][1][2], blocks_max)
+    reply = call(FNO_READ)
+    expect("blocks completed", word(reply), blocks_max)
+    call(FNO_CLOSE)
+
     # -- the NVM pair, which answers in the other shape ---------------------
 
     print("\nthe NVM pair answers two words further in (IOP-13e1):")

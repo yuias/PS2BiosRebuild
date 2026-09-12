@@ -217,11 +217,12 @@ constexpr uint32_t kFnoCloseConfig = 15;        // ordinal 32
 constexpr uint32_t kFnoReadConfig = 16;         // ordinal 33
 constexpr uint32_t kFnoWriteConfig = 17;        // ordinal 34
 
-// IOP-13e: how many blocks the session was opened for. The count belongs to
-// `CDVDMAN`, which keeps its own copy and is the one that enforces it; this
-// one exists only to size the read's reply, and is clamped on the way in so
-// that a request for more blocks than the reply area holds cannot walk off
-// the end of it.
+// IOP-13e: how many blocks the session was opened for, clamped to what the
+// reply area can hold. **The clamped count is what `CDVDMAN` is opened with**,
+// not just what is recorded here: the read hands `CDVDMAN` a pointer into the
+// reply and `CDVDMAN` fills its own count of blocks, so a count this service
+// accepted but did not pass on would be written past the end of the area. The
+// request's count byte is the EE's, and nothing above this checks it.
 uint32_t config_blocks;
 
 // IOP-13e1: the NVM pair's out-pointers go **into the request buffer**, and
@@ -274,7 +275,7 @@ void *serveMain(uint32_t fno, void *buffer, uint32_t size) {
         const uint32_t count = (packed >> 16) & 0xFF;
         config_blocks = count < kConfigBlocksMax ? count : kConfigBlocksMax;
         reply[0] = static_cast<uint32_t>(_import_cdvdman_open_config(
-            (packed >> 8) & 0xFF, packed & 0xFF, count, status));
+            (packed >> 8) & 0xFF, packed & 0xFF, config_blocks, status));
         break;
     }
     case kFnoCloseConfig:
