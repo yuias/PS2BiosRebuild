@@ -29,13 +29,14 @@ add_custom_command(
             "${PS2_SOURCE_DIR}/tools/mkromdir.py"
             "${PS2_MANIFEST}" --offset-of IOPBOOT --base ${PS2_IOPBOOT_BASE}
             --defsym IOPBOOT_BASE -o "${PS2_IOPBOOT_BASE_RSP}"
+    # The data of the entries stored before IOPBOOT, and the extinfo of every
+    # entry -- which is every module, whatever the manifest currently lists.
+    # IOPBOOT's own target is the one that must stay out: it is what this
+    # command's output is computed for.
     DEPENDS "${PS2_SOURCE_DIR}/tools/mkromdir.py" "${PS2_MANIFEST}"
             "${PS2_SOURCE_DIR}/src/rom/iopbtconf.txt"
             "${PS2_ROMVER_PATH}" reset.elf rdram.elf kernel.elf
-            sysmem.elf loadcore.elf excepman.elf intrman.elf timemani.elf
-            threadman.elf sysclib.elf heaplib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf
-            stdio.elf ioptty.elf eesync.elf loadfile.elf cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf
-            secrman.elf sio2man.elf
+            ${PS2_MODULE_TARGETS}
     COMMENT "Computing IOPBOOT's archive-relative link address")
 
 # A bare OUTPUT command with no consumer in its own directory is pruned from

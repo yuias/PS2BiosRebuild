@@ -108,6 +108,12 @@ function(ps2AddModule name)
       BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/${name}.irx"
                  "${CMAKE_CURRENT_BINARY_DIR}/${name}.extinfo"
       COMMENT "Building the ${ARG_MODULE} module")
+  # Every module's `.extinfo` is an input to the archive *and* to IOPBOOT's
+  # pre-pass below, which reads the extinfo of every manifest entry. Both
+  # dependency lists are taken from this property rather than written out by
+  # hand: a hand-written one silently omitted three modules, and a fresh build
+  # directory then died on the first `ninja` and succeeded on the second.
+  set_property(GLOBAL APPEND PROPERTY PS2_MODULE_TARGETS "${name}.elf")
 endfunction()
 
 # The boot block serves both processors, so its two compiled halves are not
@@ -270,6 +276,7 @@ ps2AddComponent(kernel SCRIPT kernel.ld SOURCES
 set(PS2_ROMVER "${CMAKE_CURRENT_BINARY_DIR}/romver.bin")
 set(PS2_IOPBOOT_BASE 0xBFC00000)
 set(PS2_IOPBOOT_BASE_RSP "${CMAKE_CURRENT_BINARY_DIR}/iopboot_base.rsp")
+get_property(PS2_MODULE_TARGETS GLOBAL PROPERTY PS2_MODULE_TARGETS)
 add_subdirectory(cmake/iopboot-base)
 
 # The R3000A has neither MIPS III nor the `teq` a division check emits, the
@@ -293,12 +300,8 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/rom/iopbtcon2.txt"
             "${PS2_MANIFEST}" "${PS2_ROMVER}" "${PS2_OSDSYS}"
             "${PS2_IOPBOOT_BASE_RSP}"
-            reset.elf rdram.elf iopboot.elf kernel.elf sysmem.elf
-            loadcore.elf excepman.elf intrman.elf timemani.elf threadman.elf sysclib.elf
-            heaplib.elf dmacman.elf vblank.elf ioman.elf modload.elf romdrv.elf stdio.elf
-            ioptty.elf sifman.elf sifcmd.elf eesync.elf loadfile.elf
-            cdvdman.elf fileio.elf cdvdfsv.elf reboot.elf secrman.elf sio2man.elf udnl.elf
-            osdsys.elf eeload.elf
+            reset.elf rdram.elf iopboot.elf kernel.elf
+            osdsys.elf eeload.elf ${PS2_MODULE_TARGETS}
     COMMENT "Assembling the ROM archive")
 
 add_custom_target(image ALL DEPENDS "${PS2_IMAGE}")
