@@ -467,8 +467,10 @@ front of the project, in order:
    on a 640x448 NTSC raster. The geometry is the reference console's own,
    traced rather than derived (`docs/analysis/53`), and the glyphs come from a
    freely-licensed bitmap font packed out of `third_party/fonts/` at build
-   time. What is still missing for a menu is pad input and the configuration
-   record, which is M3.
+   time. **It reads the machine's configuration record too**, through the CDVD
+   service's own RPC and the mechacon's S-commands, and puts the language,
+   the clock and whether the machine has been set up on the screen beside the
+   version. What is still missing for a menu is pad input, which is M3.
 3. **The IOP modules whose analysis is complete.** Ordinals that have a spec
    line and no implementation are built on the spec, whether or not a title
    exercises them; the boot before a reboot and `tools/iopsim.py` are their

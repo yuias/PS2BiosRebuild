@@ -27,6 +27,7 @@
 
 #include "build_stamp.h"
 #include "console.hpp"
+#include "config.hpp"
 #include "display.hpp"
 #include "sifclient.hpp"
 
@@ -196,6 +197,99 @@ constexpr char kBoot2Key[] = "BOOT2";
     return nullptr;
 }
 
+// --- the configuration record, on the console and the screen ---------------
+
+// One line's worth of text, built in place. The display holds the pointer
+// rather than a copy (`display.hpp`), so these outlive `present`.
+constexpr uint32_t kLineBytes = ps2::display::kColumns + 1;
+char config_lines[3][kLineBytes];
+
+char *appendText(char *at, const char *end, const char *text) {
+    for (; *text != '\0' && at < end; text++) {
+        *at++ = *text;
+    }
+    return at;
+}
+
+char *appendSigned(char *at, const char *end, int32_t value) {
+    if (value < 0 && at < end) {
+        *at++ = '-';
+    }
+    uint32_t magnitude = value < 0 ? -static_cast<uint32_t>(value) : value;
+    char digits[12];
+    uint32_t n = 0;
+    do {
+        digits[n++] = static_cast<char>('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+    for (uint32_t k = 0; k < n && at < end; k++) {
+        *at++ = digits[n - 1 - k];
+    }
+    return at;
+}
+
+// A timezone is stored in minutes; showing it in minutes makes the reader do
+// the arithmetic the field already implies.
+char *appendOffset(char *at, const char *end, int32_t minutes) {
+    at = appendText(at, end, minutes < 0 ? "UTC-" : "UTC+");
+    const uint32_t magnitude =
+        minutes < 0 ? -static_cast<uint32_t>(minutes) : minutes;
+    at = appendSigned(at, end, static_cast<int32_t>(magnitude / 60));
+    at = appendText(at, end, ":");
+    const uint32_t rest = magnitude % 60;
+    if (rest < 10 && at < end) {
+        *at++ = '0';
+    }
+    return appendSigned(at, end, static_cast<int32_t>(rest));
+}
+
+void showConfig(const ps2::config::Record &record) {
+    char *at = config_lines[0];
+    const char *end = config_lines[0] + kLineBytes - 1;
+    if (!record.read) {
+        // Not the same as an unconfigured machine, and saying so is the whole
+        // value of the line: one means no answer came back, the other means
+        // one did and the machine has never been set up.
+        at = appendText(at, end, "settings: no answer from the drive");
+        *at = '\0';
+        config_lines[1][0] = '\0';
+        config_lines[2][0] = '\0';
+    } else {
+        at = appendText(at, end, "language: ");
+        at = appendText(at, end, record.language_name != nullptr
+                        ? record.language_name : "index out of range");
+        // IOP-13g1: which of the two generations the record is, because a
+        // language that looks wrong is almost always this and not the index.
+        at = appendText(at, end,
+                        record.wide_language ? " (5-bit)" : " (1-bit)");
+        *at = '\0';
+
+        at = config_lines[1];
+        end = config_lines[1] + kLineBytes - 1;
+        at = appendText(at, end, "clock: ");
+        at = appendOffset(at, end, record.timezone_minutes);
+        at = appendText(at, end, record.clock_12_hour ? ", 12-hour" : ", 24-hour");
+        *at = '\0';
+
+        at = config_lines[2];
+        end = config_lines[2] + kLineBytes - 1;
+        at = appendText(at, end, record.configured
+                        ? "this machine has been set up"
+                        : "this machine has never been set up");
+        *at = '\0';
+    }
+
+    for (uint32_t row = 0; row < 3; row++) {
+        print("# OSDSYS: ");
+        print(config_lines[row]);
+        print("\n");
+        ps2::display::setLine(2 + row,
+                              config_lines[row][0] != '\0' ? config_lines[row]
+                                                          : nullptr);
+    }
+    ps2::display::present();
+}
+
 }  // namespace
 
 extern "C" {
@@ -252,6 +346,11 @@ uint32_t deci2_ettyp[4] = {0x0210, 0, 0, 0};
         mode[0] = kCdInitModeWait;
         callRpc(0, request, sizeof(uint32_t), reply, sizeof reply);
     }
+
+    // The machine's own settings, before the disc: they decide what an OSD
+    // would draw, and reading them is the point at which this program stops
+    // being a loader with a banner. Shown whatever the drive holds.
+    showConfig(ps2::config::read());
     if (!bindRpc(kFileioServer)) {
         print("# OSDSYS: the IOP has no FILEIO to ask; nothing to boot from.\n");
         osdHalt();

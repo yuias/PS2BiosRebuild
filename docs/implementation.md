@@ -1002,6 +1002,35 @@ under a simulator with no EE the boot stops four modules short of `CDVDFSV`.
 The checker's bus answers that one bit and nothing else, which is enough to
 walk the whole boot list and no more than a dispatcher test needs.
 
+**The OSD reads the machine's own settings, and that is the first thing it
+does that a loader would not.** `src/ee/config.cpp` binds `0x80000593`, runs
+IOP-13d's session -- open for two blocks, read, close -- and takes block 1
+apart into IOP-13g's fields, which `src/ee/osdsys.cpp` then puts on the
+console and the screen. The whole chain is ours end to end now: the EE asks,
+`CDVDFSV` forwards, `CDVDMAN` drives the mechacon's S-commands, and the answer
+comes back across the SIF.
+
+Three things in it are deliberate rather than obvious:
+
+- **The retry is bounded.** `docs/analysis/27` has the reference retrying the
+  whole call while either bit `0x01` or `0x80` stands in the returned status,
+  with no limit. A mechacon that never settles would take the boot with it, so
+  this gives up after eight attempts and reports no answer.
+- **"No answer" and "never set up" are different lines.** A record that never
+  arrived decodes to all zeroes, which is exactly what an unconfigured machine
+  looks like. Showing them alike would make a broken drive read as a new
+  console.
+- **Which generation the record is, is on the screen.** IOP-13g1's gate picks
+  between a five-bit language index and a single bit, and a language that
+  looks wrong is almost always the gate rather than the index -- so the line
+  says `(5-bit)` or `(1-bit)` rather than leaving the reader to guess.
+
+Both emulators were made to answer with different records: PS2e reads
+`<bios>.nvm`, so a block written by hand there comes back as `German (5-bit)`,
+`UTC+5:00`, `12-hour`, configured; PCSX2's own NVM carries its factory-default
+Japanese, unconfigured block and reads back as that. The decode was checked
+against both generations of the gate.
+
 **The reschedule syscall masks `$a2`, where the reference ORs it whole.**
 IOP-2k2: `syscall 0x20`'s third argument is merged into the resumed frame's
 `Status`, and both reference builds do it unmasked, so a caller that passes
