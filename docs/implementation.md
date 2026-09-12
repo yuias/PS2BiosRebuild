@@ -201,6 +201,40 @@ the console line says which of the three silences it is -- no record at all,
 records with nothing answering, or a handshake stuck partway -- so the
 distinction is visible rather than guessed at.
 
+**The memory card is the menu's second real entry.** `src/iop/mcman.cpp`,
+`src/iop/mcserv.cpp` and `src/ee/card.cpp` are `spec/06` IOP-15, and the
+question they answer is the whole of it: is a formatted card in the slot, and
+what is in its root directory? Nothing writes, creates, deletes or formats,
+and the older card format is not supported at all.
+
+- **This is the archive's first user of the serial transfer descriptor's DMA
+  arguments.** The controller driver pushes its command bytes one at a time
+  through a register; the card driver hands over a block list instead, one
+  144-byte block per frame. That difference decided where each is gated: the
+  register path runs on one emulator, the block path runs on **both**.
+- **The card's own layout was read out of real cards, not out of a binary.**
+  Two images, one freshly formatted and one with a save on it, gave the
+  superblock's fields, the two-level allocation table and the shape of a
+  directory entry before any of the driver was written -- which means the
+  listing has an oracle: the entries this program shows can be compared with
+  the entries a reader of the image finds, and they match.
+- **The listing's bound is the directory's own length field, not a bit.** A
+  slot past the end reads as every bit set, so an in-use test made of one bit
+  passes it and the listing gains a phantom entry with every field at once.
+  That is exactly what the first run produced.
+- **The bind after loading the service has to be paced, not just retried.**
+  The service registers itself from a low-priority thread that its own entry
+  starts, so the first bind loses the race. Retrying in a tight loop makes it
+  worse rather than better: answering every refusal with another request keeps
+  the other processor busy enough that the thread never runs at all, and the
+  bind then fails for as long as it is retried. A short pause between attempts
+  fixes it; sixty-four attempts with one are more than enough.
+- **A slot the emulator leaves empty is not empty.** Both emulators present a
+  card whatever the host has: with no image behind it, the flash reads as
+  every bit set, which is a genuine unformatted card and is reported as one.
+  There is no state in which this program says "nothing in the slot" on either
+  of them, which means that branch has never been exercised.
+
 **The screen with no disc in the drive is a menu now.** Three entries, one of
 which does something: start what is in the drive, show what this build is,
 read the machine's settings again. That is deliberately short. A browser and a
