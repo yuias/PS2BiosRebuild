@@ -100,8 +100,8 @@ NOT_YET = (
     "EE-8d rather than to their own handlers (spec/05 SYS-1)",
     "preemption: threads switch on syscalls (SYS-10c) and on the SIF's "
     "interrupt (SYS-12c), but no timer interrupt preempts a running one yet",
-    "the modules a title loads on request: SIO2MAN is the one the archive "
-    "holds; PADMAN, MCMAN and the rest are not built",
+    "the modules a title loads on request: SIO2MAN and PADMAN are the two "
+    "the archive holds; MCMAN and the rest are not built",
     "EELOAD's flags: ours takes the path and the arguments (spec/04 EE-9f); "
     "the reference's own switches and its KELF path (docs/analysis/41 §3) "
     "are not parsed",

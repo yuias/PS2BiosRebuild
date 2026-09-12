@@ -93,8 +93,12 @@ const char *const kButtonNames[kButtons] = {
 };
 
 bool begin() {
+    // Through the alias, not the cached address: a cached store here leaves
+    // dirty lines over the driver's own DMA target, and the eviction lands on
+    // whatever it has pushed since. Neither emulator models a write-back data
+    // cache, so getting this wrong passes both and fails a machine.
     for (uint32_t i = 0; i < kAreaBytes; i++) {
-        area[i] = 0;
+        *const_cast<volatile uint8_t *>(uncached(i)) = 0;
     }
     if (!bindRpc(kLoadfileServer)) {
         return false;

@@ -1912,6 +1912,12 @@ in by the batch). **These three words are carried exactly**, not reconstructed
 from what an emulator happens to need: what their fields mean has not been
 read, and a model that ignores them proves nothing about hardware.
 
+The **first** ID probe, sent before any ID is known, carries
+`port_ctrl2 = 0x0002000a` instead; every frame after it, the re-probe that
+follows the configuration mode included, carries `0x00020014`. What the
+difference is for has not been read, and it is reproduced rather than
+explained.
+
 A reply is good only when the transfer did not fail, `receive[2]` is `0x5a`
 and `receive[1]` is the ID last agreed. Otherwise the driver returns to
 discovery. Ten consecutive transfer failures also return it to discovery.

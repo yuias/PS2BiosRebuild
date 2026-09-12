@@ -302,8 +302,14 @@ void showConfig(const ps2::config::Record &record) {
         ps2::display::waitVsync();
         const ps2::pad::State state = ps2::pad::read();
         const uint16_t held = state.present ? state.buttons : 0;
-        if (ever && held == shown) {
+        // While nothing is answering, keep reporting: the counter in the line
+        // is the only thing that says whether records are arriving at all,
+        // and it is worthless if the line is printed once.
+        if (ever && held == shown && state.present) {
             continue;
+        }
+        if (!state.present && ever && (state.frame & 0x3f) != 0) {
+            continue;                           // roughly once a second
         }
         shown = held;
         ever = true;
@@ -311,7 +317,14 @@ void showConfig(const ps2::config::Record &record) {
         char *at = pad_line;
         const char *end = pad_line + kLineBytes - 1;
         if (!state.present) {
-            at = appendText(at, end, "controller: no answer");
+            // Three different silences, and they need telling apart: no
+            // record has landed at all (the frame counter never moves), one
+            // lands every blank but the controller never answered (slot 0),
+            // or the handshake is stuck partway through it (slot 5).
+            at = appendText(at, end, "controller: no answer, frame ");
+            at = appendSigned(at, end, static_cast<int32_t>(state.frame));
+            at = appendText(at, end, ", slot state ");
+            at = appendSigned(at, end, state.slot_state);
         } else if (held == 0) {
             at = appendText(at, end, "controller: nothing held");
         } else {

@@ -158,6 +158,7 @@ constexpr uint8_t kConfigFrames[][9] = {
 };
 constexpr uint32_t kConfigFrameCount = sizeof kConfigFrames / sizeof kConfigFrames[0];
 constexpr uint32_t kFrameModel = 0;             // which one answers with it
+constexpr uint32_t kFrameMask = kConfigFrameCount - 2;
 constexpr uint32_t kFrameExit = kConfigFrameCount - 1;
 
 // IOP-14g's slot-state byte.
@@ -325,6 +326,12 @@ void advance() {
             return;
         }
         port.frame_index++;
+        // IOP-14f: the button-mask query only goes to a controller whose
+        // model byte says it has one. Sending it to a controller that does
+        // not answers zeroes, which this driver would then store as a mask.
+        if (port.frame_index == kFrameMask && (port.model & 2) == 0) {
+            port.frame_index++;
+        }
         return;
     }
     case Stage::ReprobeId: {
