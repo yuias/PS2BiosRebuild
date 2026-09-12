@@ -1252,9 +1252,9 @@ matches the reference's exactly:
 of IOP-8i to IOP-8k are **in** scope and were not when this section was
 first written; what stays out is the rest of that group, the disc keys
 among them. No CD streaming API (`sceCdSt*`, ordinals 56–61), and no
-`CDVDFSV` RPC surface — an EE client reaches only what a `CDVDFSV` build
-forwards, and what that service must forward for the configuration record
-has no requirement here yet. `sceCdRead`'s `mode`
+`CDVDFSV` RPC surface beyond what IOP-13 now
+specifies — an EE client reaches only what a `CDVDFSV` build forwards, and
+IOP-13d/13e say what that is for the configuration record. `sceCdRead`'s `mode`
 argument (trycount/spindlectrl/datapattern) is accepted but not
 interpreted: every read is issued as the plain 2048-byte, datapattern-0
 case IOP-8d describes, matching what `LOADFILE`'s own ELF-loading path
@@ -1687,3 +1687,77 @@ reissued succeeds and frees the new owner's memory; nothing can detect it.
 `DeleteHeap` frees every chunk whether or not anything is live in it. Nothing
 in the library disables interrupts, so serialising a heap is the caller's
 business.
+
+
+## IOP-13: The EE-facing CDVD service (CDVDFSV)
+
+Derived from `docs/analysis/42` §5 and `docs/analysis/27`. `CDVDMAN` is an
+IOP-side library; nothing on the EE can call it. `CDVDFSV` is what an EE
+client actually reaches, and it is a thin one: almost every entry point takes
+a request buffer apart, calls one `CDVDMAN` ordinal, and puts the answer in a
+fixed reply area. This section says which entry points must exist and what
+travels in each direction. It supersedes IOP-8h's note that the forwarding for
+the configuration record "has no requirement here yet".
+
+**IOP-13a — the services and their threads.** Five RPC services over two
+threads, both `TH_C`, priority `0x51`, `0x1800`-byte stacks, one RPC queue
+each. Thread A serves `0x80000592`, `0x8000059A` and `0x80000593`; thread B
+serves `0x80000597` and `0x80000595`. No service installs a client callback.
+`0x80000594`, `0x80000596`, `0x80000598`, `0x80000599`, `0x8000059B` and
+`0x8000059C` are **not** registered, and a client that binds one of them is
+answered with nothing -- which is what the reference does and what a title
+relies on to detect a generation older than its own.
+
+**IOP-13b — `0x80000593` is a numbered table, 1 to 25.** The bound is
+`(fno - 1) <u 25`, so `fno` 0 wraps and is rejected with everything above 25.
+A rejected `fno` is still **acknowledged**: the client gets the same fixed
+reply area every served `fno` uses, holding whatever the last call left in it.
+Dropping the request instead stalls a client that is waiting on the reply, so
+the acknowledgement is required and the reply's contents are not.
+
+**IOP-13c — one reply area, one shape.** Every `fno` of `0x80000593` answers
+through one fixed area rather than a per-`fno` buffer, and the entries that
+forward a `CDVDMAN` ordinal taking a `status` out-pointer all use the same
+layout:
+
+| Offset | What |
+| --- | --- |
+| `+0x0` | what the `CDVDMAN` ordinal returned |
+| `+0x4` | the `status` word that ordinal filled in |
+| `+0x8` | payload, where the `fno` has one |
+
+The area must hold `8 + 15 * count` bytes for the configuration read of
+IOP-13e, which is the largest single reply this service produces.
+
+**IOP-13d — the configuration session's four entries.** `fno` 14, 15, 16 and
+17 forward `CDVDMAN` ordinals 31, 32, 33 and 34 (IOP-8k), one each. **`fno` 17
+forwards ordinal 34 and nothing else**; it does not also read a disc key.
+
+**IOP-13e — what each of the four carries.**
+
+| `fno` | Request | Reply |
+| --- | --- | --- |
+| 14, open | one word: **byte 0** the ordinal's second argument, **byte 1** its first, **byte 2** the block count | `+0x0` return, `+0x4` status |
+| 15, close | not read | `+0x0` return, `+0x4` status |
+| 16, read | not read | `+0x0` blocks completed, `+0x4` status, `+0x8` the blocks, 15 bytes each |
+| 17, write | the block data, from `+0x0` | `+0x0` blocks completed, `+0x4` status |
+
+The byte order in 14's word is the one IOP-8k's wire already has one layer
+down, so a rebuild that unpacks it in the obvious order sends the arguments
+reversed and the session opens on the wrong record. The OSD's own call is
+`open(1, 0, 2)`, which is the word `0x00020100`.
+
+Three numbers meet here and have to agree: IOP-8k hands 15 bytes per block up
+from `CDVDMAN`, the OSD asks for two blocks, and the 30 bytes it reads are
+those two at `+0x8`.
+
+**IOP-13f — the other entry points a boot needs.** `0x80000592` reads the
+request's first word as `sceCdInit`'s mode and answers that ordinal's return.
+`0x8000059A` reads a mode word and answers `2` or `6` for ready or not,
+calling no `CDVDMAN` ordinal at all. `0x80000597` searches for a file: the
+request holds a 0x20-byte result area at `+0x0`, a NUL-terminated path at
+`+0x20` and the EE address to deliver the result to at `+0x120`, and the
+service DMAs the 0x20 bytes there itself before answering the return code.
+A newer generation of this module switches that layout on the request size --
+`0x12c` or `0x128` moves the path to `+0x24` and the address to `+0x124` --
+and a rebuild serving only the older shape answers an empty path.
