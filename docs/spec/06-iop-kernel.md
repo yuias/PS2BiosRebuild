@@ -1768,6 +1768,45 @@ bit 16. A rebuild cannot serve these two and IOP-13e's four through one
 helper, and one that answers the `+0x4`-status shape here returns the address
 where the caller expects the data.
 
+**IOP-13g — what the session carries.** Derived from `docs/analysis/27` and
+`docs/analysis/28`. The record is **two blocks of fifteen bytes**, and only
+block 1 means anything: block 0 reaches the caller untouched and no part of
+this chain inspects it. Block 1's bytes map to fields like this, and the map
+is not byte-aligned -- two fields straddle byte boundaries and one nibble is
+stored back to front:
+
+| Byte | Bits | Field |
+| --- | --- | --- |
+| `+0` | 7-5 | the generation gate, below |
+| `+0` | 4 | the older generation's language: 0 Japanese, 1 English |
+| `+0` | 3 | passed to EE syscall `0x4f` |
+| `+1` | 4-0 | the newer generation's language index |
+| `+2` | 2-0 | the timezone's high three bits |
+| `+2` | 3 | add one hour to the timezone |
+| `+2` | 4 | 0 a 24-hour clock, 1 a 12-hour clock |
+| `+2` | 7 | **the configured flag** |
+| `+3` | 7-0 | the timezone's low eight bits |
+| `+5`, `+4` bit 0 | | a nine-bit field whose meaning is not settled |
+
+The timezone is an offset in **minutes**, eleven bits, `+3` in the low eight
+and `+2`'s low three above them.
+
+**IOP-13g1 — the generation gate, which is the field to get right first.**
+When byte `+0`'s **top three bits are zero**, byte `+1` is not read at all and
+the language is the single bit `+0` bit 4 -- Japanese or English. When they are
+non-zero, the five-bit index in `+1` is used instead. A record that leaves them
+zero has a carefully chosen language byte ignored; one that sets them has the
+index believed, and **the lookup is unchecked**: an index past the eighth
+language reads past the table, and an index of 9 selects a null string table,
+so the program draws nothing rather than failing. The eight are, in order,
+Japanese, English, French, Spanish, German, Italian, Dutch and Portuguese.
+
+**IOP-13g2 — the configured flag is not a struct field.** Byte `+2` bit 7
+reaches none of the fields above. The reference's decoder returns it
+**inverted** as its own result, and the OSD runs its first-boot routine when
+the bit is clear. A rebuild that synthesises a record and wants the browser
+rather than setup sets it.
+
 **IOP-13f — the other entry points a boot needs.** `0x80000592` reads the
 request's first word as `sceCdInit`'s mode and answers that ordinal's return.
 `0x8000059A` reads a mode word and answers `2` or `6` for ready or not,
