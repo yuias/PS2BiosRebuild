@@ -907,6 +907,23 @@ carries no library and no name any source the merge opens uses, so `rom0`'s
 copy is always the candidate that wins. It is on both boot lists, and at a
 cold boot it changes nothing, because no module of ours calls ordinal 14.
 
+**What that paragraph claimed and this one corrects: the disc's `printf` does
+not arrive.** `IGREETING` was the probe, because it is on both boot lists and
+prints one line unconditionally. Made to print through both paths at once, it
+shows `sysmem` ordinal 14 arriving on the cold boot **and** after the reboot,
+and `stdio` ordinal 4 arriving only on the cold boot. So the chain above --
+the disc's `STDIO` reaching ordinal 14 through `IOMAN`'s `tty:` -- does not
+close on this machine: something between the disc's `printf` and the hook
+drops the line, and `tty:` having no device behind it is the likely end of it.
+
+The cost is not the banner. It is that **every disc module that reports a
+failure through `printf` is silent after the reboot**, which is the one place
+those reports are worth most -- the two walls this file opens by describing,
+`EZMIDI`'s and `CRI_ADXI`'s, were both messages written into a stub. Modules
+that use `Kprintf` are unaffected, which is why the title's own drivers are
+still heard. `IGREETING` therefore imports ordinal 14 rather than the ordinal
+4 the reference's own copy uses.
+
 **`EnableIntr`'s bank-1 path writes DICR2 as the reference does.** IOP-2c2:
 the reference writes that register in *both* DMA paths -- in bank 1 it puts
 DICR2's own bits 0..23 back, plus the channel's low bit when `0x200` is

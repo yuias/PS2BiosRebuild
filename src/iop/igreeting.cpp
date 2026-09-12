@@ -17,7 +17,12 @@
 
 extern "C" {
 int _import_loadcore_query_boot_mode(uint32_t key);
-int _import_stdio_printf(const char *format, ...);
+// `sysmem` ordinal 14, not `stdio` ordinal 4. The reference's own IGREETING
+// uses `stdio`, and on a cold boot either would do -- but after a title's
+// reboot the disc's `STDIO` replaces ours and its `printf` reaches no console
+// on this machine, while `Kprintf` still does (docs/implementation.md). A
+// banner that is silent on the boot it most describes is not worth printing.
+int _import_sysmem_kprintf(const char *format, ...);
 }
 
 namespace {
@@ -55,8 +60,8 @@ PS2_IMPORTS_BEGIN("loadcore", 0x0101)
 PS2_IMPORT(_import_loadcore_query_boot_mode, 12)
 PS2_IMPORTS_END()
 
-PS2_IMPORTS_BEGIN("stdio\0\0\0", 0x0102)
-PS2_IMPORT(_import_stdio_printf, 4)
+PS2_IMPORTS_BEGIN("sysmem\0\0", 0x0101)
+PS2_IMPORT(_import_sysmem_kprintf, 14)
 PS2_IMPORTS_END()
 
 extern "C" {
@@ -69,14 +74,14 @@ int _module_start(int, char **) {
     if (record == 0) {
         // `loadcore` publishes key 4 unconditionally, so its absence means
         // the record table was not built or not found -- worth a line.
-        (void)_import_stdio_printf("# IGREETING: no boot mode recorded\n");
+        (void)_import_sysmem_kprintf("# IGREETING: no boot mode recorded\n");
         return 1;
     }
     const uint32_t mode = recordValue(record);
     if (const char *text = modeText(mode); text != nullptr) {
-        (void)_import_stdio_printf("# IGREETING: %s\n", text);
+        (void)_import_sysmem_kprintf("# IGREETING: %s\n", text);
     } else {
-        (void)_import_stdio_printf("# IGREETING: boot mode %d\n", mode);
+        (void)_import_sysmem_kprintf("# IGREETING: boot mode %d\n", mode);
     }
     return 1;                                    // done; do not stay resident
 }
